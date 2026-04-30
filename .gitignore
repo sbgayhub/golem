@@ -12,3 +12,7 @@
 # go workspace
 go.work
 go.work.sum
+
+# agent
+./.claude
+./.spec-workflow

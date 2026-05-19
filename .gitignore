@@ -16,3 +16,4 @@ go.work.sum
 # agent
 ./.claude
 ./.spec-workflow
+.ace-tool/

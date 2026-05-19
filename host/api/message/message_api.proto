@@ -1,0 +1,242 @@
+syntax = "proto3";
+
+package message.api;
+
+option go_package = "github.com/sbgayhub/golem/host/api/message;messageapi";
+
+
+// ==================== 同步消息 ====================
+
+// SyncMessageRequest 同步消息请求
+message SyncMessageRequest {
+  uint32 selector = 1; // 同步选择器
+}
+
+// SyncMessageResponse 同步消息响应（字段编号与 SDK proto 对齐）
+message SyncMessageResponse {
+  int32 code = 1;     // 状态码
+  string message = 2; // 提示信息
+}
+
+// ==================== 通用响应 ====================
+
+// OperateResponse 通用操作响应（字段编号与 SDK proto 对齐）
+message OperateResponse {
+  int32 code = 1;     // 状态码（0=成功）
+  string message = 2; // 提示信息
+}
+
+// ==================== 发送文本消息 ====================
+
+// SendTextRequest 发送文本消息请求
+message SendTextRequest {
+  string receiver = 1; // 接收者
+  string content = 2;  // 消息内容
+  string remind = 3;   // 被@的用户名
+}
+
+// SendMessageResponse 发送消息响应（字段编号与 SDK proto 对齐）
+message SendMessageResponse {
+  uint64 new_msg_id = 1;     // 新消息 ID
+  uint64 client_msg_id = 2;  // 客户端消息 ID
+  uint32 create_time = 3;    // 创建时间
+}
+
+// ==================== 发送媒体消息 ====================
+
+// SendImageRequest 发送图片消息请求
+message SendImageRequest {
+  string receiver = 1; // 接收者
+  bytes data = 2;      // 图片数据
+}
+
+// UploadImageResponse 上传图片响应（字段编号与 SDK proto 对齐）
+message UploadImageResponse {
+  string aes_key = 1;     // AES 密钥
+  string file_id = 2;     // 文件 ID
+  uint64 new_msg_id = 3;  // 新消息 ID
+  uint32 create_time = 4; // 创建时间
+  uint32 file_size = 5;   // 文件大小
+  string file_md5 = 6;    // 文件 MD5
+}
+
+// SendVideoRequest 发送视频消息请求
+message SendVideoRequest {
+  string receiver = 1; // 接收者
+  bytes thumb = 2;     // 缩略图数据
+  bytes video = 3;     // 视频数据
+  uint32 duration = 4; // 视频时长（秒）
+}
+
+// UploadVideoResponse 上传视频响应（字段编号与 SDK proto 对齐）
+message UploadVideoResponse {
+  string aes_key = 1;   // AES 密钥
+  string file_id = 2;   // 文件 ID
+  uint32 file_size = 3; // 文件大小
+  uint32 thumb_size = 4; // 缩略图大小
+  string file_md5 = 5;  // 文件 MD5
+}
+
+// SendVoiceRequest 发送语音消息请求
+message SendVoiceRequest {
+  string receiver = 1; // 接收者
+  bytes data = 2;      // 语音数据
+  int32 duration = 3;  // 时长（秒）
+  int32 format = 4;    // 格式
+}
+
+// UploadVoiceResponse 上传语音响应（字段编号与 SDK proto 对齐）
+message UploadVoiceResponse {
+  string aes_key = 1;     // AES 密钥
+  string file_id = 2;     // 文件 ID
+  uint64 new_msg_id = 3;  // 新消息 ID
+  uint32 create_time = 4; // 创建时间
+}
+
+// SendEmojiRequest 发送表情消息请求
+message SendEmojiRequest {
+  string receiver = 1; // 接收者
+  string md5 = 2;      // 表情 MD5
+  bytes data = 3;      // 表情数据
+}
+
+// UploadEmojiResponse 上传表情响应（字段编号与 SDK proto 对齐）
+message UploadEmojiResponse {
+  string md5 = 1;         // 表情 MD5
+  uint64 new_msg_id = 2;  // 新消息 ID
+  uint32 create_time = 3; // 创建时间
+}
+
+// ==================== 发送应用消息 ====================
+
+// SendAppRequest 发送应用消息请求
+message SendAppRequest {
+  string receiver = 1; // 接收者
+  string xml = 2;      // XML 内容
+  int32 type = 3;      // 消息类型
+}
+
+// SendAppMessageResponse 发送应用消息响应（字段编号与 SDK proto 对齐）
+message SendAppMessageResponse {
+  uint64 new_msg_id = 1;     // 新消息 ID
+  uint64 client_msg_id = 2;  // 客户端消息 ID
+  uint32 create_time = 3;    // 创建时间
+}
+
+// SendLinkRequest 发送链接消息请求
+message SendLinkRequest {
+  string receiver = 1;   // 接收者
+  string title = 2;      // 标题
+  string description = 3; // 描述
+  string url = 4;        // 链接 URL
+  string thumb_url = 5;  // 缩略图 URL
+}
+
+// SendCardRequest 发送名片消息请求
+message SendCardRequest {
+  string receiver = 1;       // 接收者
+  string card_username = 2;  // 名片用户名
+  string card_nickname = 3;  // 名片昵称
+  string card_alias = 4;     // 名片微信号
+}
+
+// SendPositionRequest 发送位置消息请求
+message SendPositionRequest {
+  string receiver = 1;  // 接收者
+  string label = 2;     // 位置标签
+  string poi_name = 3;  // POI 名称
+  double longitude = 4; // 经度
+  double latitude = 5;  // 纬度
+  double scale = 6;     // 缩放比例
+}
+
+// ==================== 转发消息 ====================
+
+// ForwardImageRequest 转发 CDN 图片请求
+message ForwardImageRequest {
+  string receiver = 1; // 接收者
+  bytes data = 2;      // 图片数据
+}
+
+// ForwardVideoRequest 转发 CDN 视频请求
+message ForwardVideoRequest {
+  string receiver = 1; // 接收者
+  bytes data = 2;      // 视频数据
+}
+
+// ForwardFileRequest 转发文件请求
+message ForwardFileRequest {
+  string receiver = 1; // 接收者
+  string xml = 2;      // 文件 XML
+}
+
+// ==================== 撤回消息 ====================
+
+// RevokeMessageRequest 撤回消息请求
+message RevokeMessageRequest {
+  string receiver = 1;      // 接收者/会话
+  uint64 new_msg_id = 2;    // 新消息 ID
+  uint64 client_msg_id = 3; // 客户端消息 ID
+  uint64 timestamp = 4;     // 时间戳
+}
+
+// RevokeMessageResponse 撤回消息响应（字段编号与 SDK proto 对齐）
+message RevokeMessageResponse {
+  int32 code = 1;     // 状态码
+  string message = 2; // 提示信息
+}
+
+// ==================== 下载消息资源 ====================
+
+// DownloadImgRequest 下载图片请求
+message DownloadImgRequest {
+  string receiver = 1;   // 发送者
+  string file_id = 2;    // 文件 ID
+  string aes_key = 3;    // AES 密钥
+  uint32 total_size = 4; // 总大小
+}
+
+// DownloadImageResponse 下载图片响应（字段编号与 SDK proto 对齐）
+message DownloadImageResponse {
+  bytes data = 1; // 图片数据
+}
+
+// DownloadVideoRequest 下载视频请求
+message DownloadVideoRequest {
+  string receiver = 1;   // 发送者
+  string file_id = 2;    // 文件 ID
+  string aes_key = 3;    // AES 密钥
+  uint32 total_size = 4; // 总大小
+}
+
+// DownloadVideoResponse 下载视频响应（字段编号与 SDK proto 对齐）
+message DownloadVideoResponse {
+  bytes data = 1; // 视频数据
+}
+
+// DownloadVoiceRequest 下载语音请求
+message DownloadVoiceRequest {
+  string receiver = 1;     // 发送者
+  string file_id = 2;      // 文件 ID
+  string aes_key = 3;      // AES 密钥
+  uint32 total_size = 4;   // 总大小
+  uint32 voice_length = 5; // 语音长度
+}
+
+// DownloadVoiceResponse 下载语音响应（字段编号与 SDK proto 对齐）
+message DownloadVoiceResponse {
+  bytes data = 1; // 语音数据
+}
+
+// DownloadFileRequest 下载文件附件请求
+message DownloadFileRequest {
+  string receiver = 1;   // 发送者
+  string file_id = 2;    // 文件 ID
+  string aes_key = 3;    // AES 密钥
+  uint32 total_size = 4; // 总大小
+}
+
+// DownloadFileResponse 下载文件响应（字段编号与 SDK proto 对齐）
+message DownloadFileResponse {
+  bytes data = 1; // 文件数据
+}

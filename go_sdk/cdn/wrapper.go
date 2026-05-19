@@ -3,134 +3,83 @@ package cdn
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
+
+	"github.com/sbgayhub/golem/sdk"
 )
 
-// Client 实现 Ability 接口，通过 gRPC 调用远程 CDN 服务
-type Client struct {
+// GRPCClient 实现 Ability 接口，通过 gRPC 调用远程 CDN 服务
+type GRPCClient struct {
 	Client CDNServiceClient
 }
 
-// GetDns 获取 CDN DNS 信息
-func (c Client) GetDns() (*DnsResponse, error) {
-	resp, err := c.Client.GetDns(context.Background(), &GetDnsRequest{})
-	if err != nil {
-		return nil, err
-	}
-	return resp.Result, nil
-}
+var _ Ability = (*GRPCClient)(nil)
 
 // UploadImage 客户端流式上传聊天图片
-func (c Client) UploadImage(receiver string, reader io.Reader, totalSize uint32) (*UploadImageResult, error) {
+func (c GRPCClient) UploadImage(receiver string, reader io.Reader) (*UploadImageResponse, error) {
 	stream, err := c.Client.UploadImage(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
 	// 发送元数据
-	if err := stream.Send(&UploadImageChunk{
-		Chunk: &UploadImageChunk_Metadata{
-			Metadata: &UploadImageMetadata{
-				Receiver:  receiver,
-				TotalSize: totalSize,
-			},
-		},
-	}); err != nil {
+	if err := stream.Send(&UploadImageChunk{Receiver:  receiver	}); err != nil {
 		return nil, err
 	}
 
 	// 发送数据块
-	buf := make([]byte, 32*1024) // 32KB chunks
+	buf := make([]byte, sdk.PROTO_STREAM_CHUNK_SIZE)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			if sendErr := stream.Send(&UploadImageChunk{
-				Chunk: &UploadImageChunk_Data{
-					Data: buf[:n],
-				},
-			}); sendErr != nil {
+		if n, err := reader.Read(buf); n > 0 {
+			if sendErr := stream.Send(&UploadImageChunk{Data: buf[:n]}); sendErr != nil {
 				return nil, sendErr
 			}
-		}
-		if err == io.EOF {
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil, err
 		}
 	}
 
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		return nil, err
-	}
-	return resp.Result, nil
+	return stream.CloseAndRecv()
 }
 
 // UploadVideo 客户端流式上传聊天视频
-func (c Client) UploadVideo(receiver string, videoReader io.Reader, videoSize uint32, thumbReader io.Reader, thumbSize uint32, duration uint32) (*UploadVideoResult, error) {
+func (c GRPCClient) UploadVideo(receiver string, thumb []byte, reader io.Reader, duration uint32) (*UploadVideoResponse, error) {
 	stream, err := c.Client.UploadVideo(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
 	// 发送元数据
-	if err := stream.Send(&UploadVideoChunk{
-		Chunk: &UploadVideoChunk_Metadata{
-			Metadata: &UploadVideoMetadata{
-				Receiver:       receiver,
-				VideoTotalSize: videoSize,
-				ThumbTotalSize: thumbSize,
-				Duration:       duration,
-			},
-		},
-	}); err != nil {
+	chunk := UploadVideoChunk{
+		Receiver:  receiver,
+		Duration:  duration,
+		Thumb:     thumb,
+	}
+	if err := stream.Send(&chunk); err != nil {
 		return nil, err
 	}
 
 	// 发送视频数据
-	if err := sendData(stream.Send, videoReader); err != nil {
-		return nil, err
-	}
-
-	// 发送缩略图数据
-	if err := sendData(stream.Send, thumbReader); err != nil {
-		return nil, err
-	}
-
-	resp, err := stream.CloseAndRecv()
-	if err != nil {
-		return nil, err
-	}
-	return resp.Result, nil
-}
-
-func sendData(send func(*UploadVideoChunk) error, reader io.Reader) error {
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, sdk.PROTO_STREAM_CHUNK_SIZE)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			if sendErr := send(&UploadVideoChunk{
-				Chunk: &UploadVideoChunk_Data{
-					Data: buf[:n],
-				},
-			}); sendErr != nil {
-				return sendErr
+		if n, err := reader.Read(buf); n > 0 {
+			if sendErr := stream.Send(&UploadVideoChunk{Data: buf[:n]}); sendErr != nil {
+				return nil, sendErr
 			}
-		}
-		if err == io.EOF {
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
-			return err
+		} else if err != nil {
+			return nil, err
 		}
 	}
-	return nil
+
+	return stream.CloseAndRecv()
 }
 
 // DownloadImage 服务端流式下载高清图片
-func (c Client) DownloadImage(fileID, fileAesKey string) (io.ReadCloser, error) {
+func (c GRPCClient) DownloadImage(fileID, fileAesKey string) (io.ReadCloser, error) {
 	stream, err := c.Client.DownloadImage(context.Background(), &DownloadImageRequest{
 		FileId: fileID,
 		AesKey: fileAesKey,
@@ -145,8 +94,7 @@ func (c Client) DownloadImage(fileID, fileAesKey string) (io.ReadCloser, error) 
 		chunk, err := stream.Recv()
 		if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil, err
 		}
 		buf.Write(chunk.Data)
@@ -156,7 +104,7 @@ func (c Client) DownloadImage(fileID, fileAesKey string) (io.ReadCloser, error) 
 }
 
 // DownloadVideo 服务端流式下载聊天视频
-func (c Client) DownloadVideo(fileID, fileAesKey string) (io.ReadCloser, error) {
+func (c GRPCClient) DownloadVideo(fileID, fileAesKey string) (io.ReadCloser, error) {
 	stream, err := c.Client.DownloadVideo(context.Background(), &DownloadVideoRequest{
 		FileId: fileID,
 		AesKey: fileAesKey,
@@ -170,8 +118,7 @@ func (c Client) DownloadVideo(fileID, fileAesKey string) (io.ReadCloser, error) 
 		chunk, err := stream.Recv()
 		if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else if err != nil {
 			return nil, err
 		}
 		buf.Write(chunk.Data)
@@ -181,30 +128,20 @@ func (c Client) DownloadVideo(fileID, fileAesKey string) (io.ReadCloser, error) 
 }
 
 // UploadMomentsImage 上传朋友圈图片（小文件，非流式）
-func (c Client) UploadMomentsImage(imageData []byte) (*UploadSnsImageResult, error) {
-	resp, err := c.Client.UploadMomentsImage(context.Background(), &UploadMomentsImageRequest{
-		Data: imageData,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return resp.Result, nil
+func (c GRPCClient) UploadMomentsImage(imageData []byte) (*UploadMomentsImageResponse, error) {
+	return c.Client.UploadMomentsImage(context.Background(), &UploadMomentsImageRequest{		Data: imageData	})
 }
 
 // UploadMomentsVideo 上传朋友圈视频（小文件，非流式）
-func (c Client) UploadMomentsVideo(videoData, thumbData []byte) (*UploadSnsVideoResult, error) {
-	resp, err := c.Client.UploadMomentsVideo(context.Background(), &UploadMomentsVideoRequest{
+func (c GRPCClient) UploadMomentsVideo(videoData, thumbData []byte) (*UploadMomentsVideoResponse, error) {
+	return c.Client.UploadMomentsVideo(context.Background(), &UploadMomentsVideoRequest{
 		VideoData: videoData,
 		ThumbData: thumbData,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return resp.Result, nil
 }
 
 // DownloadVideoCover 下载视频封面（小文件，非流式）
-func (c Client) DownloadVideoCover(fileID, fileAesKey string) ([]byte, error) {
+func (c GRPCClient) DownloadVideoCover(fileID, fileAesKey string) ([]byte, error) {
 	resp, err := c.Client.DownloadVideoCover(context.Background(), &DownloadVideoCoverRequest{
 		FileId: fileID,
 		AesKey: fileAesKey,
@@ -216,7 +153,7 @@ func (c Client) DownloadVideoCover(fileID, fileAesKey string) ([]byte, error) {
 }
 
 // DownloadSnsVideo 下载朋友圈视频（小文件，非流式）
-func (c Client) DownloadSnsVideo(videoURL string, encKey uint64) ([]byte, error) {
+func (c GRPCClient) DownloadSnsVideo(videoURL string, encKey uint64) ([]byte, error) {
 	resp, err := c.Client.DownloadSnsVideo(context.Background(), &DownloadSnsVideoRequest{
 		VideoUrl: videoURL,
 		EncKey:   encKey,
@@ -233,15 +170,6 @@ type Server struct {
 	Impl Ability
 }
 
-// GetDns 获取 CDN DNS 信息
-func (s Server) GetDns(ctx context.Context, request *GetDnsRequest) (*GetDnsResponse, error) {
-	result, err := s.Impl.GetDns()
-	if err != nil {
-		return nil, err
-	}
-	return &GetDnsResponse{Result: result}, nil
-}
-
 // UploadImage 客户端流式上传聊天图片
 func (s Server) UploadImage(stream CDNService_UploadImageServer) error {
 	// 接收元数据
@@ -249,31 +177,27 @@ func (s Server) UploadImage(stream CDNService_UploadImageServer) error {
 	if err != nil {
 		return err
 	}
-	metadata := chunk.GetMetadata()
-	if metadata == nil {
-		return errors.New("first chunk must be metadata")
-	}
+	receiver := chunk.GetReceiver()
 
 	// 接收数据
 	var buf bytes.Buffer
 	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if chunk, err := stream.Recv(); err == nil {
+			buf.Write(chunk.GetData())
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else {
 			return err
 		}
-		buf.Write(chunk.GetData())
 	}
 
 	// 调用 Ability 实现
-	result, err := s.Impl.UploadImage(metadata.Receiver, &buf, metadata.TotalSize)
+	result, err := s.Impl.UploadImage(receiver, &buf)
 	if err != nil {
 		return err
 	}
 
-	return stream.SendAndClose(&UploadImageResponse{Result: result})
+	return stream.SendAndClose(result)
 }
 
 // UploadVideo 客户端流式上传聊天视频
@@ -283,62 +207,26 @@ func (s Server) UploadVideo(stream CDNService_UploadVideoServer) error {
 	if err != nil {
 		return err
 	}
-	metadata := chunk.GetMetadata()
-	if metadata == nil {
-		return errors.New("first chunk must be metadata")
-	}
 
-	// 接收视频和缩略图数据
-	var videoBuf, thumbBuf bytes.Buffer
-	var currentWriter *bytes.Buffer = &videoBuf
-	var videoReceived uint32
-
+	// 接收数据
+	var buf bytes.Buffer
 	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
+		if chunk, err := stream.Recv(); err == nil {
+			buf.Write(chunk.GetData())
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else {
 			return err
 		}
-
-		data := chunk.GetData()
-		if data == nil {
-			continue
-		}
-
-		// 检查是否需要切换到缩略图
-		if currentWriter == &videoBuf {
-			videoReceived += uint32(len(data))
-			if videoReceived >= metadata.VideoTotalSize {
-				// 写入剩余的视频数据
-				remaining := videoReceived - metadata.VideoTotalSize
-				if remaining > 0 {
-					videoBuf.Write(data[:len(data)-int(remaining)])
-					thumbBuf.Write(data[len(data)-int(remaining):])
-				} else {
-					videoBuf.Write(data)
-				}
-				currentWriter = &thumbBuf
-				continue
-			}
-		}
-
-		currentWriter.Write(data)
 	}
 
 	// 调用 Ability 实现
-	result, err := s.Impl.UploadVideo(
-		metadata.Receiver,
-		&videoBuf, metadata.VideoTotalSize,
-		&thumbBuf, metadata.ThumbTotalSize,
-		metadata.Duration,
-	)
+	result, err := s.Impl.UploadVideo(chunk.Receiver, chunk.Thumb, &buf, chunk.Duration)
 	if err != nil {
 		return err
 	}
 
-	return stream.SendAndClose(&UploadVideoResponse{Result: result})
+	return stream.SendAndClose(result)
 }
 
 // DownloadImage 服务端流式下载高清图片
@@ -349,18 +237,15 @@ func (s Server) DownloadImage(request *DownloadImageRequest, stream CDNService_D
 	}
 	defer reader.Close()
 
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, sdk.PROTO_STREAM_CHUNK_SIZE)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
+		if n, err := reader.Read(buf); n > 0 {
 			if sendErr := stream.Send(&DownloadImageChunk{Data: buf[:n]}); sendErr != nil {
 				return sendErr
 			}
-		}
-		if err == io.EOF {
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else if err != nil {
 			return err
 		}
 	}
@@ -376,18 +261,15 @@ func (s Server) DownloadVideo(request *DownloadVideoRequest, stream CDNService_D
 	}
 	defer reader.Close()
 
-	buf := make([]byte, 32*1024)
+	buf := make([]byte, sdk.PROTO_STREAM_CHUNK_SIZE)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
+		if n, err := reader.Read(buf); n > 0 {
 			if sendErr := stream.Send(&DownloadVideoChunk{Data: buf[:n]}); sendErr != nil {
 				return sendErr
 			}
-		}
-		if err == io.EOF {
+		} else if err == io.EOF {
 			break
-		}
-		if err != nil {
+		} else if err != nil {
 			return err
 		}
 	}
@@ -397,20 +279,12 @@ func (s Server) DownloadVideo(request *DownloadVideoRequest, stream CDNService_D
 
 // UploadMomentsImage 上传朋友圈图片（小文件，非流式）
 func (s Server) UploadMomentsImage(ctx context.Context, request *UploadMomentsImageRequest) (*UploadMomentsImageResponse, error) {
-	result, err := s.Impl.UploadMomentsImage(request.Data)
-	if err != nil {
-		return nil, err
-	}
-	return &UploadMomentsImageResponse{Result: result}, nil
+	return s.Impl.UploadMomentsImage(request.Data)
 }
 
 // UploadMomentsVideo 上传朋友圈视频（小文件，非流式）
 func (s Server) UploadMomentsVideo(ctx context.Context, request *UploadMomentsVideoRequest) (*UploadMomentsVideoResponse, error) {
-	result, err := s.Impl.UploadMomentsVideo(request.VideoData, request.ThumbData)
-	if err != nil {
-		return nil, err
-	}
-	return &UploadMomentsVideoResponse{Result: result}, nil
+	return s.Impl.UploadMomentsVideo(request.VideoData, request.ThumbData)
 }
 
 // DownloadVideoCover 下载视频封面（小文件，非流式）
@@ -423,10 +297,10 @@ func (s Server) DownloadVideoCover(ctx context.Context, request *DownloadVideoCo
 }
 
 // DownloadSnsVideo 下载朋友圈视频（小文件，非流式）
-func (s Server) DownloadSnsVideo(ctx context.Context, request *DownloadSnsVideoRequest) (*DownloadSnsVideoResponse, error) {
+func (s Server) DownloadSnsVideo(ctx context.Context, request *DownloadSnsVideoRequest) (*DownloadMomentsVideoResponse, error) {
 	data, err := s.Impl.DownloadSnsVideo(request.VideoUrl, request.EncKey)
 	if err != nil {
 		return nil, err
 	}
-	return &DownloadSnsVideoResponse{Data: data}, nil
+	return &DownloadMomentsVideoResponse{Data: data}, nil
 }

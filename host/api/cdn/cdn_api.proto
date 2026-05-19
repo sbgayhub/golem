@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package cdn.api;
+
+option go_package = "github.com/sbgayhub/golem/host/api/cdn;cdnapi";
+
+// ==================== DNS 相关消息 ====================
+
+// DnsResponse CDN DNS 响应
+message DnsResponse {
+  bytes dns_data = 1; // DNS 响应数据
+}
+
+// ==================== 上传结果消息 ====================
+
+// UploadImageResult 聊天图片 CDN 上传结果
+message UploadImageResult {
+  string aes_key = 1;       // 图片加密 AES 密钥（hex编码）
+  string file_id = 2;       // CDN 文件ID
+  uint64 new_msg_id = 3;    // 新消息ID
+  uint32 create_time = 4;   // 创建时间
+  uint32 file_size = 5;     // 文件大小
+  string file_md5 = 6;      // 文件MD5
+  uint32 file_width = 7;    // 图片宽度
+  uint32 file_height = 8;   // 图片高度
+  uint32 thumb_size = 9;    // 缩略图大小
+  string thumb_md5 = 10;    // 缩略图MD5
+  uint32 thumb_width = 11;  // 缩略图宽度
+  uint32 thumb_height = 12; // 缩略图高度
+}
+
+// UploadSnsImageResult 朋友圈图片 CDN 上传结果
+message UploadSnsImageResult {
+  string file_url = 1;      // CDN 文件URL
+  string thumb_url = 2;     // CDN 缩略图URL
+  string file_key = 3;      // 文件Key
+  string file_md5 = 4;      // 文件MD5
+  uint32 image_width = 5;   // 图片宽度
+  uint32 image_height = 6;  // 图片高度
+}
+
+// UploadVideoResult 聊天视频 CDN 上传结果
+message UploadVideoResult {
+  string aes_key = 1;       // 视频加密 AES 密钥（hex编码）
+  string file_id = 2;       // CDN 文件ID
+  uint32 file_size = 3;     // 视频文件大小
+  uint32 thumb_size = 4;    // 缩略图大小
+  string file_md5 = 5;      // 视频MD5
+}
+
+// UploadSnsVideoResult 朋友圈视频 CDN 上传结果
+message UploadSnsVideoResult {
+  string file_url = 1;  // CDN 视频URL
+  string thumb_url = 2; // CDN 缩略图URL
+  string file_id = 3;   // 文件ID
+  string file_key = 4;  // 文件Key
+}
+
+// ==================== 下载请求消息 ====================
+
+// DownloadImageRequest CDN 下载高清图片请求
+message DownloadImageRequest {
+  string file_id = 1; // CDN 文件ID
+  string aes_key = 2; // AES 密钥（hex编码）
+}
+
+// DownloadVideoRequest CDN 下载聊天视频请求
+message DownloadVideoRequest {
+  string file_id = 1; // CDN 文件ID
+  string aes_key = 2; // AES 密钥（hex编码）
+}
+
+// DownloadVideoCoverRequest CDN 下载视频封面请求
+message DownloadVideoCoverRequest {
+  string file_id = 1; // CDN 文件ID
+  string aes_key = 2; // AES 密钥（hex编码）
+}
+
+// DownloadSnsVideoRequest CDN 下载朋友圈视频请求
+message DownloadSnsVideoRequest {
+  string video_url = 1; // 加密视频 URL
+  uint64 enc_key = 2;   // 解密密钥
+}
+
+// ==================== 其他请求消息 ====================
+
+// UploadImageRequest CDN 上传聊天图片请求
+message UploadImageRequest {
+  string receiver = 1; // 接收者 wxid
+  bytes data = 2;      // 图片二进制数据
+}
+
+// UploadMomentsImageRequest CDN 上传朋友圈图片请求
+message UploadMomentsImageRequest {
+  bytes data = 1; // 图片二进制数据
+}
+
+// UploadVideoRequest CDN 上传聊天视频请求
+message UploadVideoRequest {
+  string receiver = 1;  // 接收者 wxid
+  bytes video_data = 2; // 视频二进制数据
+  bytes thumb_data = 3; // 缩略图二进制数据
+  uint32 duration = 4;  // 视频时长（秒）
+}
+
+// UploadMomentsVideoRequest CDN 上传朋友圈视频请求
+message UploadMomentsVideoRequest {
+  bytes video_data = 1; // 视频二进制数据
+  bytes thumb_data = 2; // 缩略图二进制数据
+}
+
+// GetDnsRequest 获取 CDN DNS 信息请求
+message GetDnsRequest {}

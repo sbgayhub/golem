@@ -3,107 +3,20 @@ syntax = "proto3";
 package cdn;
 
 
-// ==================== 枚举定义 ====================
-
-// DownloadType CDN下载类型
-enum DownloadType {
-  DOWNLOAD_TYPE_UNSPECIFIED = 0;  // 未指定
-  DOWNLOAD_TYPE_IMAGE = 1;        // 下载图片
-  DOWNLOAD_TYPE_VIDEO = 2;        // 下载视频
-  DOWNLOAD_TYPE_VIDEO_COVER = 3;  // 下载视频封面
-  DOWNLOAD_TYPE_SNS_VIDEO = 4;    // 下载朋友圈视频
-}
-
-// ==================== 上传结果消息 ====================
-
-// UploadImageResult 聊天图片 CDN 上传结果
-message UploadImageResult {
-  string aes_key = 1;       // 图片加密 AES 密钥（hex编码）
-  string file_id = 2;       // CDN 文件ID
-  uint64 new_msg_id = 3;    // 新消息ID
-  uint32 create_time = 4;   // 创建时间
-  uint32 file_size = 5;     // 文件大小
-  string file_md5 = 6;      // 文件MD5
-  uint32 file_width = 7;    // 图片宽度
-  uint32 file_height = 8;   // 图片高度
-  uint32 thumb_size = 9;    // 缩略图大小
-  string thumb_md5 = 10;    // 缩略图MD5
-  uint32 thumb_width = 11;  // 缩略图宽度
-  uint32 thumb_height = 12; // 缩略图高度
-}
-
-// UploadSnsImageResult 朋友圈图片 CDN 上传结果
-message UploadSnsImageResult {
-  string file_url = 1;      // CDN 文件URL
-  string thumb_url = 2;     // CDN 缩略图URL
-  string file_key = 3;      // 文件Key
-  string file_md5 = 4;      // 文件MD5
-  uint32 image_width = 5;   // 图片宽度
-  uint32 image_height = 6;  // 图片高度
-}
-
-// UploadVideoResult 聊天视频 CDN 上传结果
-message UploadVideoResult {
-  string aes_key = 1;       // 视频加密 AES 密钥（hex编码）
-  string file_id = 2;       // CDN 文件ID
-  uint32 file_size = 3;     // 视频文件大小
-  uint32 thumb_size = 4;    // 缩略图大小
-  string file_md5 = 5;      // 视频MD5
-}
-
-// UploadSnsVideoResult 朋友圈视频 CDN 上传结果
-message UploadSnsVideoResult {
-  string file_url = 1;   // CDN 视频URL
-  string thumb_url = 2;  // CDN 缩略图URL
-  string file_id = 3;    // 文件ID
-  string file_key = 4;   // 文件Key
-}
-
-// ==================== DNS 相关消息 ====================
-
-// DnsResponse CDN DNS 响应
-message DnsResponse {
-  bytes dns_data = 1;  // DNS 响应数据
-}
-
-// GetDnsRequest 获取 CDN DNS 信息请求
-message GetDnsRequest {}
-
-// GetDnsResponse 获取 CDN DNS 信息响应
-message GetDnsResponse {
-  DnsResponse result = 1;  // DNS 响应数据
-}
-
 // ==================== 流式传输消息 ====================
 
 // UploadImageChunk 上传图片分块
 message UploadImageChunk {
-  oneof chunk {
-    UploadImageMetadata metadata = 1;  // 第一个包携带元数据
-    bytes data = 2;                    // 后续包携带数据
-  }
-}
-
-// UploadImageMetadata 上传图片元数据
-message UploadImageMetadata {
-  string receiver = 1;     // 接收者 wxid
-  uint32 total_size = 2;   // 文件总大小
+    string receiver = 1;  // 接收者 wxid
+    bytes data = 2;       // 后续包携带数据
 }
 
 // UploadVideoChunk 上传视频分块
 message UploadVideoChunk {
-  oneof chunk {
-    UploadVideoMetadata metadata = 1;  // 第一个包携带元数据
-    bytes data = 2;                    // 后续包携带数据
-  }
-}
-
-// UploadVideoMetadata 上传视频元数据
-message UploadVideoMetadata {
-  string receiver = 1;       // 接收者 wxid
-  uint32 video_total_size = 2; // 视频文件总大小
-  uint32 thumb_total_size = 3; // 缩略图总大小
-  uint32 duration = 4;         // 视频时长（秒）
+    string receiver = 1;  // 第一个包携带元数据
+    uint32 duration = 2;  // 视频时长（秒）
+    bytes thumb = 3;      // 缩略图数据
+    bytes data = 4;       // 后续包携带数据
 }
 
 // DownloadImageChunk 下载图片分块
@@ -116,26 +29,62 @@ message DownloadVideoChunk {
   bytes data = 1;  // 视频数据块
 }
 
+
+// UploadMomentsImageRequest CDN 上传朋友圈图片请求
+message UploadMomentsImageRequest {
+  bytes data = 1;  // 图片二进制数据
+}
+
+// UploadMomentsVideoRequest CDN 上传朋友圈视频请求
+message UploadMomentsVideoRequest {
+  bytes video_data = 1;  // 视频二进制数据
+  bytes thumb_data = 2;  // 缩略图二进制数据
+}
+
+
 // ==================== 上传/下载结果消息 ====================
 
 // UploadImageResponse 上传图片响应
 message UploadImageResponse {
-  UploadImageResult result = 1;
+    string aes_key = 1;       // 图片加密 AES 密钥（hex编码）
+    string file_id = 2;       // CDN 文件ID
+    uint64 new_msg_id = 3;    // 新消息ID
+    uint32 create_time = 4;   // 创建时间
+    uint32 file_size = 5;     // 文件大小
+    string file_md5 = 6;      // 文件MD5
+    uint32 file_width = 7;    // 图片宽度
+    uint32 file_height = 8;   // 图片高度
+    uint32 thumb_size = 9;    // 缩略图大小
+    string thumb_md5 = 10;    // 缩略图MD5
+    uint32 thumb_width = 11;  // 缩略图宽度
+    uint32 thumb_height = 12; // 缩略图高度
 }
 
 // UploadMomentsImageResponse 上传朋友圈图片响应
 message UploadMomentsImageResponse {
-  UploadSnsImageResult result = 1;
+    string file_url = 1;      // CDN 文件URL
+    string thumb_url = 2;     // CDN 缩略图URL
+    string file_key = 3;      // 文件Key
+    string file_md5 = 4;      // 文件MD5
+    uint32 image_width = 5;   // 图片宽度
+    uint32 image_height = 6;  // 图片高度
 }
 
 // UploadVideoResponse 上传视频响应
 message UploadVideoResponse {
-  UploadVideoResult result = 1;
+    string aes_key = 1;       // 视频加密 AES 密钥（hex编码）
+    string file_id = 2;       // CDN 文件ID
+    uint32 file_size = 3;     // 视频文件大小
+    uint32 thumb_size = 4;    // 缩略图大小
+    string file_md5 = 5;      // 视频MD5
 }
 
 // UploadMomentsVideoResponse 上传朋友圈视频响应
 message UploadMomentsVideoResponse {
-  UploadSnsVideoResult result = 1;
+    string file_url = 1;   // CDN 视频URL
+    string thumb_url = 2;  // CDN 缩略图URL
+    string file_id = 3;    // 文件ID
+    string file_key = 4;   // 文件Key
 }
 
 // DownloadImageResponse 下载图片响应（非流式）
@@ -154,35 +103,8 @@ message DownloadVideoResponse {
 }
 
 // DownloadSnsVideoResponse 下载朋友圈视频响应
-message DownloadSnsVideoResponse {
+message DownloadMomentsVideoResponse {
   bytes data = 1;
-}
-
-// ==================== 旧的请求消息（保留兼容）====================
-
-// UploadImageRequest CDN 上传聊天图片请求（非流式，保留兼容）
-message UploadImageRequest {
-  string receiver = 1;  // 接收者 wxid
-  bytes data = 2;       // 图片二进制数据
-}
-
-// UploadMomentsImageRequest CDN 上传朋友圈图片请求
-message UploadMomentsImageRequest {
-  bytes data = 1;  // 图片二进制数据
-}
-
-// UploadVideoRequest CDN 上传聊天视频请求（非流式，保留兼容）
-message UploadVideoRequest {
-  string receiver = 1;   // 接收者 wxid
-  bytes video_data = 2;  // 视频二进制数据
-  bytes thumb_data = 3;  // 缩略图二进制数据
-  uint32 duration = 4;   // 视频时长（秒）
-}
-
-// UploadMomentsVideoRequest CDN 上传朋友圈视频请求
-message UploadMomentsVideoRequest {
-  bytes video_data = 1;  // 视频二进制数据
-  bytes thumb_data = 2;  // 缩略图二进制数据
 }
 
 // ==================== 下载请求消息 ====================
@@ -215,9 +137,6 @@ message DownloadSnsVideoRequest {
 
 // CDNService CDN 文件上传/下载服务
 service CDNService {
-  // 获取 CDN DNS 信息
-  rpc GetDns(GetDnsRequest) returns (GetDnsResponse);
-
   // 客户端流式上传聊天图片
   rpc UploadImage(stream UploadImageChunk) returns (UploadImageResponse);
   // 客户端流式上传聊天视频
@@ -236,5 +155,5 @@ service CDNService {
   // CDN 下载视频封面
   rpc DownloadVideoCover(DownloadVideoCoverRequest) returns (DownloadVideoCoverResponse);
   // CDN 下载朋友圈视频
-  rpc DownloadSnsVideo(DownloadSnsVideoRequest) returns (DownloadSnsVideoResponse);
+  rpc DownloadSnsVideo(DownloadSnsVideoRequest) returns (DownloadMomentsVideoResponse);
 }

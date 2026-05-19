@@ -19,7 +19,6 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	CDNService_GetDns_FullMethodName             = "/cdn.CDNService/GetDns"
 	CDNService_UploadImage_FullMethodName        = "/cdn.CDNService/UploadImage"
 	CDNService_UploadVideo_FullMethodName        = "/cdn.CDNService/UploadVideo"
 	CDNService_DownloadImage_FullMethodName      = "/cdn.CDNService/DownloadImage"
@@ -36,8 +35,6 @@ const (
 //
 // CDNService CDN 文件上传/下载服务
 type CDNServiceClient interface {
-	// 获取 CDN DNS 信息
-	GetDns(ctx context.Context, in *GetDnsRequest, opts ...grpc.CallOption) (*GetDnsResponse, error)
 	// 客户端流式上传聊天图片
 	UploadImage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadImageChunk, UploadImageResponse], error)
 	// 客户端流式上传聊天视频
@@ -54,7 +51,7 @@ type CDNServiceClient interface {
 	// CDN 下载视频封面
 	DownloadVideoCover(ctx context.Context, in *DownloadVideoCoverRequest, opts ...grpc.CallOption) (*DownloadVideoCoverResponse, error)
 	// CDN 下载朋友圈视频
-	DownloadSnsVideo(ctx context.Context, in *DownloadSnsVideoRequest, opts ...grpc.CallOption) (*DownloadSnsVideoResponse, error)
+	DownloadSnsVideo(ctx context.Context, in *DownloadSnsVideoRequest, opts ...grpc.CallOption) (*DownloadMomentsVideoResponse, error)
 }
 
 type cDNServiceClient struct {
@@ -63,16 +60,6 @@ type cDNServiceClient struct {
 
 func NewCDNServiceClient(cc grpc.ClientConnInterface) CDNServiceClient {
 	return &cDNServiceClient{cc}
-}
-
-func (c *cDNServiceClient) GetDns(ctx context.Context, in *GetDnsRequest, opts ...grpc.CallOption) (*GetDnsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetDnsResponse)
-	err := c.cc.Invoke(ctx, CDNService_GetDns_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 func (c *cDNServiceClient) UploadImage(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[UploadImageChunk, UploadImageResponse], error) {
@@ -169,9 +156,9 @@ func (c *cDNServiceClient) DownloadVideoCover(ctx context.Context, in *DownloadV
 	return out, nil
 }
 
-func (c *cDNServiceClient) DownloadSnsVideo(ctx context.Context, in *DownloadSnsVideoRequest, opts ...grpc.CallOption) (*DownloadSnsVideoResponse, error) {
+func (c *cDNServiceClient) DownloadSnsVideo(ctx context.Context, in *DownloadSnsVideoRequest, opts ...grpc.CallOption) (*DownloadMomentsVideoResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DownloadSnsVideoResponse)
+	out := new(DownloadMomentsVideoResponse)
 	err := c.cc.Invoke(ctx, CDNService_DownloadSnsVideo_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -185,8 +172,6 @@ func (c *cDNServiceClient) DownloadSnsVideo(ctx context.Context, in *DownloadSns
 //
 // CDNService CDN 文件上传/下载服务
 type CDNServiceServer interface {
-	// 获取 CDN DNS 信息
-	GetDns(context.Context, *GetDnsRequest) (*GetDnsResponse, error)
 	// 客户端流式上传聊天图片
 	UploadImage(grpc.ClientStreamingServer[UploadImageChunk, UploadImageResponse]) error
 	// 客户端流式上传聊天视频
@@ -203,7 +188,7 @@ type CDNServiceServer interface {
 	// CDN 下载视频封面
 	DownloadVideoCover(context.Context, *DownloadVideoCoverRequest) (*DownloadVideoCoverResponse, error)
 	// CDN 下载朋友圈视频
-	DownloadSnsVideo(context.Context, *DownloadSnsVideoRequest) (*DownloadSnsVideoResponse, error)
+	DownloadSnsVideo(context.Context, *DownloadSnsVideoRequest) (*DownloadMomentsVideoResponse, error)
 	mustEmbedUnimplementedCDNServiceServer()
 }
 
@@ -214,9 +199,6 @@ type CDNServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedCDNServiceServer struct{}
 
-func (UnimplementedCDNServiceServer) GetDns(context.Context, *GetDnsRequest) (*GetDnsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetDns not implemented")
-}
 func (UnimplementedCDNServiceServer) UploadImage(grpc.ClientStreamingServer[UploadImageChunk, UploadImageResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method UploadImage not implemented")
 }
@@ -238,7 +220,7 @@ func (UnimplementedCDNServiceServer) UploadMomentsVideo(context.Context, *Upload
 func (UnimplementedCDNServiceServer) DownloadVideoCover(context.Context, *DownloadVideoCoverRequest) (*DownloadVideoCoverResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DownloadVideoCover not implemented")
 }
-func (UnimplementedCDNServiceServer) DownloadSnsVideo(context.Context, *DownloadSnsVideoRequest) (*DownloadSnsVideoResponse, error) {
+func (UnimplementedCDNServiceServer) DownloadSnsVideo(context.Context, *DownloadSnsVideoRequest) (*DownloadMomentsVideoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DownloadSnsVideo not implemented")
 }
 func (UnimplementedCDNServiceServer) mustEmbedUnimplementedCDNServiceServer() {}
@@ -260,24 +242,6 @@ func RegisterCDNServiceServer(s grpc.ServiceRegistrar, srv CDNServiceServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&CDNService_ServiceDesc, srv)
-}
-
-func _CDNService_GetDns_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetDnsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(CDNServiceServer).GetDns(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: CDNService_GetDns_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(CDNServiceServer).GetDns(ctx, req.(*GetDnsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
 }
 
 func _CDNService_UploadImage_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -395,10 +359,6 @@ var CDNService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "cdn.CDNService",
 	HandlerType: (*CDNServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "GetDns",
-			Handler:    _CDNService_GetDns_Handler,
-		},
 		{
 			MethodName: "UploadMomentsImage",
 			Handler:    _CDNService_UploadMomentsImage_Handler,

@@ -1,0 +1,176 @@
+syntax = "proto3";
+
+package contact;
+
+import "group/group.proto";
+
+option go_package = "github.com/sbgayhub/golem/sdk/contact";
+
+
+// ==================== 枚举 ====================
+
+// ContactType 联系人类型
+enum ContactType {
+  CONTACT_TYPE_UNSPECIFIED = 0;
+  CONTACT_TYPE_SELF = 1;
+  CONTACT_TYPE_FRIEND = 2;
+  CONTACT_TYPE_GROUP = 3;
+  CONTACT_TYPE_OFFICIAL = 4;
+  CONTACT_TYPE_SPECIAL = 5;
+}
+
+// RetrievalType 缓存检索策略
+enum RetrievalType {
+  RETRIEVAL_TYPE_UNSPECIFIED = 0;
+  RETRIEVAL_TYPE_USERNAME = 1;
+  RETRIEVAL_TYPE_NICKNAME = 2;
+  RETRIEVAL_TYPE_REMARK = 3;
+}
+
+// ==================== 联系人 ====================
+
+// Contact 联系人（统一结构，oneof 区分类型特有数据）
+message Contact {
+  string username = 1;     // wxid
+  string nickname = 2;     // 昵称
+  string remark = 3;       // 备注
+  string alias = 4;        // 微信号
+  string avatar = 5;       // 头像 URL
+  ContactType type = 6;    // 联系人类型
+  oneof data {
+    FriendData friend = 20; // 好友数据
+    GroupData group = 21;   // 群组数据
+  }
+}
+
+// FriendData 好友特有数据
+message FriendData {
+  string country = 1;    // 国家
+  string province = 2;   // 省份
+  string city = 3;       // 城市
+  string gender = 4;     // 性别
+  string signature = 5;  // 个性签名
+}
+
+// GroupData 群组特有数据
+message GroupData {
+  string owner = 1; // 群主 wxid
+}
+
+// Official 公众号特有数据
+message Official {
+}
+
+
+
+
+// ==================== 通用响应 ====================
+
+// OperateResponse 通用操作响应
+message OperateResponse {
+  int32 code = 1;     // 状态码（0=成功）
+  string message = 2; // 提示信息
+}
+
+// ==================== 缓存查询 ====================
+
+// GetContactByKeyRequest 按键查询缓存联系人
+message GetContactByKeyRequest {
+  string key = 1; // 支持前缀：username::（默认）、nickname::、remark::
+}
+
+// GetContactByStrategyRequest 按策略查询缓存联系人
+message GetContactByStrategyRequest {
+  string key = 1;           // 查询键
+  RetrievalType strategy = 2; // 检索策略
+}
+
+// GetContactResponse 查询联系人响应
+message GetContactResponse {
+  bool found = 1;         // 是否找到
+  Contact contact = 2;    // 联系人（found=true 时有效）
+}
+
+// GetGroupMembersRequest 获取群成员列表请求
+message GetGroupMembersRequest {
+  string group_id = 1; // 群 ID
+}
+
+// GetGroupMembersResponse 获取群成员列表响应
+message GetGroupMembersResponse {
+  bool found = 1;                    // 是否找到
+  repeated group.GroupMember members = 2;  // 成员列表（found=true 时有效）
+}
+
+// ==================== 联系人业务 ====================
+
+// GetContactListRequest 获取联系人列表请求
+message GetContactListRequest {}
+
+// GetContactListResponse 获取联系人列表响应
+message GetContactListResponse {
+  repeated Contact contacts = 1; // 联系人列表
+}
+
+// SetRemarkRequest 设置联系人备注请求
+message SetRemarkRequest {
+  string username = 1; // 联系人 wxid
+  string remark = 2;   // 新备注
+}
+
+// AddFriendRequest 发送好友申请请求
+message AddFriendRequest {
+  string v1 = 1;      // v1 凭证
+  string v2 = 2;      // v2 凭证
+  string content = 3; // 申请附言
+  int32 operate = 4;  // 操作类型
+  int32 scene = 5;    // 申请场景
+}
+
+// VerifyFriendRequest 通过好友验证请求
+message VerifyFriendRequest {
+  string v1 = 1;  // v1 凭证
+  string v2 = 2;  // v2 凭证
+  int32 scene = 3; // 验证场景
+}
+
+// DeleteContactRequest 删除联系人请求
+message DeleteContactRequest {
+  string username = 1; // 联系人 wxid
+}
+
+// BlacklistRequest 黑名单操作请求
+message BlacklistRequest {
+  string username = 1; // 联系人 wxid
+}
+
+// SearchContactRequest 搜索联系人请求
+message SearchContactRequest {
+  string keyword = 1;      // 搜索关键词
+  uint32 from_scene = 2;   // 搜索来源场景
+  uint32 search_scene = 3; // 搜索场景
+}
+
+// SearchResponse 搜索联系人响应
+message SearchResponse {
+  repeated Contact contacts = 1; // 搜索结果
+}
+
+// ==================== 服务定义 ====================
+
+// ContactService 联系人服务
+service ContactService {
+  // 缓存查询
+  rpc GetContactByKey(GetContactByKeyRequest) returns (GetContactResponse);
+  rpc GetContactByStrategy(GetContactByStrategyRequest) returns (GetContactResponse);
+  rpc GetGroupMembers(GetGroupMembersRequest) returns (GetGroupMembersResponse);
+  // 联系人管理
+  rpc GetContactList(GetContactListRequest) returns (GetContactListResponse);
+  rpc SetRemark(SetRemarkRequest) returns (OperateResponse);
+  rpc AddFriend(AddFriendRequest) returns (OperateResponse);
+  rpc VerifyFriend(VerifyFriendRequest) returns (OperateResponse);
+  rpc Delete(DeleteContactRequest) returns (OperateResponse);
+  rpc BlacklistAdd(BlacklistRequest) returns (OperateResponse);
+  rpc BlacklistRemove(BlacklistRequest) returns (OperateResponse);
+  rpc Search(SearchContactRequest) returns (SearchResponse);
+}

@@ -1,0 +1,857 @@
+syntax = "proto3";
+
+package api.message;
+
+option go_package = "github.com/sbgayhub/golem/host/api/message;messageapi";
+
+import "api/base/base.proto";
+import "google/protobuf/wrappers.proto";
+
+// ============================================================================
+// 同步消息类型
+// ============================================================================
+
+// SyncResult 同步结果
+message SyncResult {
+  repeated ModifyUserInfo modify_user_info = 1; // 修改用户信息
+  repeated ModifyContact modify_contact = 2; // 修改联系人信息
+  repeated DeleteContact delete_contact = 4; // 删除联系人
+  repeated NewMessage new_message = 5; // 新消息
+  repeated ModifyMessageStatus modify_messages_status = 6; // 修改消息状态
+  repeated DeleteChatContact delete_chat_contact = 7; // 删除聊天联系人
+  repeated DeleteContactMessage delete_contact_message = 8; // 删除联系人消息
+  repeated ModifyChatroomMember modify_chatroom_member = 15; // 修改群成员
+  repeated QuitChatroom quit_chatroom = 16; // 退出群组
+  repeated ModifyChatroomMemberDisplayName modify_chatroom_member_display_name = 48; // 修改群成员显示名称
+  repeated UserInfoExtend user_info_extend = 44; // 用户信息扩展
+  repeated int32 unknown = 9999; // 未知数据类型
+}
+
+// 1：修改用户信息
+// ModifyUserInfo 修改用户信息
+message ModifyUserInfo {
+  optional uint32 bit_flag = 1;                     // 位标志
+  optional google.protobuf.StringValue user_name = 2; // 用户名
+  optional google.protobuf.StringValue nick_name = 3; // 昵称
+  optional uint32 uin = 4;                          // 绑定UIN
+  optional google.protobuf.StringValue email = 5;   // 绑定邮箱
+  optional google.protobuf.StringValue mobile = 6;  // 绑定手机
+  optional uint32 status = 7;                       // 状态
+  optional uint32 avatar_len = 8;                   // 头像长度
+  optional bytes avatar_buffer = 9;                 // 头像缓冲区
+  optional base.Gender gender = 10;           // 性别
+  optional string province = 11;                    // 省份
+  optional string city = 12;                        // 城市
+  optional string signature = 13;                   // 签名
+  optional uint32 personal_card = 14;               // 个人名片
+  optional DisturbSetting disturb_setting = 15;     // 免打扰设置
+  optional uint32 plugin_flag = 16;                 // 插件标志
+  optional uint32 verify_flag = 17;                 // 验证标志
+  optional string verify_info = 18;                 // 验证信息
+  optional uint32 point = 19;                       // 积分
+  optional uint32 experience = 20;                  // 经验
+  optional uint32 level = 21;                       // 等级
+  optional uint32 level_low_experience = 22;        // 等级低经验
+  optional uint32 level_high_experience = 23;       // 等级高经验
+  optional string weibo = 24;                       // 微博
+  optional uint32 plugin_switch = 25;               // 插件开关
+  optional GmailList gmail_list = 26;               // Gmail列表
+  optional string alias = 27;                       // 别名
+  optional string weibo_nickname = 28;              // 微博昵称
+  optional uint32 weibo_flag = 29;                  // 微博标志
+  optional uint32 facebook_flag = 30;               // Facebook标志
+  optional uint64 facebook_userid = 31;             // Facebook用户ID
+  optional string facebook_username = 32;           // Facebook用户名
+  optional int32 album_style = 33;                  // 相册样式
+  optional int32 album_flag = 34;                   // 相册标志
+  optional string album_bg_image_id = 35;           // 相册背景图ID
+  optional uint32 news_category = 36;               // 腾讯新闻分类
+  optional string facebook_token = 37;              // Facebook令牌
+  optional string country = 38;                     // 国家
+
+  // GmailList Gmail列表
+  message GmailList {
+    optional uint32 count = 1;    // 数量
+    repeated Info list = 2;       // 列表
+
+    // Info Gmail信息
+    message Info {
+      optional string account = 1;   // Gmail账号
+      optional uint32 switch = 2;    // Gmail开关
+      optional uint32 err_code = 3;  // Gmail错误码
+    }
+  }
+}
+
+// SnsUserInfo 朋友圈用户信息
+message SnsUserInfo {
+  optional uint32 flag = 1;                        // 朋友圈标志
+  optional string bg_image_id = 2;                   // 朋友圈背景图ID
+  optional uint64 bg_object_id = 3;                // 朋友圈背景对象ID
+  optional uint32 flag_extend = 4;                     // 朋友圈扩展标志
+}
+
+// CustomizedInfo 自定义信息
+message CustomizedInfo {
+  optional uint32 brand_flag = 1;                      // 品牌标志
+  optional string extend_info = 2;                   // 外部信息
+  optional string brand_info = 3;                      // 品牌信息
+  optional string brand_icon_url = 4;                  // 品牌图标URL
+}
+
+// DisturbSetting 免打扰设置
+message DisturbSetting {
+  optional uint32 night_setting = 1;   // 夜间设置
+  optional TimeSpan night_time = 2;    // 夜间时间
+  optional uint32 all_day_setting = 3; // 全天设置
+  optional TimeSpan all_day_time = 4;  // 全天时间
+
+  // TimeSpan 免打扰时间段
+  message TimeSpan {
+    optional uint32 begin_hour = 1; // 开始小时
+    optional uint32 begin_min = 2;  // 开始分钟
+    optional uint32 end_hour = 3;   // 结束小时
+    optional uint32 end_min = 4;    // 结束分钟
+  }
+}
+
+// 2：修改联系人
+// ModifyContact 修改联系人
+message ModifyContact {
+  optional google.protobuf.StringValue username = 1;      // 用户名
+  optional google.protobuf.StringValue nickname = 2;      // 昵称
+  optional google.protobuf.StringValue nickname_jianpin = 3; // 拼音首字母
+  optional google.protobuf.StringValue nickname_quanpin = 4; // 全拼
+  optional base.Gender gender = 5;                  // 性别
+  optional api.base.Buffer avatar_buffer = 6;           // 头像缓冲区
+  optional uint32 bit_mask = 7;                           // 位掩码
+  optional uint32 bit_value = 8;                          // 位值
+  optional uint32 image_flag = 9;                         // 头像标志
+  optional google.protobuf.StringValue remark = 10;       // 备注
+  optional google.protobuf.StringValue remark_jianpin = 11; // 备注拼音首字母
+  optional google.protobuf.StringValue remark_quanpin = 12; // 备注全拼简拼
+  optional uint32 contact_type = 13;                      // 联系人类型
+  optional uint32 chatroom_info_count = 14;                  // 群组信息数量
+  repeated ChatroomInfo chatroom_info_list = 15;                // 群组信息列表
+  repeated google.protobuf.StringValue domain_list = 16;  // 域列表
+  optional uint32 chatroom_notify = 17;                      // 群聊通知
+  optional uint32 add_contact_scene = 18;                 // 添加联系人场景
+  optional string province = 19;                          // 省份
+  optional string city = 20;                              // 城市
+  optional string signature = 21;                         // 签名
+  optional uint32 personal_card = 22;                     // 个人名片
+  optional uint32 has_hd_avatar = 23;                     // 是否有微信高清头像
+  optional uint32 verify_flag = 24;                       // 验证标志
+  optional string verify_info = 25;                       // 验证信息
+  optional int32 level = 26;                              // 等级
+  optional uint32 source = 27;                            // 来源
+  optional string weibo = 28;                             // 微博
+  optional string verify_content = 29;                    // 验证内容
+  optional string alias = 30;                             // 别名
+  optional string chatroom_owner = 31;                       // 群主
+  optional string weibo_nickname = 32;                    // 微博昵称
+  optional uint32 weibo_flag = 33;                        // 微博标志
+  optional int32 album_style = 34;                        // 相册样式
+  optional int32 album_flag = 35;                         // 相册标志
+  optional string album_bg_image_id = 36;                 // 相册背景图ID
+  optional SnsUserInfo sns_user_info = 37;                // 朋友圈用户信息
+  optional string country = 38;                           // 国家
+  optional string big_avatar_url = 39;                    // 大头像URL
+  optional string small_avatar_url = 40;                  // 小头像URL
+  optional string brand_list = 41;                        // 我的品牌列表
+  optional CustomizedInfo customized_info = 42;           // 自定义信息
+  optional string chatroom_data = 43;                        // 群聊数据
+  optional string avatar_md5 = 44;                        // 头像MD5
+  optional string encrypt_username = 45;                  // 加密用户名
+  optional string id_card_num = 46;                       // 身份证号
+  optional string real_name = 47;                         // 真实姓名
+  optional string mobile_hash = 48;                       // 手机哈希
+  optional string mobile_full_hash = 49;                  // 手机完整哈希
+  optional AdditionalContactList additional_contact_list = 50; // 附加联系人列表
+  optional uint32 chatroom_version = 53;                     // 群聊版本
+  optional string extend_info = 54;                       // 扩展信息
+  optional uint32 chatroom_max_count = 55;                   // 群聊最大人数
+  optional uint32 chatroom_access_type = 56;                 // 群聊访问类型
+  optional ChatroomMemberData members = 57;                  // 群成员数据
+  optional int32 delete_flag = 58;                        // 删除标志
+  optional string description = 59;                       // 描述
+  optional string card_image_url = 60;                    // 名片图片URL
+  optional string label_id_list = 61;                     // 标签ID列表
+  optional MobileInfo mobile_info = 62;                   // 电话号码列表信息
+  optional string micro_store_info = 63;                  // 微店信息
+  optional int32 chatroom_info_version = 64;                 // 群聊信息版本
+  optional int32 delete_contact_scene = 65;               // 删除联系人场景
+  optional int32 chatroom_status = 66;                       // 群聊状态
+  optional int32 extend_flag = 67;                        // 扩展标志
+  optional string source_extend_info = 70;                // 来源扩展信息
+  optional uint32 chatroom_business_type = 71;               // 群聊业务类型
+
+  // ChatroomInfo 群组信息
+  message ChatroomInfo {
+    optional google.protobuf.StringValue username = 1; // 用户名
+    optional google.protobuf.StringValue nickname = 2; // 昵称
+  }
+
+  // AdditionalContactList 附加联系人列表
+  message AdditionalContactList {
+    optional LinkedinItem item = 1; // LinkedIn联系人项
+
+    // LinkedinItem LinkedIn联系人项
+    message LinkedinItem {
+      optional string name = 1;       // LinkedIn名称
+      optional string member_id = 2;  // LinkedIn成员ID
+      optional string public_url = 3; // LinkedIn公开URL
+    }
+  }
+
+  // MobileInfo 电话号码列表信息
+  message MobileInfo {
+    optional uint32 count = 1; // 数量
+    repeated string list = 2;  // 电话号码列表
+  }
+
+  // OpenIMContact OpenIM联系人
+  message OpenIMContact {
+    optional string tp_username = 1;        // TP用户名
+    optional string nickname = 2;           // 昵称
+    optional uint32 type = 3;               // 类型
+    optional string remark = 4;             // 备注
+    optional string big_avatar = 5;         // 大头像
+    optional string small_avatar = 6;       // 小头像
+    optional uint32 source = 7;             // 来源
+    optional string nickname_jianpin = 8;   // 昵称拼音首字母
+    optional string nickname_quanpin = 9;   // 昵称全拼
+    optional string remark_jianpin = 10;    // 备注拼音首字母
+    optional string remark_quanpin = 11;    // 备注全拼
+    optional CustomInfo custom_info = 12;   // 自定义信息
+    optional string antispam_ticket = 13;   // 反垃圾票据
+    optional string app_id = 14;            // App ID
+    optional base.Gender gender = 15; // 性别
+    optional string desc_wording_id = 16;   // 描述措辞ID
+
+    // CustomInfo OpenIM联系人自定义信息
+    message CustomInfo {
+      optional uint32 detail_visible = 1; // 详情可见
+      optional string detail = 2;         // 详情
+    }
+  }
+
+  // ChatroomMemberData 群成员数据
+  message ChatroomMemberData {
+    optional uint32 count = 1;     // 成员数量
+    repeated MemberInfo list = 2;  // 群成员列表
+    optional uint32 info_mask = 3; // 信息掩码
+
+    // MemberInfo 群成员信息
+    message MemberInfo {
+      optional string username = 1;             // 用户名
+      optional string nickname = 2;             // 昵称
+      optional string display_name = 3;         // 显示名称
+      optional string big_avatar_url = 4;       // 大头像URL
+      optional string small_avatar_url = 5;     // 小头像URL
+      optional uint32 chatroom_member_flag = 6; // 群成员标志
+      optional string inviter_username = 7;     // 邀请者用户名
+      optional string extend_xml = 20;          // 入群追溯消息
+    }
+  }
+}
+
+// 4：删除联系人
+// DeleteContact 删除联系人
+message DeleteContact {
+  optional google.protobuf.StringValue username = 1; // 用户名
+  optional uint32 scene = 2;                         // 删除联系人场景
+}
+
+// 5：新增消息
+// NewMessage 新增消息
+message NewMessage {
+  optional int32 id = 1;                           // 消息ID
+  optional google.protobuf.StringValue sender = 2; // 发送者用户名
+  optional google.protobuf.StringValue receiver = 3; // 接收者用户名
+  optional int32 type = 4;                         // 消息类型
+  optional google.protobuf.StringValue content = 5; // 消息内容
+  optional uint32 status = 6;                      // 状态
+  optional uint32 image_status = 7;                // 图片状态
+  optional base.Buffer image_buffer = 8;     // 图片缓冲区
+  optional uint32 create_time = 9;                 // 创建时间
+  optional string source = 10;                     // 消息来源
+  optional string push_content = 11;               // 推送内容
+  optional int64 new_id = 12;                      // 新消息ID
+  optional uint32 sequence = 13;                   // 消息序列号
+}
+
+// 6：修改消息状态
+// ModifyMessageStatus 修改消息状态
+message ModifyMessageStatus {
+  optional int32 id = 1;                           // 消息ID
+  optional google.protobuf.StringValue sender = 2; // 发送者用户名
+  optional google.protobuf.StringValue receiver = 3; // 接收者用户名
+  optional int32 status = 4;                       // 状态，2-已送达，4-已读
+  optional int64 new_id = 5;                       // 新消息ID
+}
+
+// 7：删除聊天联系人
+// DeleteChatContact 删除聊天联系人
+message DeleteChatContact {
+  optional google.protobuf.StringValue username = 1; // 用户名
+}
+
+// 8：删除联系人消息
+// DeleteContactMessage 删除联系人消息
+message DeleteContactMessage {
+  optional google.protobuf.StringValue username = 1; // 用户名
+  optional int32 max_id = 2;                         // 最大消息ID
+  optional int64 new_id = 3;                         // 新消息ID
+}
+
+// 10：上报
+// Report 上报信息
+message Report {
+  optional string log = 1; // 日志内容
+}
+
+// 11：打开QQ微博
+// OpenQQWeibo 打开QQ微博
+message OpenQQWeibo {
+  optional google.protobuf.StringValue username = 1; // 用户名
+}
+
+// 12：关闭QQ微博
+// CloseQQWeibo 关闭QQ微博
+message CloseQQWeibo {
+  optional google.protobuf.StringValue username = 1; // 用户名
+}
+
+// 13：修改QQ微博
+// ModifyQQWeibo 修改 QQ 微博（空 message，保留用于协议兼容）
+message ModifyQQWeibo {}
+
+// 14：修改通知状态
+// ModifyNotifyStatus 修改通知状态（空 message，保留用于协议兼容）
+message ModifyNotifyStatus {}
+
+// 15：修改群成员
+// ModifyChatroomMember 修改群成员
+message ModifyChatroomMember {
+  optional google.protobuf.StringValue username = 1;      // 用户名
+  optional google.protobuf.StringValue nickname = 2;      // 昵称
+  optional google.protobuf.StringValue nickname_jianpin = 3; // 拼音首字母
+  optional google.protobuf.StringValue nickname_quanpin = 4; // 全拼
+  optional base.Gender gender = 5;                  // 性别
+  optional base.Buffer avatar_buffer = 6;           // 头像缓冲区
+  optional uint32 image_flag = 7;                         // 头像标志
+  optional google.protobuf.StringValue remark = 8;        // 备注
+  optional google.protobuf.StringValue remark_jianpin = 9; // 备注拼音首字母
+  optional google.protobuf.StringValue remark_quanpin = 10; // 备注全拼简拼
+  optional uint32 contact_type = 11;                      // 联系人类型
+  optional string province = 12;                          // 省份
+  optional string city = 13;                              // 城市
+  optional string signature = 14;                         // 签名
+  optional uint32 personal_card = 15;                     // 个人名片
+  optional uint32 verify_flag = 16;                       // 验证标志
+  optional string verify_info = 17;                       // 验证信息
+  optional string weibo = 18;                             // 微博
+  optional string verify_content = 19;                    // 验证内容
+  optional string weibo_nickname = 20;                    // 微博昵称
+  optional uint32 weibo_flag = 21;                        // 微博标志
+  optional int32 album_style = 22;                        // 相册样式
+  optional int32 album_flag = 23;                         // 相册标志
+  optional string album_bg_image_id = 24;                 // 相册背景图ID
+  optional string alias = 25;                             // 别名
+  optional SnsUserInfo sns_user_info = 26;                // 朋友圈用户信息
+  optional string country = 27;                           // 国家
+  optional string big_avatar_url = 28;                    // 大头像URL
+  optional string small_avatar_url = 29;                  // 小头像URL
+  optional string brand_list = 30;                        // 我的品牌列表
+  optional CustomizedInfo customized_info = 31;           // 自定义信息
+}
+
+// 16：退出群聊
+// QuitChatroom 退出群聊
+message QuitChatroom {
+  optional google.protobuf.StringValue chatroom = 1;    // 群ID
+  google.protobuf.StringValue username = 2; // 用户名
+}
+
+// 17：修改联系人域邮箱
+
+// 18：修改用户域邮箱
+// ModifyUserDomainEmail 修改用户域邮箱
+message ModifyUserDomainEmail {
+  optional uint32 status = 1;                    // 状态
+  optional google.protobuf.StringValue email = 2; // 邮箱
+}
+
+// 19：删除用户域邮箱
+// DeleteUserDomainEmail 删除用户域邮箱
+message DeleteUserDomainEmail {
+  optional google.protobuf.StringValue username = 1; // 用户名
+  optional google.protobuf.StringValue email = 2;    // 邮箱
+}
+
+// 20：修改群通知
+// ModifyChatroomNotify 修改群通知
+message ModifyChatroomNotify {
+  optional google.protobuf.StringValue chatroom = 1; // 群ID
+  optional uint32 status = 2;                     // 状态
+}
+
+// 21：可能认识的人
+// PossibleFriend 可能认识的人
+message PossibleFriend {
+  optional string username = 1;          // 用户名
+  optional string nickname = 2;          // 昵称
+  optional string nickname_jianpin = 3;  // 拼音首字母
+  optional string nickname_quanpin = 4;  // 全拼
+  optional base.Gender gender = 5; // 性别
+  optional uint32 avatar_flag = 6;       // 头像标志
+  optional uint32 contact_type = 7;      // 联系人类型
+  optional string domain_list = 8;       // 域列表
+  optional string source = 9;            // 来源
+  optional uint32 scene = 10;            // 场景
+  optional string mobile = 11;           // 手机号
+}
+
+// 22：邀请好友开通
+// InviteFriendOpen 邀请好友开通
+message InviteFriendOpen {
+  optional string username = 1; // 用户名
+  optional uint32 type = 2;              // 类型
+}
+
+// 23：功能开关
+// FunctionSwitch 功能开关
+message FunctionSwitch {
+  optional uint32 id = 1;    // 开关ID
+  optional uint32 value = 2; // 开关值
+}
+
+// 24：修改QQ联系人
+
+// 25：
+
+// 26：PSM统计
+// PSMStatistics PSM统计
+message PSMStatistics {
+  optional uint32 m_type = 1;          // 主类型
+  optional string a_type = 2; // 附加类型
+}
+
+// 27：修改群名
+// ModifyChatroomTopic 修改群名
+message ModifyChatroomTopic {
+  optional google.protobuf.StringValue chatroom = 1; // 群ID
+  optional google.protobuf.StringValue topic = 2; // 群名称
+}
+
+// 28：
+
+// 29：
+
+// 30：更新统计
+// UpdateStatistics 更新统计
+message UpdateStatistics {
+  optional uint32 code = 1; // 统计码
+}
+
+// 31：修改免打扰设置
+// ModifyDisturbSetting 修改免打扰设置
+message ModifyDisturbSetting {
+  optional DisturbSetting value = 1; // 免打扰设置
+}
+
+// 32：删除漂流瓶
+
+// 33：修改漂流瓶联系人
+// ModifyBottleContact 修改漂流瓶联系人
+message ModifyBottleContact {
+  optional string username = 1;          // 用户名
+  optional uint32 type = 2;              // 类型
+  optional base.Gender gender = 3; // 性别
+  optional string city = 4;              // 城市
+  optional string province = 5;          // 省份
+  optional string signature = 6;         // 签名
+  optional uint32 avatar_flag = 7;       // 头像标志
+  optional uint32 hd_avatar_flag = 8;    // 高清头像标志
+  optional string country = 9;           // 国家
+  optional string large_avatar_url = 10; // 大头像URL
+  optional string small_avatar_url = 11; // 小头像URL
+}
+
+// 34：删除漂流瓶联系人
+// DeleteBottleContact 删除漂流瓶联系人
+message DeleteBottleContact {
+  optional string username = 1; // 用户名
+}
+
+// 35：修改用户头像
+// ModifyUserAvatar 修改用户头像
+message ModifyUserAvatar {
+  optional uint32 type = 1;          // 头像类型
+  optional uint32 size = 2;          // 头像长度
+  optional bytes buffer = 3;         // 头像缓冲区
+  optional string md5 = 4;           // 头像MD5
+  optional string big_avatar_url = 5; // 大头像URL
+  optional string small_avatar_url = 6; // 小头像URL
+}
+
+// 36：KV统计
+// KVStatistics KV统计
+message KVStatistics {
+  optional uint32 count = 1;        // 数量
+  repeated Item list = 2;  // 列表
+
+  // Item KV统计项
+  message Item {
+    optional uint32 key = 1;          // 键
+    optional string value = 2; // 值
+  }
+}
+
+// 37：主题统计
+// ThemeStatistics 主题统计
+message ThemeStatistics {
+  optional uint32 key = 1;          // 键
+  optional string value = 2; // 值
+}
+
+// 38...43：
+
+// 44：用户信息扩展
+// UserInfoExtend 用户信息扩展
+message UserInfoExtend {
+  optional string brand_list = 2;                  // 我的品牌列表
+  optional string message_push_sound = 3;          // 消息推送声音
+  optional string voip_push_sound = 4;             // VoIP推送声音
+  optional uint32 big_chatroom_size = 5;              // 大群大小
+  optional uint32 big_chatroom_quota = 6;             // 大群配额
+  optional uint32 big_chatroom_invite = 7;            // 大群邀请
+  optional string safe_mobile = 8;                 // 安全手机
+  optional string big_avatar_url = 9;              // 大头像URL
+  optional string small_avatar_url = 10;           // 小头像URL
+  optional uint32 main_account_type = 11;          // 主账号类型
+  optional google.protobuf.StringValue extend_xml = 12; // 扩展XML
+  optional SafeDeviceList safe_device_list = 13;   // 安全设备列表
+  optional uint32 safe_device = 14;                // 安全设备
+  optional uint32 grayscale_flag = 15;             // 灰度标志
+  optional string google_contact_name = 16;        // Google联系人名称
+  optional string id_card_num = 17;                // 身份证号
+  optional string real_name = 18;                  // 真实姓名
+  optional string registry_country = 19;           // 注册国家
+  optional string bbp_pid = 20;                    // BBPPID
+  optional string bbp_in = 21;                     // BBPIN
+  optional string bbm_nick_name = 22;              // BBM昵称
+  optional LinkedinContactItem linkedin_contact_item = 23; // LinkedIn联系人项
+  optional string kf_info = 24;                    // 客服信息
+  optional PatternLockInfo pattern_lock_info = 25; // 图案锁信息
+  optional string security_device_id = 26;         // 安全设备ID
+  optional uint32 pay_wallet_type = 27;            // 支付钱包类型
+  optional string micro_store_info = 28;           // 微店信息
+  optional uint32 wallet_region = 29;              // 钱包地区
+  optional uint64 extend_status = 30;              // 扩展状态
+  optional string f2f_push_sound = 31;             // 面对面推送声音
+  optional uint32 user_status = 32;                // 用户状态
+  optional uint64 pay_setting = 33;                // 支付设置
+}
+
+// SafeDevice 安全设备
+message SafeDevice {
+  optional string name = 1;        // 名称
+  optional string uuid = 2;        // UUID
+  optional string device_type = 3; // 设备类型
+  optional uint32 create_time = 4; // 创建时间
+}
+
+// SafeDeviceList 安全设备列表
+message SafeDeviceList {
+  optional int32 count = 1;    // 数量
+  repeated SafeDevice list = 2; // 列表
+}
+
+// PatternLockInfo 图案锁信息
+message PatternLockInfo {
+  optional uint32 pattern_version = 1; // 图案版本
+  optional base.Buffer sign = 2; // 签名
+  optional uint32 lock_status = 3;     // 锁定状态
+}
+
+// LinkedinContactItem LinkedIn联系人项
+message LinkedinContactItem {
+  optional string linkedin_name = 1;       // LinkedIn名称
+  optional string linkedin_member_id = 2;  // LinkedIn成员ID
+  optional string linkedin_public_url = 3; // LinkedIn公开URL
+}
+
+// 45：朋友圈对象
+// MomentsObject 朋友圈对象
+message MomentsObject {
+  optional uint64 id = 1;                                  // ID
+  optional string username = 2;                            // 用户名
+  optional string nickname = 3;                            // 昵称
+  optional uint32 create_time = 4;                         // 创建时间
+  optional google.protobuf.StringValue object_description = 5; // 对象描述
+  optional uint32 like_flag = 6;                           // 点赞标志
+  optional uint32 like_count = 7;                          // 点赞数量
+  optional uint32 like_user_count = 8;                     // 点赞用户数量
+  repeated CommentInfo like_user_list = 9;                 // 点赞用户列表
+  optional uint32 comment_count = 10;                      // 评论数量
+  optional uint32 comment_user_count = 11;                 // 评论用户数量
+  repeated CommentInfo comment_user_list = 12;             // 评论用户列表
+  optional uint32 with_count = 13;                         // 关联数量
+  optional uint32 with_user_count = 14;                    // 关联用户数量
+  repeated CommentInfo with_user_list = 15;                // 关联用户列表
+  optional uint32 extend_flag = 16;                        // 扩展标志
+  optional uint32 no_change = 17;                          // 无变化标志
+  optional uint32 chatroom_count = 18;                        // 分组数量
+  repeated google.protobuf.UInt64Value chatroom_list = 19;    // 分组ID列表
+  optional uint32 is_not_rich_text = 20;                   // 是否非富文本
+  optional string refer_username = 21;                     // 引用用户名
+  optional uint64 refer_id = 22;                           // 引用ID
+  optional uint32 black_list_count = 23;                   // 黑名单数量
+  repeated base.Buffer black_list = 24;              // 黑名单
+  optional uint32 delete_flag = 25;                        // 删除标志
+  optional uint32 chatroom_user_count = 26;                   // 分组用户数量
+  repeated base.Buffer chatroom_user = 27;              // 分组用户
+  repeated base.Buffer object_operation = 28;        // 对象操作数据
+  optional RedEnvelops red_envelops = 29;                  // 红包信息
+  optional PreDownloadInfo pre_download_info = 30;         // 预下载信息
+  optional AppInfo app_info = 31;                          // 应用信息
+
+  // CommentInfo 评论信息
+  message CommentInfo {
+    optional string username = 1;           // 用户名
+    optional string nickname = 2;           // 昵称
+    optional uint32 source = 3;             // 来源
+    optional uint32 type = 4;               // 类型
+    optional string content = 5;            // 内容
+    optional uint32 create_time = 6;        // 创建时间
+    optional int32 comment_id = 7;          // 评论ID
+    optional int32 reply_comment_id = 8;    // 回复评论ID
+    optional string reply_username = 9;     // 回复用户名
+    optional uint32 is_not_rich_text = 10;  // 是否非富文本
+    optional uint64 reply_comment_id2 = 11; // 回复评论ID2
+    optional uint64 comment_id2 = 12;       // 评论ID2
+    optional uint32 delete_flag = 13;       // 删除标志
+    optional uint32 comment_flag = 14;      // 评论标志
+  }
+
+  // RedEnvelops 红包信息
+  message RedEnvelops {
+    optional uint32 reward_count = 1;   // 打赏数量
+    optional bytes reward_user_list = 2; // 打赏用户列表
+    optional uint32 report_id = 3;      // 上报ID
+    optional uint32 report_key = 4;     // 上报密钥
+    optional uint32 resource_id = 5;    // 资源ID
+  }
+
+  // PreDownloadInfo 预下载信息
+  message PreDownloadInfo {
+    optional uint32 percent = 1;               // 百分比
+    optional uint32 net_type = 2;              // 网络类型
+    optional string no_pre_download_range = 3; // 不预下载范围
+  }
+
+  // AppInfo 应用信息
+  message AppInfo {
+    optional string map_poi_id = 1;   // 地图POI ID
+    optional uint32 app_id = 2;       // App ID
+    optional string username = 3;     // 用户名
+    optional string redirect_url = 4; // 重定向URL
+    optional uint32 show_type = 5;    // 显示类型
+    optional uint32 r_score = 6;      // R分数
+  }
+}
+
+// 46：朋友圈操作
+// MomentsOperate 朋友圈操作
+message MomentsOperate {
+  optional uint64 id = 1;               // ID
+  optional uint32 operate = 2;          // 操作类型
+  optional base.Buffer extend = 3; // 扩展数据
+
+  // OperateType 朋友圈操作类型
+  enum OperateType {
+    UNKNOWN = 0;
+    DELETE = 1;
+    SET_PRIVACY = 2;
+    SET_OPEN = 3;
+    DELETE_COMMENT = 4;
+    CANCEL_LIKE = 5;
+  }
+}
+
+// 47：品牌设置
+// BrandSetting 品牌设置
+message BrandSetting {
+  optional uint32 flag = 1;             // 标志
+  optional string username = 2; // 用户名
+}
+
+// 48：修改群成员显示名称
+// ModifyChatroomMemberDisplayName 修改群成员显示名称
+message ModifyChatroomMemberDisplayName {
+  optional string chatroom = 1;        // 群ID
+  optional string username = 2;     // 用户名
+  optional string display_name = 3; // 显示名称
+}
+
+// 49：
+
+// 50：web微信功能开关
+// WebFunctionSwitch Web微信功能开关
+message WebFunctionSwitch {
+  optional uint32 id = 1;    // 开关ID
+  optional uint32 value = 2; // 开关值
+}
+
+// 51：朋友圈用户信息
+// MomentsUserInfo 朋友圈用户信息
+message MomentsUserInfo {
+  optional uint32 flag = 1;         // 朋友圈标志
+  optional string bg_image_id = 2;  // 朋友圈背景图ID
+  optional uint64 bg_object_id = 3; // 朋友圈背景对象ID
+  optional uint32 flag_extend = 4;  // 朋友圈扩展标志
+}
+
+// 52：修改朋友圈黑名单
+// MomentsBlacklist 修改朋友圈黑名单
+message MomentsBlacklist {
+  optional string username = 1; // 用户名
+  optional uint32 operate = 2;  // 操作类型
+}
+
+// 53：删除新消息
+// DeleteMessage 删除新消息
+message DeleteMessage {
+  optional google.protobuf.StringValue username = 1; // 用户名
+  optional int32 max_id = 2;                         // 最大消息ID
+  optional int32 new_id = 3;                         // 新消息ID
+}
+
+// 54：修改描述
+// ModifyDescription 修改描述
+message ModifyDescription {
+  optional string username = 1;    // 用户名
+  optional string description = 2; // 描述
+}
+
+// 55：KV命令
+// KVCommand KV命令
+message KVCommand {
+  optional uint32 key = 1;               // 键
+  optional base.Buffer value = 2;        // 值
+}
+
+// 56：删除朋友圈旧分组
+// DeleteMomentsChatroom 删除朋友圈旧分组
+message DeleteMomentsChatroom {
+  optional uint32 count = 1;        // 数量
+  repeated uint64 ids = 2; // 分组ID列表
+}
+
+// 200：添加收藏项
+// AddFavoriteItem 添加收藏项
+message AddFavoriteItem {
+  optional int32 id = 1;              // 收藏ID
+  optional int32 type = 2;            // 收藏类型
+  optional uint32 flag = 3;           // 标志
+  optional uint32 update_time = 4;    // 更新时间
+  optional uint32 update_sequence = 5; // 更新序列
+}
+
+// 201：MAX_ID
+
+// 10002：删除消息
+// NewDeleteMessage 删除消息
+message NewDeleteMessage {
+  optional google.protobuf.StringValue sender = 1;   // 发送者用户名
+  optional google.protobuf.StringValue receiver = 2; // 接收者用户名
+  optional uint64 id = 3;                            // 消息ID
+  optional uint32 type = 4;                          // 消息类型
+  optional uint64 new_id = 5;                        // 新消息ID
+}
+
+// 10003：
+
+// 10004：游戏添加消息
+// AddGameMessage 游戏添加消息
+message AddGameMessage {
+  optional int32 id = 1;              // 消息ID
+  optional string sender = 2; // 发送者用户名
+  optional string receiver = 3; // 接收者用户名
+  optional int32 type = 4;            // 消息类型
+  optional uint32 flag = 5;           // 标志
+  optional uint32 status = 6;         // 状态
+  optional uint32 update_time = 7;    // 更新时间
+  optional uint32 update_sequence = 8; // 更新序列
+}
+
+// 10005：修改群成员flag
+// ModifyChatroomMemberFlag 修改群成员标志
+message ModifyChatroomMemberFlag {
+  optional string chatroom = 1;    // 群ID
+  optional string username = 2; // 用户名
+  optional uint32 flag_switch = 3;       // 标志开关
+  optional uint32 value = 4;             // 标志值
+}
+
+
+// ============================================================================
+// 同步命令ID枚举
+// ============================================================================
+
+// SyncCommandID 同步命令ID枚举
+enum SyncCommandID {
+  CMD_INVALID = 0;
+  CMD_ID_MOD_USER_INFO = 1;                   // 修改用户信息
+  CMD_ID_MOD_CONTACT = 2;                     // 修改联系人
+  CMD_ID_DEL_CONTACT = 4;                     // 删除联系人
+  CMD_ID_ADD_MSG = 5;                         // 新增消息
+  CMD_ID_MOD_MSG_STATUS = 6;                  // 修改消息状态
+  CMD_ID_DEL_CHAT_CONTACT = 7;                // 删除聊天联系人
+  CMD_ID_DEL_CONTACT_MSG = 8;                 // 删除联系人消息
+  CMD_ID_REPORT = 10;                         // 上报
+  CMD_ID_OPEN_QQ_MICRO_BLOG = 11;             // 打开QQ微博
+  CMD_ID_CLOSE_MICRO_BLOG = 12;               // 关闭微博
+  CMD_ID_MOD_MICRO_BLOG = 13;                 // 修改微博
+  CMD_ID_MOD_NOTIFY_STATUS = 14;              // 修改通知状态
+  CMD_ID_MOD_CHAT_ROOM_MEMBER = 15;           // 修改群成员
+  CMD_ID_QUIT_CHAT_ROOM = 16;                 // 退出群聊
+  CMD_ID_MOD_CONTACT_DOMAIN_EMAIL = 17;       // 修改联系人域邮箱
+  CMD_ID_MOD_USER_DOMAIN_EMAIL = 18;          // 修改用户域邮箱
+  CMD_ID_DEL_USER_DOMAIN_EMAIL = 19;          // 删除用户域邮箱
+  CMD_ID_MOD_CHAT_ROOM_NOTIFY = 20;           // 修改群通知
+  CMD_ID_POSSIBLE_FRIEND = 21;                // 可能认识的人
+  CMD_ID_INVITE_FRIEND_OPEN = 22;             // 邀请好友开通
+  CMD_ID_FUNCTION_SWITCH = 23;                // 功能开关
+  CMD_ID_MOD_Q_CONTACT = 24;                  // 修改Q联系人
+  CMD_ID_PSM_STAT = 26;                       // PSM统计
+  CMD_ID_MOD_CHAT_ROOM_TOPIC = 27;            // 修改群主题
+  MM_SYNCCMD_UPDATESTAT = 30;                 // 更新统计
+  MM_SYNCCMD_MODDISTURBSETTING = 31;          // 修改免打扰设置
+  MM_SYNCCMD_DELETEBOTTLE = 32;               // 删除漂流瓶
+  MM_SYNCCMD_MODBOTTLECONTACT = 33;           // 修改漂流瓶联系人
+  MM_SYNCCMD_DELBOTTLECONTACT = 34;           // 删除漂流瓶联系人
+  MM_SYNCCMD_MODUSERIMG = 35;                 // 修改用户头像
+  MM_SYNCCMD_KVSTAT = 36;                     // KV统计
+  NN_SYNCCMD_THEMESTAT = 37;                  // 主题统计
+  MM_SYNCCMD_USERINFOEXT = 44;                // 用户信息扩展
+  MM_SNS_SYNCCMD_OBJECT = 45;                 // 朋友圈对象
+  MM_SNS_SYNCCMD_ACTION = 46;                 // 朋友圈操作
+  MM_SYNCCMD_BRAND_SETTING = 47;              // 品牌设置
+  MM_SYNCCMD_MODCHATROOMMEMBERDISPLAYNAME = 48; // 修改群成员显示名
+  MM_SYNCCMD_WEBWXFUNCTIONSWITCH = 50;        // Web微信功能开关
+  MM_SYNCCMD_MODSNSUSERINFO = 51;             // 修改朋友圈用户信息
+  MM_SYNCCMD_MODSNSBLACKLIST = 52;            // 修改朋友圈黑名单
+  MM_SYNCCMD_NEWDELMSG = 53;                  // 新删除消息
+  MM_SYNCCMD_MODDESCRIPTION = 54;             // 修改描述
+  MM_SYNCCMD_KVCMD = 55;                      // KV命令
+  MM_SYNCCMD_DELETE_SNS_OLDGROUP = 56;        // 删除朋友圈旧分组
+  MM_FAV_SYNCCMD_ADDITEM = 200;               // 收藏添加项
+  CMD_ID_MAX = 201;                           // 最大值
+  CMD_ID_DEL_MSG = 10002;                     // 删除消息
+  CMD_ID_MOD_T_CONTACT = 10003;               // 修改T联系人
+  MM_GAME_SYNCCMD_ADDMSG = 10004;             // 游戏添加消息
+  MM_SYNCCMD_MODCHATROOMMEMBERFLAG = 10005;   // 修改群成员标志
+}

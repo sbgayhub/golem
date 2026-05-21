@@ -7,8 +7,6 @@
 package message
 
 import (
-	contact "github.com/sbgayhub/golem/sdk/contact"
-	group "github.com/sbgayhub/golem/sdk/group"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -23,99 +21,26 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// MessageType 消息类型枚举
-type MessageType int32
-
-const (
-	MessageType_MESSAGE_TYPE_UNKNOWN    MessageType = 0
-	MessageType_MESSAGE_TYPE_TEXT       MessageType = 1
-	MessageType_MESSAGE_TYPE_IMAGE      MessageType = 3
-	MessageType_MESSAGE_TYPE_VOICE      MessageType = 34
-	MessageType_MESSAGE_TYPE_VIDEO      MessageType = 43
-	MessageType_MESSAGE_TYPE_EMOJI      MessageType = 47
-	MessageType_MESSAGE_TYPE_LOCATION   MessageType = 48
-	MessageType_MESSAGE_TYPE_APP        MessageType = 49
-	MessageType_MESSAGE_TYPE_SYSTEM_TIP MessageType = 10000
-)
-
-// Enum value maps for MessageType.
-var (
-	MessageType_name = map[int32]string{
-		0:     "MESSAGE_TYPE_UNKNOWN",
-		1:     "MESSAGE_TYPE_TEXT",
-		3:     "MESSAGE_TYPE_IMAGE",
-		34:    "MESSAGE_TYPE_VOICE",
-		43:    "MESSAGE_TYPE_VIDEO",
-		47:    "MESSAGE_TYPE_EMOJI",
-		48:    "MESSAGE_TYPE_LOCATION",
-		49:    "MESSAGE_TYPE_APP",
-		10000: "MESSAGE_TYPE_SYSTEM_TIP",
-	}
-	MessageType_value = map[string]int32{
-		"MESSAGE_TYPE_UNKNOWN":    0,
-		"MESSAGE_TYPE_TEXT":       1,
-		"MESSAGE_TYPE_IMAGE":      3,
-		"MESSAGE_TYPE_VOICE":      34,
-		"MESSAGE_TYPE_VIDEO":      43,
-		"MESSAGE_TYPE_EMOJI":      47,
-		"MESSAGE_TYPE_LOCATION":   48,
-		"MESSAGE_TYPE_APP":        49,
-		"MESSAGE_TYPE_SYSTEM_TIP": 10000,
-	}
-)
-
-func (x MessageType) Enum() *MessageType {
-	p := new(MessageType)
-	*p = x
-	return p
-}
-
-func (x MessageType) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (MessageType) Descriptor() protoreflect.EnumDescriptor {
-	return file_message_message_proto_enumTypes[0].Descriptor()
-}
-
-func (MessageType) Type() protoreflect.EnumType {
-	return &file_message_message_proto_enumTypes[0]
-}
-
-func (x MessageType) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use MessageType.Descriptor instead.
-func (MessageType) EnumDescriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{0}
-}
-
-// Media 媒体资源描述
-type Media struct {
+type Send struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Md5           string                 `protobuf:"bytes,1,opt,name=md5,proto3" json:"md5,omitempty"`    // 文件 MD5
-	Key           string                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`    // AES 解密密钥
-	Url           string                 `protobuf:"bytes,3,opt,name=url,proto3" json:"url,omitempty"`    // CDN URL
-	Size          uint32                 `protobuf:"varint,4,opt,name=size,proto3" json:"size,omitempty"` // 文件大小（字节）
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Media) Reset() {
-	*x = Media{}
+func (x *Send) Reset() {
+	*x = Send{}
 	mi := &file_message_message_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Media) String() string {
+func (x *Send) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Media) ProtoMessage() {}
+func (*Send) ProtoMessage() {}
 
-func (x *Media) ProtoReflect() protoreflect.Message {
+func (x *Send) ProtoReflect() protoreflect.Message {
 	mi := &file_message_message_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -127,78 +52,31 @@ func (x *Media) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Media.ProtoReflect.Descriptor instead.
-func (*Media) Descriptor() ([]byte, []int) {
+// Deprecated: Use Send.ProtoReflect.Descriptor instead.
+func (*Send) Descriptor() ([]byte, []int) {
 	return file_message_message_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *Media) GetMd5() string {
-	if x != nil {
-		return x.Md5
-	}
-	return ""
-}
-
-func (x *Media) GetKey() string {
-	if x != nil {
-		return x.Key
-	}
-	return ""
-}
-
-func (x *Media) GetUrl() string {
-	if x != nil {
-		return x.Url
-	}
-	return ""
-}
-
-func (x *Media) GetSize() uint32 {
-	if x != nil {
-		return x.Size
-	}
-	return 0
-}
-
-// Message 统一消息结构（跨 host↔plugin 边界）
-type Message struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Id        int64                  `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`                              // 消息 ID（new_id）
-	Type      MessageType            `protobuf:"varint,2,opt,name=type,proto3,enum=message.MessageType" json:"type,omitempty"` // 消息类型
-	Sender    *contact.Contact       `protobuf:"bytes,3,opt,name=sender,proto3" json:"sender,omitempty"`                       // 发送者
-	Receiver  *contact.Contact       `protobuf:"bytes,4,opt,name=receiver,proto3" json:"receiver,omitempty"`                   // 接收者（群消息为群 Contact）
-	Member    *group.GroupMember     `protobuf:"bytes,5,opt,name=member,proto3" json:"member,omitempty"`                       // 群内发言成员（仅群消息有效）
-	Content   string                 `protobuf:"bytes,6,opt,name=content,proto3" json:"content,omitempty"`                     // 可读文本摘要
-	Raw       string                 `protobuf:"bytes,7,opt,name=raw,proto3" json:"raw,omitempty"`                             // 原始协议数据（JSON）
-	Timestamp uint32                 `protobuf:"varint,8,opt,name=timestamp,proto3" json:"timestamp,omitempty"`                // 消息时间戳
-	// Types that are valid to be assigned to Data:
-	//
-	//	*Message_Text
-	//	*Message_Image
-	//	*Message_Voice
-	//	*Message_Video
-	//	*Message_Emoji
-	//	*Message_Location
-	//	*Message_App
-	Data          isMessage_Data `protobuf_oneof:"data"`
+type Forward struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Message) Reset() {
-	*x = Message{}
+func (x *Forward) Reset() {
+	*x = Forward{}
 	mi := &file_message_message_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Message) String() string {
+func (x *Forward) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Message) ProtoMessage() {}
+func (*Forward) ProtoMessage() {}
 
-func (x *Message) ProtoReflect() protoreflect.Message {
+func (x *Forward) ProtoReflect() protoreflect.Message {
 	mi := &file_message_message_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -210,206 +88,31 @@ func (x *Message) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Message.ProtoReflect.Descriptor instead.
-func (*Message) Descriptor() ([]byte, []int) {
+// Deprecated: Use Forward.ProtoReflect.Descriptor instead.
+func (*Forward) Descriptor() ([]byte, []int) {
 	return file_message_message_proto_rawDescGZIP(), []int{1}
 }
 
-func (x *Message) GetId() int64 {
-	if x != nil {
-		return x.Id
-	}
-	return 0
-}
-
-func (x *Message) GetType() MessageType {
-	if x != nil {
-		return x.Type
-	}
-	return MessageType_MESSAGE_TYPE_UNKNOWN
-}
-
-func (x *Message) GetSender() *contact.Contact {
-	if x != nil {
-		return x.Sender
-	}
-	return nil
-}
-
-func (x *Message) GetReceiver() *contact.Contact {
-	if x != nil {
-		return x.Receiver
-	}
-	return nil
-}
-
-func (x *Message) GetMember() *group.GroupMember {
-	if x != nil {
-		return x.Member
-	}
-	return nil
-}
-
-func (x *Message) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
-func (x *Message) GetRaw() string {
-	if x != nil {
-		return x.Raw
-	}
-	return ""
-}
-
-func (x *Message) GetTimestamp() uint32 {
-	if x != nil {
-		return x.Timestamp
-	}
-	return 0
-}
-
-func (x *Message) GetData() isMessage_Data {
-	if x != nil {
-		return x.Data
-	}
-	return nil
-}
-
-func (x *Message) GetText() *TextData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Text); ok {
-			return x.Text
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetImage() *ImageData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Image); ok {
-			return x.Image
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetVoice() *VoiceData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Voice); ok {
-			return x.Voice
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetVideo() *VideoData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Video); ok {
-			return x.Video
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetEmoji() *EmojiData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Emoji); ok {
-			return x.Emoji
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetLocation() *LocationData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_Location); ok {
-			return x.Location
-		}
-	}
-	return nil
-}
-
-func (x *Message) GetApp() *AppData {
-	if x != nil {
-		if x, ok := x.Data.(*Message_App); ok {
-			return x.App
-		}
-	}
-	return nil
-}
-
-type isMessage_Data interface {
-	isMessage_Data()
-}
-
-type Message_Text struct {
-	Text *TextData `protobuf:"bytes,20,opt,name=text,proto3,oneof"` // 文本消息
-}
-
-type Message_Image struct {
-	Image *ImageData `protobuf:"bytes,21,opt,name=image,proto3,oneof"` // 图片消息
-}
-
-type Message_Voice struct {
-	Voice *VoiceData `protobuf:"bytes,22,opt,name=voice,proto3,oneof"` // 语音消息
-}
-
-type Message_Video struct {
-	Video *VideoData `protobuf:"bytes,23,opt,name=video,proto3,oneof"` // 视频消息
-}
-
-type Message_Emoji struct {
-	Emoji *EmojiData `protobuf:"bytes,24,opt,name=emoji,proto3,oneof"` // 表情消息
-}
-
-type Message_Location struct {
-	Location *LocationData `protobuf:"bytes,25,opt,name=location,proto3,oneof"` // 位置消息
-}
-
-type Message_App struct {
-	App *AppData `protobuf:"bytes,26,opt,name=app,proto3,oneof"` // 应用消息
-}
-
-func (*Message_Text) isMessage_Data() {}
-
-func (*Message_Image) isMessage_Data() {}
-
-func (*Message_Voice) isMessage_Data() {}
-
-func (*Message_Video) isMessage_Data() {}
-
-func (*Message_Emoji) isMessage_Data() {}
-
-func (*Message_Location) isMessage_Data() {}
-
-func (*Message_App) isMessage_Data() {}
-
-// TextData 文本消息数据
-type TextData struct {
+type Revoke struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"` // 文本内容
-	Reminds       []string               `protobuf:"bytes,2,rep,name=reminds,proto3" json:"reminds,omitempty"` // 被 @ 的用户列表
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *TextData) Reset() {
-	*x = TextData{}
+func (x *Revoke) Reset() {
+	*x = Revoke{}
 	mi := &file_message_message_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *TextData) String() string {
+func (x *Revoke) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*TextData) ProtoMessage() {}
+func (*Revoke) ProtoMessage() {}
 
-func (x *TextData) ProtoReflect() protoreflect.Message {
+func (x *Revoke) ProtoReflect() protoreflect.Message {
 	mi := &file_message_message_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -421,49 +124,31 @@ func (x *TextData) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use TextData.ProtoReflect.Descriptor instead.
-func (*TextData) Descriptor() ([]byte, []int) {
+// Deprecated: Use Revoke.ProtoReflect.Descriptor instead.
+func (*Revoke) Descriptor() ([]byte, []int) {
 	return file_message_message_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *TextData) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
-func (x *TextData) GetReminds() []string {
-	if x != nil {
-		return x.Reminds
-	}
-	return nil
-}
-
-// ImageData 图片消息数据
-type ImageData struct {
+type Download struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Media         *Media                 `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"`    // 媒体信息
-	Width         uint32                 `protobuf:"varint,2,opt,name=width,proto3" json:"width,omitempty"`   // 图片宽度
-	Height        uint32                 `protobuf:"varint,3,opt,name=height,proto3" json:"height,omitempty"` // 图片高度
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ImageData) Reset() {
-	*x = ImageData{}
+func (x *Download) Reset() {
+	*x = Download{}
 	mi := &file_message_message_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ImageData) String() string {
+func (x *Download) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ImageData) ProtoMessage() {}
+func (*Download) ProtoMessage() {}
 
-func (x *ImageData) ProtoReflect() protoreflect.Message {
+func (x *Download) ProtoReflect() protoreflect.Message {
 	mi := &file_message_message_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -475,384 +160,34 @@ func (x *ImageData) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ImageData.ProtoReflect.Descriptor instead.
-func (*ImageData) Descriptor() ([]byte, []int) {
+// Deprecated: Use Download.ProtoReflect.Descriptor instead.
+func (*Download) Descriptor() ([]byte, []int) {
 	return file_message_message_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *ImageData) GetMedia() *Media {
-	if x != nil {
-		return x.Media
-	}
-	return nil
-}
-
-func (x *ImageData) GetWidth() uint32 {
-	if x != nil {
-		return x.Width
-	}
-	return 0
-}
-
-func (x *ImageData) GetHeight() uint32 {
-	if x != nil {
-		return x.Height
-	}
-	return 0
-}
-
-// VoiceData 语音消息数据
-type VoiceData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Media         *Media                 `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"`        // 媒体信息
-	Duration      uint32                 `protobuf:"varint,2,opt,name=duration,proto3" json:"duration,omitempty"` // 语音时长（毫秒）
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *VoiceData) Reset() {
-	*x = VoiceData{}
-	mi := &file_message_message_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *VoiceData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*VoiceData) ProtoMessage() {}
-
-func (x *VoiceData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use VoiceData.ProtoReflect.Descriptor instead.
-func (*VoiceData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *VoiceData) GetMedia() *Media {
-	if x != nil {
-		return x.Media
-	}
-	return nil
-}
-
-func (x *VoiceData) GetDuration() uint32 {
-	if x != nil {
-		return x.Duration
-	}
-	return 0
-}
-
-// VideoData 视频消息数据
-type VideoData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Media         *Media                 `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"`                       // 媒体信息
-	Duration      uint32                 `protobuf:"varint,2,opt,name=duration,proto3" json:"duration,omitempty"`                // 视频时长（秒）
-	ThumbUrl      string                 `protobuf:"bytes,3,opt,name=thumb_url,json=thumbUrl,proto3" json:"thumb_url,omitempty"` // 缩略图 URL
-	NewMd5        string                 `protobuf:"bytes,4,opt,name=new_md5,json=newMd5,proto3" json:"new_md5,omitempty"`       // 新视频 MD5
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *VideoData) Reset() {
-	*x = VideoData{}
-	mi := &file_message_message_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *VideoData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*VideoData) ProtoMessage() {}
-
-func (x *VideoData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use VideoData.ProtoReflect.Descriptor instead.
-func (*VideoData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *VideoData) GetMedia() *Media {
-	if x != nil {
-		return x.Media
-	}
-	return nil
-}
-
-func (x *VideoData) GetDuration() uint32 {
-	if x != nil {
-		return x.Duration
-	}
-	return 0
-}
-
-func (x *VideoData) GetThumbUrl() string {
-	if x != nil {
-		return x.ThumbUrl
-	}
-	return ""
-}
-
-func (x *VideoData) GetNewMd5() string {
-	if x != nil {
-		return x.NewMd5
-	}
-	return ""
-}
-
-// EmojiData 表情消息数据
-type EmojiData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Media         *Media                 `protobuf:"bytes,1,opt,name=media,proto3" json:"media,omitempty"` // 媒体信息
-	Desc          string                 `protobuf:"bytes,2,opt,name=desc,proto3" json:"desc,omitempty"`   // 表情描述
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EmojiData) Reset() {
-	*x = EmojiData{}
-	mi := &file_message_message_proto_msgTypes[6]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EmojiData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EmojiData) ProtoMessage() {}
-
-func (x *EmojiData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[6]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EmojiData.ProtoReflect.Descriptor instead.
-func (*EmojiData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{6}
-}
-
-func (x *EmojiData) GetMedia() *Media {
-	if x != nil {
-		return x.Media
-	}
-	return nil
-}
-
-func (x *EmojiData) GetDesc() string {
-	if x != nil {
-		return x.Desc
-	}
-	return ""
-}
-
-// LocationData 位置消息数据
-type LocationData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Latitude      string                 `protobuf:"bytes,1,opt,name=latitude,proto3" json:"latitude,omitempty"`              // 纬度
-	Longitude     string                 `protobuf:"bytes,2,opt,name=longitude,proto3" json:"longitude,omitempty"`            // 经度
-	Scale         string                 `protobuf:"bytes,3,opt,name=scale,proto3" json:"scale,omitempty"`                    // 缩放比例
-	PoiName       string                 `protobuf:"bytes,4,opt,name=poi_name,json=poiName,proto3" json:"poi_name,omitempty"` // POI 名称
-	Label         string                 `protobuf:"bytes,5,opt,name=label,proto3" json:"label,omitempty"`                    // 位置标签
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *LocationData) Reset() {
-	*x = LocationData{}
-	mi := &file_message_message_proto_msgTypes[7]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *LocationData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*LocationData) ProtoMessage() {}
-
-func (x *LocationData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[7]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use LocationData.ProtoReflect.Descriptor instead.
-func (*LocationData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{7}
-}
-
-func (x *LocationData) GetLatitude() string {
-	if x != nil {
-		return x.Latitude
-	}
-	return ""
-}
-
-func (x *LocationData) GetLongitude() string {
-	if x != nil {
-		return x.Longitude
-	}
-	return ""
-}
-
-func (x *LocationData) GetScale() string {
-	if x != nil {
-		return x.Scale
-	}
-	return ""
-}
-
-func (x *LocationData) GetPoiName() string {
-	if x != nil {
-		return x.PoiName
-	}
-	return ""
-}
-
-func (x *LocationData) GetLabel() string {
-	if x != nil {
-		return x.Label
-	}
-	return ""
-}
-
-// AppData 应用消息数据（链接、文件、小程序等）
-type AppData struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SubType       uint32                 `protobuf:"varint,1,opt,name=sub_type,json=subType,proto3" json:"sub_type,omitempty"` // 子类型（5=链接, 6=文件, 33=小程序, 51=视频号, 57=引用...）
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`                     // 标题
-	Desc          string                 `protobuf:"bytes,3,opt,name=desc,proto3" json:"desc,omitempty"`                       // 描述
-	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`                         // 链接 URL
-	Xml           string                 `protobuf:"bytes,5,opt,name=xml,proto3" json:"xml,omitempty"`                         // 原始 XML
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *AppData) Reset() {
-	*x = AppData{}
-	mi := &file_message_message_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *AppData) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*AppData) ProtoMessage() {}
-
-func (x *AppData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use AppData.ProtoReflect.Descriptor instead.
-func (*AppData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *AppData) GetSubType() uint32 {
-	if x != nil {
-		return x.SubType
-	}
-	return 0
-}
-
-func (x *AppData) GetTitle() string {
-	if x != nil {
-		return x.Title
-	}
-	return ""
-}
-
-func (x *AppData) GetDesc() string {
-	if x != nil {
-		return x.Desc
-	}
-	return ""
-}
-
-func (x *AppData) GetUrl() string {
-	if x != nil {
-		return x.Url
-	}
-	return ""
-}
-
-func (x *AppData) GetXml() string {
-	if x != nil {
-		return x.Xml
-	}
-	return ""
-}
-
-// SendMessageRequest 发送消息请求（client-stream 首包）
-type SendMessageRequest struct {
+// Request 发送消息请求（client-stream 首包）
+type Send_Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Message       *Message               `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"` // 消息元数据
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SendMessageRequest) Reset() {
-	*x = SendMessageRequest{}
-	mi := &file_message_message_proto_msgTypes[9]
+func (x *Send_Request) Reset() {
+	*x = Send_Request{}
+	mi := &file_message_message_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SendMessageRequest) String() string {
+func (x *Send_Request) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SendMessageRequest) ProtoMessage() {}
+func (*Send_Request) ProtoMessage() {}
 
-func (x *SendMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[9]
+func (x *Send_Request) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,41 +198,41 @@ func (x *SendMessageRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SendMessageRequest.ProtoReflect.Descriptor instead.
-func (*SendMessageRequest) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{9}
+// Deprecated: Use Send_Request.ProtoReflect.Descriptor instead.
+func (*Send_Request) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{0, 0}
 }
 
-func (x *SendMessageRequest) GetMessage() *Message {
+func (x *Send_Request) GetMessage() *Message {
 	if x != nil {
 		return x.Message
 	}
 	return nil
 }
 
-// SendMessageData 发送媒体数据（client-stream 后续包）
-type SendMessageData struct {
+// Data 发送媒体数据（client-stream 后续包）
+type Send_Data struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"` // 二进制数据块
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SendMessageData) Reset() {
-	*x = SendMessageData{}
-	mi := &file_message_message_proto_msgTypes[10]
+func (x *Send_Data) Reset() {
+	*x = Send_Data{}
+	mi := &file_message_message_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SendMessageData) String() string {
+func (x *Send_Data) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SendMessageData) ProtoMessage() {}
+func (*Send_Data) ProtoMessage() {}
 
-func (x *SendMessageData) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[10]
+func (x *Send_Data) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -908,20 +243,20 @@ func (x *SendMessageData) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SendMessageData.ProtoReflect.Descriptor instead.
-func (*SendMessageData) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{10}
+// Deprecated: Use Send_Data.ProtoReflect.Descriptor instead.
+func (*Send_Data) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{0, 1}
 }
 
-func (x *SendMessageData) GetData() []byte {
+func (x *Send_Data) GetData() []byte {
 	if x != nil {
 		return x.Data
 	}
 	return nil
 }
 
-// SendMessageResponse 发送消息响应
-type SendMessageResponse struct {
+// Response 发送消息响应
+type Send_Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NewMsgId      uint64                 `protobuf:"varint,1,opt,name=new_msg_id,json=newMsgId,proto3" json:"new_msg_id,omitempty"`     // 新消息 ID
 	CreateTime    uint32                 `protobuf:"varint,2,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"` // 创建时间
@@ -929,21 +264,21 @@ type SendMessageResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *SendMessageResponse) Reset() {
-	*x = SendMessageResponse{}
-	mi := &file_message_message_proto_msgTypes[11]
+func (x *Send_Response) Reset() {
+	*x = Send_Response{}
+	mi := &file_message_message_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *SendMessageResponse) String() string {
+func (x *Send_Response) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*SendMessageResponse) ProtoMessage() {}
+func (*Send_Response) ProtoMessage() {}
 
-func (x *SendMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[11]
+func (x *Send_Response) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -954,27 +289,26 @@ func (x *SendMessageResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use SendMessageResponse.ProtoReflect.Descriptor instead.
-func (*SendMessageResponse) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{11}
+// Deprecated: Use Send_Response.ProtoReflect.Descriptor instead.
+func (*Send_Response) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{0, 2}
 }
 
-func (x *SendMessageResponse) GetNewMsgId() uint64 {
+func (x *Send_Response) GetNewMsgId() uint64 {
 	if x != nil {
 		return x.NewMsgId
 	}
 	return 0
 }
 
-func (x *SendMessageResponse) GetCreateTime() uint32 {
+func (x *Send_Response) GetCreateTime() uint32 {
 	if x != nil {
 		return x.CreateTime
 	}
 	return 0
 }
 
-// ForwardMessageRequest 转发消息请求
-type ForwardMessageRequest struct {
+type Forward_Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Receiver      string                 `protobuf:"bytes,1,opt,name=receiver,proto3" json:"receiver,omitempty"` // 新接收者 wxid
 	Message       *Message               `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`   // 要转发的消息
@@ -982,21 +316,21 @@ type ForwardMessageRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *ForwardMessageRequest) Reset() {
-	*x = ForwardMessageRequest{}
-	mi := &file_message_message_proto_msgTypes[12]
+func (x *Forward_Request) Reset() {
+	*x = Forward_Request{}
+	mi := &file_message_message_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *ForwardMessageRequest) String() string {
+func (x *Forward_Request) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*ForwardMessageRequest) ProtoMessage() {}
+func (*Forward_Request) ProtoMessage() {}
 
-func (x *ForwardMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[12]
+func (x *Forward_Request) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1007,27 +341,78 @@ func (x *ForwardMessageRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use ForwardMessageRequest.ProtoReflect.Descriptor instead.
-func (*ForwardMessageRequest) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{12}
+// Deprecated: Use Forward_Request.ProtoReflect.Descriptor instead.
+func (*Forward_Request) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{1, 0}
 }
 
-func (x *ForwardMessageRequest) GetReceiver() string {
+func (x *Forward_Request) GetReceiver() string {
 	if x != nil {
 		return x.Receiver
 	}
 	return ""
 }
 
-func (x *ForwardMessageRequest) GetMessage() *Message {
+func (x *Forward_Request) GetMessage() *Message {
 	if x != nil {
 		return x.Message
 	}
 	return nil
 }
 
-// RevokeMessageRequest 撤回消息请求
-type RevokeMessageRequest struct {
+type Forward_Response struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NewMsgId      uint64                 `protobuf:"varint,1,opt,name=new_msg_id,json=newMsgId,proto3" json:"new_msg_id,omitempty"`     // 新消息 ID
+	CreateTime    uint32                 `protobuf:"varint,2,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"` // 创建时间
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Forward_Response) Reset() {
+	*x = Forward_Response{}
+	mi := &file_message_message_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Forward_Response) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Forward_Response) ProtoMessage() {}
+
+func (x *Forward_Response) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Forward_Response.ProtoReflect.Descriptor instead.
+func (*Forward_Response) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{1, 1}
+}
+
+func (x *Forward_Response) GetNewMsgId() uint64 {
+	if x != nil {
+		return x.NewMsgId
+	}
+	return 0
+}
+
+func (x *Forward_Response) GetCreateTime() uint32 {
+	if x != nil {
+		return x.CreateTime
+	}
+	return 0
+}
+
+type Revoke_Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Receiver      string                 `protobuf:"bytes,1,opt,name=receiver,proto3" json:"receiver,omitempty"`                    // 会话 wxid
 	NewMsgId      uint64                 `protobuf:"varint,2,opt,name=new_msg_id,json=newMsgId,proto3" json:"new_msg_id,omitempty"` // 消息 ID
@@ -1035,21 +420,21 @@ type RevokeMessageRequest struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RevokeMessageRequest) Reset() {
-	*x = RevokeMessageRequest{}
-	mi := &file_message_message_proto_msgTypes[13]
+func (x *Revoke_Request) Reset() {
+	*x = Revoke_Request{}
+	mi := &file_message_message_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RevokeMessageRequest) String() string {
+func (x *Revoke_Request) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RevokeMessageRequest) ProtoMessage() {}
+func (*Revoke_Request) ProtoMessage() {}
 
-func (x *RevokeMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[13]
+func (x *Revoke_Request) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1060,27 +445,26 @@ func (x *RevokeMessageRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RevokeMessageRequest.ProtoReflect.Descriptor instead.
-func (*RevokeMessageRequest) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{13}
+// Deprecated: Use Revoke_Request.ProtoReflect.Descriptor instead.
+func (*Revoke_Request) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{2, 0}
 }
 
-func (x *RevokeMessageRequest) GetReceiver() string {
+func (x *Revoke_Request) GetReceiver() string {
 	if x != nil {
 		return x.Receiver
 	}
 	return ""
 }
 
-func (x *RevokeMessageRequest) GetNewMsgId() uint64 {
+func (x *Revoke_Request) GetNewMsgId() uint64 {
 	if x != nil {
 		return x.NewMsgId
 	}
 	return 0
 }
 
-// RevokeMessageResponse 撤回消息响应
-type RevokeMessageResponse struct {
+type Revoke_Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Code          int32                  `protobuf:"varint,1,opt,name=code,proto3" json:"code,omitempty"`      // 状态码
 	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"` // 提示信息
@@ -1088,21 +472,21 @@ type RevokeMessageResponse struct {
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RevokeMessageResponse) Reset() {
-	*x = RevokeMessageResponse{}
-	mi := &file_message_message_proto_msgTypes[14]
+func (x *Revoke_Response) Reset() {
+	*x = Revoke_Response{}
+	mi := &file_message_message_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RevokeMessageResponse) String() string {
+func (x *Revoke_Response) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RevokeMessageResponse) ProtoMessage() {}
+func (*Revoke_Response) ProtoMessage() {}
 
-func (x *RevokeMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[14]
+func (x *Revoke_Response) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1113,48 +497,47 @@ func (x *RevokeMessageResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RevokeMessageResponse.ProtoReflect.Descriptor instead.
-func (*RevokeMessageResponse) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{14}
+// Deprecated: Use Revoke_Response.ProtoReflect.Descriptor instead.
+func (*Revoke_Response) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{2, 1}
 }
 
-func (x *RevokeMessageResponse) GetCode() int32 {
+func (x *Revoke_Response) GetCode() int32 {
 	if x != nil {
 		return x.Code
 	}
 	return 0
 }
 
-func (x *RevokeMessageResponse) GetMessage() string {
+func (x *Revoke_Response) GetMessage() string {
 	if x != nil {
 		return x.Message
 	}
 	return ""
 }
 
-// DownloadMediaRequest 下载媒体资源请求
-type DownloadMediaRequest struct {
+type Download_Request struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Message       *Message               `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"` // 包含媒体信息的消息
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DownloadMediaRequest) Reset() {
-	*x = DownloadMediaRequest{}
-	mi := &file_message_message_proto_msgTypes[15]
+func (x *Download_Request) Reset() {
+	*x = Download_Request{}
+	mi := &file_message_message_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DownloadMediaRequest) String() string {
+func (x *Download_Request) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DownloadMediaRequest) ProtoMessage() {}
+func (*Download_Request) ProtoMessage() {}
 
-func (x *DownloadMediaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[15]
+func (x *Download_Request) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,41 +548,40 @@ func (x *DownloadMediaRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DownloadMediaRequest.ProtoReflect.Descriptor instead.
-func (*DownloadMediaRequest) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{15}
+// Deprecated: Use Download_Request.ProtoReflect.Descriptor instead.
+func (*Download_Request) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{3, 0}
 }
 
-func (x *DownloadMediaRequest) GetMessage() *Message {
+func (x *Download_Request) GetMessage() *Message {
 	if x != nil {
 		return x.Message
 	}
 	return nil
 }
 
-// DownloadMediaResponse 下载媒体资源响应（server-stream）
-type DownloadMediaResponse struct {
+type Download_Response struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"` // 二进制数据块
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *DownloadMediaResponse) Reset() {
-	*x = DownloadMediaResponse{}
-	mi := &file_message_message_proto_msgTypes[16]
+func (x *Download_Response) Reset() {
+	*x = Download_Response{}
+	mi := &file_message_message_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *DownloadMediaResponse) String() string {
+func (x *Download_Response) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*DownloadMediaResponse) ProtoMessage() {}
+func (*Download_Response) ProtoMessage() {}
 
-func (x *DownloadMediaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_message_message_proto_msgTypes[16]
+func (x *Download_Response) ProtoReflect() protoreflect.Message {
+	mi := &file_message_message_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1210,12 +592,12 @@ func (x *DownloadMediaResponse) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use DownloadMediaResponse.ProtoReflect.Descriptor instead.
-func (*DownloadMediaResponse) Descriptor() ([]byte, []int) {
-	return file_message_message_proto_rawDescGZIP(), []int{16}
+// Deprecated: Use Download_Response.ProtoReflect.Descriptor instead.
+func (*Download_Response) Descriptor() ([]byte, []int) {
+	return file_message_message_proto_rawDescGZIP(), []int{3, 1}
 }
 
-func (x *DownloadMediaResponse) GetData() []byte {
+func (x *Download_Response) GetData() []byte {
 	if x != nil {
 		return x.Data
 	}
@@ -1226,97 +608,44 @@ var File_message_message_proto protoreflect.FileDescriptor
 
 const file_message_message_proto_rawDesc = "" +
 	"\n" +
-	"\x15message/message.proto\x12\amessage\x1a\x15contact/contact.proto\x1a\x11group/group.proto\"Q\n" +
-	"\x05Media\x12\x10\n" +
-	"\x03md5\x18\x01 \x01(\tR\x03md5\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\tR\x03key\x12\x10\n" +
-	"\x03url\x18\x03 \x01(\tR\x03url\x12\x12\n" +
-	"\x04size\x18\x04 \x01(\rR\x04size\"\xcd\x04\n" +
-	"\aMessage\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\x03R\x02id\x12(\n" +
-	"\x04type\x18\x02 \x01(\x0e2\x14.message.MessageTypeR\x04type\x12(\n" +
-	"\x06sender\x18\x03 \x01(\v2\x10.contact.ContactR\x06sender\x12,\n" +
-	"\breceiver\x18\x04 \x01(\v2\x10.contact.ContactR\breceiver\x12*\n" +
-	"\x06member\x18\x05 \x01(\v2\x12.group.GroupMemberR\x06member\x12\x18\n" +
-	"\acontent\x18\x06 \x01(\tR\acontent\x12\x10\n" +
-	"\x03raw\x18\a \x01(\tR\x03raw\x12\x1c\n" +
-	"\ttimestamp\x18\b \x01(\rR\ttimestamp\x12'\n" +
-	"\x04text\x18\x14 \x01(\v2\x11.message.TextDataH\x00R\x04text\x12*\n" +
-	"\x05image\x18\x15 \x01(\v2\x12.message.ImageDataH\x00R\x05image\x12*\n" +
-	"\x05voice\x18\x16 \x01(\v2\x12.message.VoiceDataH\x00R\x05voice\x12*\n" +
-	"\x05video\x18\x17 \x01(\v2\x12.message.VideoDataH\x00R\x05video\x12*\n" +
-	"\x05emoji\x18\x18 \x01(\v2\x12.message.EmojiDataH\x00R\x05emoji\x123\n" +
-	"\blocation\x18\x19 \x01(\v2\x15.message.LocationDataH\x00R\blocation\x12$\n" +
-	"\x03app\x18\x1a \x01(\v2\x10.message.AppDataH\x00R\x03appB\x06\n" +
-	"\x04data\">\n" +
-	"\bTextData\x12\x18\n" +
-	"\acontent\x18\x01 \x01(\tR\acontent\x12\x18\n" +
-	"\areminds\x18\x02 \x03(\tR\areminds\"_\n" +
-	"\tImageData\x12$\n" +
-	"\x05media\x18\x01 \x01(\v2\x0e.message.MediaR\x05media\x12\x14\n" +
-	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
-	"\x06height\x18\x03 \x01(\rR\x06height\"M\n" +
-	"\tVoiceData\x12$\n" +
-	"\x05media\x18\x01 \x01(\v2\x0e.message.MediaR\x05media\x12\x1a\n" +
-	"\bduration\x18\x02 \x01(\rR\bduration\"\x83\x01\n" +
-	"\tVideoData\x12$\n" +
-	"\x05media\x18\x01 \x01(\v2\x0e.message.MediaR\x05media\x12\x1a\n" +
-	"\bduration\x18\x02 \x01(\rR\bduration\x12\x1b\n" +
-	"\tthumb_url\x18\x03 \x01(\tR\bthumbUrl\x12\x17\n" +
-	"\anew_md5\x18\x04 \x01(\tR\x06newMd5\"E\n" +
-	"\tEmojiData\x12$\n" +
-	"\x05media\x18\x01 \x01(\v2\x0e.message.MediaR\x05media\x12\x12\n" +
-	"\x04desc\x18\x02 \x01(\tR\x04desc\"\x8f\x01\n" +
-	"\fLocationData\x12\x1a\n" +
-	"\blatitude\x18\x01 \x01(\tR\blatitude\x12\x1c\n" +
-	"\tlongitude\x18\x02 \x01(\tR\tlongitude\x12\x14\n" +
-	"\x05scale\x18\x03 \x01(\tR\x05scale\x12\x19\n" +
-	"\bpoi_name\x18\x04 \x01(\tR\apoiName\x12\x14\n" +
-	"\x05label\x18\x05 \x01(\tR\x05label\"r\n" +
-	"\aAppData\x12\x19\n" +
-	"\bsub_type\x18\x01 \x01(\rR\asubType\x12\x14\n" +
-	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
-	"\x04desc\x18\x03 \x01(\tR\x04desc\x12\x10\n" +
-	"\x03url\x18\x04 \x01(\tR\x03url\x12\x10\n" +
-	"\x03xml\x18\x05 \x01(\tR\x03xml\"@\n" +
-	"\x12SendMessageRequest\x12*\n" +
-	"\amessage\x18\x01 \x01(\v2\x10.message.MessageR\amessage\"%\n" +
-	"\x0fSendMessageData\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data\"T\n" +
-	"\x13SendMessageResponse\x12\x1c\n" +
+	"\x15message/message.proto\x12\amessage\x1a\x13message/types.proto\"\xa4\x01\n" +
+	"\x04Send\x1a5\n" +
+	"\aRequest\x12*\n" +
+	"\amessage\x18\x01 \x01(\v2\x10.message.MessageR\amessage\x1a\x1a\n" +
+	"\x04Data\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x1aI\n" +
+	"\bResponse\x12\x1c\n" +
 	"\n" +
 	"new_msg_id\x18\x01 \x01(\x04R\bnewMsgId\x12\x1f\n" +
 	"\vcreate_time\x18\x02 \x01(\rR\n" +
-	"createTime\"_\n" +
-	"\x15ForwardMessageRequest\x12\x1a\n" +
+	"createTime\"\xa7\x01\n" +
+	"\aForward\x1aQ\n" +
+	"\aRequest\x12\x1a\n" +
 	"\breceiver\x18\x01 \x01(\tR\breceiver\x12*\n" +
-	"\amessage\x18\x02 \x01(\v2\x10.message.MessageR\amessage\"P\n" +
-	"\x14RevokeMessageRequest\x12\x1a\n" +
+	"\amessage\x18\x02 \x01(\v2\x10.message.MessageR\amessage\x1aI\n" +
+	"\bResponse\x12\x1c\n" +
+	"\n" +
+	"new_msg_id\x18\x01 \x01(\x04R\bnewMsgId\x12\x1f\n" +
+	"\vcreate_time\x18\x02 \x01(\rR\n" +
+	"createTime\"\x87\x01\n" +
+	"\x06Revoke\x1aC\n" +
+	"\aRequest\x12\x1a\n" +
 	"\breceiver\x18\x01 \x01(\tR\breceiver\x12\x1c\n" +
 	"\n" +
-	"new_msg_id\x18\x02 \x01(\x04R\bnewMsgId\"E\n" +
-	"\x15RevokeMessageResponse\x12\x12\n" +
+	"new_msg_id\x18\x02 \x01(\x04R\bnewMsgId\x1a8\n" +
+	"\bResponse\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"B\n" +
-	"\x14DownloadMediaRequest\x12*\n" +
-	"\amessage\x18\x01 \x01(\v2\x10.message.MessageR\amessage\"+\n" +
-	"\x15DownloadMediaResponse\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data*\xed\x01\n" +
-	"\vMessageType\x12\x18\n" +
-	"\x14MESSAGE_TYPE_UNKNOWN\x10\x00\x12\x15\n" +
-	"\x11MESSAGE_TYPE_TEXT\x10\x01\x12\x16\n" +
-	"\x12MESSAGE_TYPE_IMAGE\x10\x03\x12\x16\n" +
-	"\x12MESSAGE_TYPE_VOICE\x10\"\x12\x16\n" +
-	"\x12MESSAGE_TYPE_VIDEO\x10+\x12\x16\n" +
-	"\x12MESSAGE_TYPE_EMOJI\x10/\x12\x19\n" +
-	"\x15MESSAGE_TYPE_LOCATION\x100\x12\x14\n" +
-	"\x10MESSAGE_TYPE_APP\x101\x12\x1c\n" +
-	"\x17MESSAGE_TYPE_SYSTEM_TIP\x10\x90N2\xb4\x02\n" +
-	"\x0eMessageService\x12C\n" +
-	"\x04Send\x12\x1b.message.SendMessageRequest\x1a\x1c.message.SendMessageResponse(\x01\x12G\n" +
-	"\aForward\x12\x1e.message.ForwardMessageRequest\x1a\x1c.message.SendMessageResponse\x12G\n" +
-	"\x06Revoke\x12\x1d.message.RevokeMessageRequest\x1a\x1e.message.RevokeMessageResponse\x12K\n" +
-	"\bDownload\x12\x1d.message.DownloadMediaRequest\x1a\x1e.message.DownloadMediaResponse0\x01B~\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"a\n" +
+	"\bDownload\x1a5\n" +
+	"\aRequest\x12*\n" +
+	"\amessage\x18\x01 \x01(\v2\x10.message.MessageR\amessage\x1a\x1e\n" +
+	"\bResponse\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data2\x8b\x02\n" +
+	"\x0eMessageService\x127\n" +
+	"\x04Send\x12\x15.message.Send.Request\x1a\x16.message.Send.Response(\x01\x12>\n" +
+	"\aForward\x12\x18.message.Forward.Request\x1a\x19.message.Forward.Response\x12;\n" +
+	"\x06Revoke\x12\x17.message.Revoke.Request\x1a\x18.message.Revoke.Response\x12C\n" +
+	"\bDownload\x12\x19.message.Download.Request\x1a\x1a.message.Download.Response0\x01B~\n" +
 	"\vcom.messageB\fMessageProtoP\x01Z%github.com/sbgayhub/golem/sdk/message\xa2\x02\x03MXX\xaa\x02\aMessage\xca\x02\aMessage\xe2\x02\x13Message\\GPBMetadata\xea\x02\aMessageb\x06proto3"
 
 var (
@@ -1331,62 +660,40 @@ func file_message_message_proto_rawDescGZIP() []byte {
 	return file_message_message_proto_rawDescData
 }
 
-var file_message_message_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_message_message_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_message_message_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_message_message_proto_goTypes = []any{
-	(MessageType)(0),              // 0: message.MessageType
-	(*Media)(nil),                 // 1: message.Media
-	(*Message)(nil),               // 2: message.Message
-	(*TextData)(nil),              // 3: message.TextData
-	(*ImageData)(nil),             // 4: message.ImageData
-	(*VoiceData)(nil),             // 5: message.VoiceData
-	(*VideoData)(nil),             // 6: message.VideoData
-	(*EmojiData)(nil),             // 7: message.EmojiData
-	(*LocationData)(nil),          // 8: message.LocationData
-	(*AppData)(nil),               // 9: message.AppData
-	(*SendMessageRequest)(nil),    // 10: message.SendMessageRequest
-	(*SendMessageData)(nil),       // 11: message.SendMessageData
-	(*SendMessageResponse)(nil),   // 12: message.SendMessageResponse
-	(*ForwardMessageRequest)(nil), // 13: message.ForwardMessageRequest
-	(*RevokeMessageRequest)(nil),  // 14: message.RevokeMessageRequest
-	(*RevokeMessageResponse)(nil), // 15: message.RevokeMessageResponse
-	(*DownloadMediaRequest)(nil),  // 16: message.DownloadMediaRequest
-	(*DownloadMediaResponse)(nil), // 17: message.DownloadMediaResponse
-	(*contact.Contact)(nil),       // 18: contact.Contact
-	(*group.GroupMember)(nil),     // 19: group.GroupMember
+	(*Send)(nil),              // 0: message.Send
+	(*Forward)(nil),           // 1: message.Forward
+	(*Revoke)(nil),            // 2: message.Revoke
+	(*Download)(nil),          // 3: message.Download
+	(*Send_Request)(nil),      // 4: message.Send.Request
+	(*Send_Data)(nil),         // 5: message.Send.Data
+	(*Send_Response)(nil),     // 6: message.Send.Response
+	(*Forward_Request)(nil),   // 7: message.Forward.Request
+	(*Forward_Response)(nil),  // 8: message.Forward.Response
+	(*Revoke_Request)(nil),    // 9: message.Revoke.Request
+	(*Revoke_Response)(nil),   // 10: message.Revoke.Response
+	(*Download_Request)(nil),  // 11: message.Download.Request
+	(*Download_Response)(nil), // 12: message.Download.Response
+	(*Message)(nil),           // 13: message.Message
 }
 var file_message_message_proto_depIdxs = []int32{
-	0,  // 0: message.Message.type:type_name -> message.MessageType
-	18, // 1: message.Message.sender:type_name -> contact.Contact
-	18, // 2: message.Message.receiver:type_name -> contact.Contact
-	19, // 3: message.Message.member:type_name -> group.GroupMember
-	3,  // 4: message.Message.text:type_name -> message.TextData
-	4,  // 5: message.Message.image:type_name -> message.ImageData
-	5,  // 6: message.Message.voice:type_name -> message.VoiceData
-	6,  // 7: message.Message.video:type_name -> message.VideoData
-	7,  // 8: message.Message.emoji:type_name -> message.EmojiData
-	8,  // 9: message.Message.location:type_name -> message.LocationData
-	9,  // 10: message.Message.app:type_name -> message.AppData
-	1,  // 11: message.ImageData.media:type_name -> message.Media
-	1,  // 12: message.VoiceData.media:type_name -> message.Media
-	1,  // 13: message.VideoData.media:type_name -> message.Media
-	1,  // 14: message.EmojiData.media:type_name -> message.Media
-	2,  // 15: message.SendMessageRequest.message:type_name -> message.Message
-	2,  // 16: message.ForwardMessageRequest.message:type_name -> message.Message
-	2,  // 17: message.DownloadMediaRequest.message:type_name -> message.Message
-	10, // 18: message.MessageService.Send:input_type -> message.SendMessageRequest
-	13, // 19: message.MessageService.Forward:input_type -> message.ForwardMessageRequest
-	14, // 20: message.MessageService.Revoke:input_type -> message.RevokeMessageRequest
-	16, // 21: message.MessageService.Download:input_type -> message.DownloadMediaRequest
-	12, // 22: message.MessageService.Send:output_type -> message.SendMessageResponse
-	12, // 23: message.MessageService.Forward:output_type -> message.SendMessageResponse
-	15, // 24: message.MessageService.Revoke:output_type -> message.RevokeMessageResponse
-	17, // 25: message.MessageService.Download:output_type -> message.DownloadMediaResponse
-	22, // [22:26] is the sub-list for method output_type
-	18, // [18:22] is the sub-list for method input_type
-	18, // [18:18] is the sub-list for extension type_name
-	18, // [18:18] is the sub-list for extension extendee
-	0,  // [0:18] is the sub-list for field type_name
+	13, // 0: message.Send.Request.message:type_name -> message.Message
+	13, // 1: message.Forward.Request.message:type_name -> message.Message
+	13, // 2: message.Download.Request.message:type_name -> message.Message
+	4,  // 3: message.MessageService.Send:input_type -> message.Send.Request
+	7,  // 4: message.MessageService.Forward:input_type -> message.Forward.Request
+	9,  // 5: message.MessageService.Revoke:input_type -> message.Revoke.Request
+	11, // 6: message.MessageService.Download:input_type -> message.Download.Request
+	6,  // 7: message.MessageService.Send:output_type -> message.Send.Response
+	8,  // 8: message.MessageService.Forward:output_type -> message.Forward.Response
+	10, // 9: message.MessageService.Revoke:output_type -> message.Revoke.Response
+	12, // 10: message.MessageService.Download:output_type -> message.Download.Response
+	7,  // [7:11] is the sub-list for method output_type
+	3,  // [3:7] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_message_message_proto_init() }
@@ -1394,28 +701,19 @@ func file_message_message_proto_init() {
 	if File_message_message_proto != nil {
 		return
 	}
-	file_message_message_proto_msgTypes[1].OneofWrappers = []any{
-		(*Message_Text)(nil),
-		(*Message_Image)(nil),
-		(*Message_Voice)(nil),
-		(*Message_Video)(nil),
-		(*Message_Emoji)(nil),
-		(*Message_Location)(nil),
-		(*Message_App)(nil),
-	}
+	file_message_types_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_message_message_proto_rawDesc), len(file_message_message_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   17,
+			NumEnums:      0,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_message_message_proto_goTypes,
 		DependencyIndexes: file_message_message_proto_depIdxs,
-		EnumInfos:         file_message_message_proto_enumTypes,
 		MessageInfos:      file_message_message_proto_msgTypes,
 	}.Build()
 	File_message_message_proto = out.File

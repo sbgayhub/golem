@@ -11,7 +11,7 @@ import (
 
 	"golem/pkg/message"
 
-	"github.com/sbgayhub/golem/host/api/util"
+	"github.com/sbgayhub/golem/host/api"
 )
 
 // lib 消息服务 lib 实现
@@ -23,12 +23,16 @@ var Get = sync.OnceValue(func() MessageService {
 })
 
 // Sync 同步消息
-func (l lib) Sync(selector uint32) (*SyncMessageResponse, error) {
-	_, err := message.Sync(selector)
+func (l lib) Sync(selector uint32) (*SyncResult, error) {
+	resp, err := message.Sync(selector)
 	if err != nil {
 		return nil, err
 	}
-	return &SyncMessageResponse{Code: 0, Message: "ok"}, nil
+	var result SyncResult
+	if err := api.TransformProto(resp, &result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // SendText 发送文本消息
@@ -38,7 +42,7 @@ func (l lib) SendText(receiver, content, remind string) (*SendMessageResponse, e
 		return nil, err
 	}
 	var result SendMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -51,7 +55,7 @@ func (l lib) SendImage(receiver string, reader io.Reader) (*UploadImageResponse,
 		return nil, err
 	}
 	var result UploadImageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -64,7 +68,7 @@ func (l lib) SendVideo(receiver string, thumb, video io.Reader, duration uint32)
 		return nil, err
 	}
 	var result UploadVideoResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -77,7 +81,7 @@ func (l lib) SendVoice(receiver string, reader io.Reader, duration, format int32
 		return nil, err
 	}
 	var result UploadVoiceResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -94,7 +98,7 @@ func (l lib) SendEmoji(receiver, md5 string, data []byte) (*UploadEmojiResponse,
 		return nil, err
 	}
 	var result UploadEmojiResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -107,7 +111,7 @@ func (l lib) SendApp(receiver, xml string, typ int32) (*SendAppMessageResponse, 
 		return nil, err
 	}
 	var result SendAppMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -120,7 +124,7 @@ func (l lib) SendLink(receiver, title, desc, url, thumbUrl string) (*SendAppMess
 		return nil, err
 	}
 	var result SendAppMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -133,7 +137,7 @@ func (l lib) SendCard(receiver, cardUsername, cardNickname, cardAlias string) (*
 		return nil, err
 	}
 	var result SendMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -146,7 +150,7 @@ func (l lib) SendPosition(receiver, label, poiName string, lon, lat, scale float
 		return nil, err
 	}
 	var result SendMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -169,7 +173,7 @@ func (l lib) ForwardFile(receiver, xml string) (*SendAppMessageResponse, error) 
 		return nil, err
 	}
 	var result SendAppMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil
@@ -182,7 +186,7 @@ func (l lib) Revoke(receiver string, newMsgId, clientMsgId, timestamp uint64) (*
 		return nil, err
 	}
 	var result RevokeMessageResponse
-	if err := util.TransformProto(resp, &result); err != nil {
+	if err := api.TransformProto(resp, &result); err != nil {
 		return nil, err
 	}
 	return &result, nil

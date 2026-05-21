@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+
+	"google.golang.org/grpc"
 )
 
 // Client 实现 Ability 接口，通过 gRPC 调用远程消息服务
@@ -14,35 +16,33 @@ type Client struct {
 var _ Ability = (*Client)(nil)
 
 // Send 发送消息（client-stream：首包消息元数据 + 后续二进制数据块）
-func (c Client) Send(msg *Message) (*SendMessageResponse, error) {
+func (c Client) Send(msg *Message) (*Send_Response, error) {
 	stream, err := c.Client.Send(context.Background())
 	if err != nil {
 		return nil, err
 	}
 
 	// 发送首包：消息元数据
-	if err := stream.Send(&SendMessageRequest{Message: msg}); err != nil {
+	if err := stream.Send(&Send_Request{Message: msg}); err != nil {
 		return nil, err
 	}
 
-	// TODO: 如果 Message 中携带了 io.ReadCloser 类型的二进制数据
-	// 需要通过 stream 分块发送（目前 proto Message 不支持嵌入二进制，
-	// 媒体数据需通过 CDN 模块上传后填入 URL）
+	// TODO: 如果 Message 中携带了二进制数据，需要通过 stream 分块发送
 
 	return stream.CloseAndRecv()
 }
 
 // Forward 转发消息
-func (c Client) Forward(msg *Message, receiver string) (*SendMessageResponse, error) {
-	return c.Client.Forward(context.Background(), &ForwardMessageRequest{
+func (c Client) Forward(msg *Message, receiver string) (*Forward_Response, error) {
+	return c.Client.Forward(context.Background(), &Forward_Request{
 		Receiver: receiver,
 		Message:  msg,
 	})
 }
 
 // Revoke 撤回消息
-func (c Client) Revoke(receiver string, newMsgId uint64) (*RevokeMessageResponse, error) {
-	return c.Client.Revoke(context.Background(), &RevokeMessageRequest{
+func (c Client) Revoke(receiver string, newMsgId uint64) (*Revoke_Response, error) {
+	return c.Client.Revoke(context.Background(), &Revoke_Request{
 		Receiver: receiver,
 		NewMsgId: newMsgId,
 	})
@@ -50,7 +50,7 @@ func (c Client) Revoke(receiver string, newMsgId uint64) (*RevokeMessageResponse
 
 // Download 下载媒体资源（server-stream）
 func (c Client) Download(msg *Message) (io.ReadCloser, error) {
-	stream, err := c.Client.Download(context.Background(), &DownloadMediaRequest{Message: msg})
+	stream, err := c.Client.Download(context.Background(), &Download_Request{Message: msg})
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ type Server struct {
 }
 
 // Send 发送消息（client-stream）
-func (s Server) Send(stream MessageService_SendServer) error {
+func (s Server) Send(stream grpc.ClientStreamingServer[Send_Request, Send_Response]) error {
 	// 接收首包：消息元数据
 	req, err := stream.Recv()
 	if err != nil {
@@ -105,17 +105,17 @@ func (s Server) Send(stream MessageService_SendServer) error {
 }
 
 // Forward 转发消息
-func (s Server) Forward(ctx context.Context, request *ForwardMessageRequest) (*SendMessageResponse, error) {
+func (s Server) Forward(ctx context.Context, request *Forward_Request) (*Forward_Response, error) {
 	return s.Impl.Forward(request.Message, request.Receiver)
 }
 
 // Revoke 撤回消息
-func (s Server) Revoke(ctx context.Context, request *RevokeMessageRequest) (*RevokeMessageResponse, error) {
+func (s Server) Revoke(ctx context.Context, request *Revoke_Request) (*Revoke_Response, error) {
 	return s.Impl.Revoke(request.Receiver, request.NewMsgId)
 }
 
 // Download 下载媒体资源（server-stream）
-func (s Server) Download(request *DownloadMediaRequest, stream MessageService_DownloadServer) error {
+func (s Server) Download(request *Download_Request, stream grpc.ServerStreamingServer[Download_Response]) error {
 	reader, err := s.Impl.Download(request.Message)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func (s Server) Download(request *DownloadMediaRequest, stream MessageService_Do
 	for {
 		n, readErr := reader.Read(buf)
 		if n > 0 {
-			if sendErr := stream.Send(&DownloadMediaResponse{Data: buf[:n]}); sendErr != nil {
+			if sendErr := stream.Send(&Download_Response{Data: buf[:n]}); sendErr != nil {
 				return sendErr
 			}
 		}

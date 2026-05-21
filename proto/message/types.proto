@@ -1,0 +1,99 @@
+syntax = "proto3";
+
+package message;
+
+import "contact/contact.proto";
+import "chatroom/chatroom.proto";
+
+// ==================== 消息类型 ====================
+
+message Type {
+  int32 code = 1;
+  string desc = 2;
+  string topic = 3;
+}
+
+// ==================== 媒体资源 ====================
+
+// Media 媒体资源描述
+message Media {
+  string md5 = 1;   // 文件 MD5
+  string key = 2;   // AES 解密密钥
+  string url = 3;   // CDN URL
+  uint32 size = 4;  // 文件大小（字节）
+}
+
+// ==================== 消息体 ====================
+
+// Message 统一消息结构（跨 host↔plugin 边界）
+message Message {
+  int64 id = 1;                        // 消息 ID（new_id）
+  Type type = 2;                // 消息类型
+  contact.Contact sender = 3;          // 发送者
+  contact.Contact receiver = 4;        // 接收者（群消息为群 Contact）
+  chatroom.Member member = 5;      // 群内发言成员（仅群消息有效）
+  string content = 6;                  // 可读文本摘要
+  string raw = 7;                      // 原始协议数据（JSON）
+  uint32 timestamp = 8;                // 消息时间戳
+
+  oneof data {
+    TextData text = 20;                // 文本消息
+    ImageData image = 21;              // 图片消息
+    VoiceData voice = 22;              // 语音消息
+    VideoData video = 23;              // 视频消息
+    EmojiData emoji = 24;              // 表情消息
+    LocationData location = 25;        // 位置消息
+    AppData app = 26;                  // 应用消息
+  }
+}
+
+// TextData 文本消息数据
+message TextData {
+  string content = 1;          // 文本内容
+  repeated string reminds = 2; // 被 @ 的用户列表
+}
+
+// ImageData 图片消息数据
+message ImageData {
+  Media media = 1;  // 媒体信息
+  uint32 width = 2; // 图片宽度
+  uint32 height = 3; // 图片高度
+}
+
+// VoiceData 语音消息数据
+message VoiceData {
+  Media media = 1;    // 媒体信息
+  uint32 duration = 2; // 语音时长（毫秒）
+}
+
+// VideoData 视频消息数据
+message VideoData {
+  Media media = 1;        // 媒体信息
+  uint32 duration = 2;    // 视频时长（秒）
+  string thumb_url = 3;   // 缩略图 URL
+  string new_md5 = 4;     // 新视频 MD5
+}
+
+// EmojiData 表情消息数据
+message EmojiData {
+  Media media = 1; // 媒体信息
+  string desc = 2; // 表情描述
+}
+
+// LocationData 位置消息数据
+message LocationData {
+  string latitude = 1;  // 纬度
+  string longitude = 2; // 经度
+  string scale = 3;     // 缩放比例
+  string poi_name = 4;  // POI 名称
+  string label = 5;     // 位置标签
+}
+
+// AppData 应用消息数据（链接、文件、小程序等）
+message AppData {
+  uint32 sub_type = 1; // 子类型（5=链接, 6=文件, 33=小程序, 51=视频号, 57=引用...）
+  string title = 2;    // 标题
+  string desc = 3;     // 描述
+  string url = 4;      // 链接 URL
+  string xml = 5;      // 原始 XML
+}

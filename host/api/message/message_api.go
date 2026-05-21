@@ -1,12 +1,14 @@
 // Package messageapi 提供消息服务的 API 接口定义。
 package messageapi
 
-import "io"
+import (
+	"io"
+)
 
 // MessageService 消息服务 API 接口（返回 API proto 类型）
 type MessageService interface {
-	// Sync 同步消息
-	Sync(selector uint32) (*SyncMessageResponse, error)
+	// Sync 同步消息（返回新消息、联系人变更、用户信息变更等同步数据）
+	Sync(selector uint32) (*SyncResult, error)
 	// SendText 发送文本消息
 	SendText(receiver, content, remind string) (*SendMessageResponse, error)
 	// SendImage 发送图片消息

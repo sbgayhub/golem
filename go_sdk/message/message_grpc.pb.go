@@ -32,13 +32,13 @@ const (
 // MessageService 消息服务
 type MessageServiceClient interface {
 	// Send 发送消息（client-stream：首包消息元数据 + 后续二进制数据块）
-	Send(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SendMessageRequest, SendMessageResponse], error)
+	Send(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Send_Request, Send_Response], error)
 	// Forward 转发消息
-	Forward(ctx context.Context, in *ForwardMessageRequest, opts ...grpc.CallOption) (*SendMessageResponse, error)
+	Forward(ctx context.Context, in *Forward_Request, opts ...grpc.CallOption) (*Forward_Response, error)
 	// Revoke 撤回消息
-	Revoke(ctx context.Context, in *RevokeMessageRequest, opts ...grpc.CallOption) (*RevokeMessageResponse, error)
+	Revoke(ctx context.Context, in *Revoke_Request, opts ...grpc.CallOption) (*Revoke_Response, error)
 	// Download 下载媒体资源（server-stream：流式返回二进制数据）
-	Download(ctx context.Context, in *DownloadMediaRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadMediaResponse], error)
+	Download(ctx context.Context, in *Download_Request, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Download_Response], error)
 }
 
 type messageServiceClient struct {
@@ -49,22 +49,22 @@ func NewMessageServiceClient(cc grpc.ClientConnInterface) MessageServiceClient {
 	return &messageServiceClient{cc}
 }
 
-func (c *messageServiceClient) Send(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[SendMessageRequest, SendMessageResponse], error) {
+func (c *messageServiceClient) Send(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[Send_Request, Send_Response], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &MessageService_ServiceDesc.Streams[0], MessageService_Send_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[SendMessageRequest, SendMessageResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[Send_Request, Send_Response]{ClientStream: stream}
 	return x, nil
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageService_SendClient = grpc.ClientStreamingClient[SendMessageRequest, SendMessageResponse]
+type MessageService_SendClient = grpc.ClientStreamingClient[Send_Request, Send_Response]
 
-func (c *messageServiceClient) Forward(ctx context.Context, in *ForwardMessageRequest, opts ...grpc.CallOption) (*SendMessageResponse, error) {
+func (c *messageServiceClient) Forward(ctx context.Context, in *Forward_Request, opts ...grpc.CallOption) (*Forward_Response, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SendMessageResponse)
+	out := new(Forward_Response)
 	err := c.cc.Invoke(ctx, MessageService_Forward_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -72,9 +72,9 @@ func (c *messageServiceClient) Forward(ctx context.Context, in *ForwardMessageRe
 	return out, nil
 }
 
-func (c *messageServiceClient) Revoke(ctx context.Context, in *RevokeMessageRequest, opts ...grpc.CallOption) (*RevokeMessageResponse, error) {
+func (c *messageServiceClient) Revoke(ctx context.Context, in *Revoke_Request, opts ...grpc.CallOption) (*Revoke_Response, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(RevokeMessageResponse)
+	out := new(Revoke_Response)
 	err := c.cc.Invoke(ctx, MessageService_Revoke_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -82,13 +82,13 @@ func (c *messageServiceClient) Revoke(ctx context.Context, in *RevokeMessageRequ
 	return out, nil
 }
 
-func (c *messageServiceClient) Download(ctx context.Context, in *DownloadMediaRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DownloadMediaResponse], error) {
+func (c *messageServiceClient) Download(ctx context.Context, in *Download_Request, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Download_Response], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &MessageService_ServiceDesc.Streams[1], MessageService_Download_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[DownloadMediaRequest, DownloadMediaResponse]{ClientStream: stream}
+	x := &grpc.GenericClientStream[Download_Request, Download_Response]{ClientStream: stream}
 	if err := x.ClientStream.SendMsg(in); err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (c *messageServiceClient) Download(ctx context.Context, in *DownloadMediaRe
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageService_DownloadClient = grpc.ServerStreamingClient[DownloadMediaResponse]
+type MessageService_DownloadClient = grpc.ServerStreamingClient[Download_Response]
 
 // MessageServiceServer is the server API for MessageService service.
 // All implementations must embed UnimplementedMessageServiceServer
@@ -108,13 +108,13 @@ type MessageService_DownloadClient = grpc.ServerStreamingClient[DownloadMediaRes
 // MessageService 消息服务
 type MessageServiceServer interface {
 	// Send 发送消息（client-stream：首包消息元数据 + 后续二进制数据块）
-	Send(grpc.ClientStreamingServer[SendMessageRequest, SendMessageResponse]) error
+	Send(grpc.ClientStreamingServer[Send_Request, Send_Response]) error
 	// Forward 转发消息
-	Forward(context.Context, *ForwardMessageRequest) (*SendMessageResponse, error)
+	Forward(context.Context, *Forward_Request) (*Forward_Response, error)
 	// Revoke 撤回消息
-	Revoke(context.Context, *RevokeMessageRequest) (*RevokeMessageResponse, error)
+	Revoke(context.Context, *Revoke_Request) (*Revoke_Response, error)
 	// Download 下载媒体资源（server-stream：流式返回二进制数据）
-	Download(*DownloadMediaRequest, grpc.ServerStreamingServer[DownloadMediaResponse]) error
+	Download(*Download_Request, grpc.ServerStreamingServer[Download_Response]) error
 	mustEmbedUnimplementedMessageServiceServer()
 }
 
@@ -125,16 +125,16 @@ type MessageServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedMessageServiceServer struct{}
 
-func (UnimplementedMessageServiceServer) Send(grpc.ClientStreamingServer[SendMessageRequest, SendMessageResponse]) error {
+func (UnimplementedMessageServiceServer) Send(grpc.ClientStreamingServer[Send_Request, Send_Response]) error {
 	return status.Errorf(codes.Unimplemented, "method Send not implemented")
 }
-func (UnimplementedMessageServiceServer) Forward(context.Context, *ForwardMessageRequest) (*SendMessageResponse, error) {
+func (UnimplementedMessageServiceServer) Forward(context.Context, *Forward_Request) (*Forward_Response, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Forward not implemented")
 }
-func (UnimplementedMessageServiceServer) Revoke(context.Context, *RevokeMessageRequest) (*RevokeMessageResponse, error) {
+func (UnimplementedMessageServiceServer) Revoke(context.Context, *Revoke_Request) (*Revoke_Response, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Revoke not implemented")
 }
-func (UnimplementedMessageServiceServer) Download(*DownloadMediaRequest, grpc.ServerStreamingServer[DownloadMediaResponse]) error {
+func (UnimplementedMessageServiceServer) Download(*Download_Request, grpc.ServerStreamingServer[Download_Response]) error {
 	return status.Errorf(codes.Unimplemented, "method Download not implemented")
 }
 func (UnimplementedMessageServiceServer) mustEmbedUnimplementedMessageServiceServer() {}
@@ -159,14 +159,14 @@ func RegisterMessageServiceServer(s grpc.ServiceRegistrar, srv MessageServiceSer
 }
 
 func _MessageService_Send_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(MessageServiceServer).Send(&grpc.GenericServerStream[SendMessageRequest, SendMessageResponse]{ServerStream: stream})
+	return srv.(MessageServiceServer).Send(&grpc.GenericServerStream[Send_Request, Send_Response]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageService_SendServer = grpc.ClientStreamingServer[SendMessageRequest, SendMessageResponse]
+type MessageService_SendServer = grpc.ClientStreamingServer[Send_Request, Send_Response]
 
 func _MessageService_Forward_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ForwardMessageRequest)
+	in := new(Forward_Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -178,13 +178,13 @@ func _MessageService_Forward_Handler(srv interface{}, ctx context.Context, dec f
 		FullMethod: MessageService_Forward_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MessageServiceServer).Forward(ctx, req.(*ForwardMessageRequest))
+		return srv.(MessageServiceServer).Forward(ctx, req.(*Forward_Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _MessageService_Revoke_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(RevokeMessageRequest)
+	in := new(Revoke_Request)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
@@ -196,21 +196,21 @@ func _MessageService_Revoke_Handler(srv interface{}, ctx context.Context, dec fu
 		FullMethod: MessageService_Revoke_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(MessageServiceServer).Revoke(ctx, req.(*RevokeMessageRequest))
+		return srv.(MessageServiceServer).Revoke(ctx, req.(*Revoke_Request))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
 func _MessageService_Download_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(DownloadMediaRequest)
+	m := new(Download_Request)
 	if err := stream.RecvMsg(m); err != nil {
 		return err
 	}
-	return srv.(MessageServiceServer).Download(m, &grpc.GenericServerStream[DownloadMediaRequest, DownloadMediaResponse]{ServerStream: stream})
+	return srv.(MessageServiceServer).Download(m, &grpc.GenericServerStream[Download_Request, Download_Response]{ServerStream: stream})
 }
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type MessageService_DownloadServer = grpc.ServerStreamingServer[DownloadMediaResponse]
+type MessageService_DownloadServer = grpc.ServerStreamingServer[Download_Response]
 
 // MessageService_ServiceDesc is the grpc.ServiceDesc for MessageService service.
 // It's only intended for direct use with grpc.RegisterService,

@@ -27,7 +27,10 @@ func (a *ability) Send(msg *sdk.Message) (*sdk.Send_Response, error) {
 	switch msg.GetType() {
 	case sdk.TypeText:
 		data := msg.GetText()
-		content := data.GetContent()
+		content := msg.GetContent()
+		if content == "" {
+			content = data.GetContent()
+		}
 		remind := strings.Join(data.GetReminds(), ",")
 		_, err := a.api.SendText(receiver, content, remind)
 		if err != nil {

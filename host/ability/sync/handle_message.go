@@ -6,8 +6,10 @@ import (
 
 	messageability "github.com/sbgayhub/golem/host/ability/message"
 	messageapi "github.com/sbgayhub/golem/host/api/message"
+	"github.com/sbgayhub/golem/host/plugin"
 	contactsdk "github.com/sbgayhub/golem/sdk/contact"
 	messagesdk "github.com/sbgayhub/golem/sdk/message"
+	pluginsdk "github.com/sbgayhub/golem/sdk/plugin"
 )
 
 func handleMessage(messages []*messageapi.NewMessage) {
@@ -17,24 +19,44 @@ func handleMessage(messages []*messageapi.NewMessage) {
 		} else {
 			log(data)
 
-			//// 检查是否为命令
-			//if cmd, ok := plugin.ParseCommand(data.GetBase().Content, data.GetBase().Sender); ok {
-			//	slog.Info("收到命令", "main", cmd.Main, "sub", cmd.Sub, "args", cmd.Args)
-			//	plugin.DispatchCommand(cmd)
-			//} else {
-			//	// 普通消息，发布事件
-			//	plugin.Publish(&pluginsdk.Event{
-			//		Topic:   data.GetType().Topic,
-			//		Sender:  data.GetBase().Sender,
-			//		Payload: data,
-			//	})
-			//}
+			if result, ok, err := plugin.HandleCommand(data.GetContent(), data.GetSender()); ok {
+				if err != nil {
+					reply(data, err.Error())
+				} else if result != "" {
+					reply(data, result)
+				}
+				continue
+			}
+
+			plugin.Publish(&pluginsdk.Event{
+				Topic:  data.GetType().GetTopic(),
+				Sender: data.GetSender().GetUsername(),
+				Payload: &pluginsdk.Event_Message{
+					Message: data,
+				},
+			})
 		}
 	}
 }
 
+func reply(message *messagesdk.Message, content string) {
+	receiver := message.GetSender()
+	if receiver == nil {
+		slog.Warn("命令回复失败，接收者为空", "content", content)
+		return
+	}
+	text := messagesdk.Message{
+		Type:     messagesdk.TypeText,
+		Receiver: receiver,
+		Content:  content,
+	}
+	if _, err := messagesdk.Instance.Send(&text); err != nil {
+		slog.Warn("命令回复失败", "receiver", receiver.GetUsername(), "err", err)
+	}
+}
+
 func log(message *messagesdk.Message) {
-	if message.Sender.GetType() == contactsdk.ContactType_CONTACT_TYPE_GROUP {
+	if message.Sender.GetType() == contactsdk.ContactType_CONTACT_TYPE_CHATROOM {
 		sender := "system"
 		if message.Member != nil {
 			sender = message.Member.Nickname

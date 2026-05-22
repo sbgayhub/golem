@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	mu      sync.Mutex
-	plugins []*wrapper // 插件集合
+	mu           sync.Mutex
+	plugins      []*wrapper          // 插件集合
+	commandIndex map[string]*wrapper // 命令索引
 )
 
 // 插件包装
@@ -21,6 +22,7 @@ type wrapper struct {
 	subscriptions    []string // 插件订阅的事件主题集合
 	capabilities     []string // 插件提供的能力集合
 	commands         []string // 插件提供的命令集合
+	commandSchemas   []*plugin.CommandSchema
 	types            []string // 插件类型
 
 	plugin        *plugin.Plugin        // 插件
@@ -33,6 +35,7 @@ func LoadPlugins() error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	commandIndex = map[string]*wrapper{}
 	LoadPlugin("")
 
 	return nil
@@ -136,13 +139,30 @@ func LoadPlugin(name string) error {
 		w.commands = cp.GetCommands()
 		w.commandPlugin = &cp
 		w.types = append(w.types, "command")
+		if sp, ok := (*p).(plugin.CommandSchemaProvider); ok {
+			w.commandSchemas = sp.GetCommandSchemas()
+		}
 	}
 	if ab, ok := (*p).(plugin.Ability); ok {
 		w.abilities = ab.GetAbilities()
 	}
 
 	plugins = append(plugins, &w)
+	registerCommandIndex(&w)
 
 	slog.Info("插件加载成功", "name", metadata.Name, "priority", metadata.Priority, "version", metadata.Version)
 	return nil
+}
+
+func registerCommandIndex(w *wrapper) {
+	for _, command := range w.commands {
+		if exist := commandIndex[command]; exist != nil {
+			if exist.Metadata.Priority >= w.Metadata.Priority {
+				slog.Warn("命令已被其他插件注册，忽略当前插件", "command", command, "current", w.Name, "exist", exist.Name)
+				continue
+			}
+			slog.Warn("命令注册被更高优先级插件覆盖", "command", command, "current", w.Name, "exist", exist.Name)
+		}
+		commandIndex[command] = w
+	}
 }

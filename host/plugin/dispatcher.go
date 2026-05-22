@@ -6,7 +6,6 @@ import (
 	"slices"
 
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/sbgayhub/golem/sdk/command"
 	"github.com/sbgayhub/golem/sdk/plugin"
 )
 
@@ -65,13 +64,13 @@ func dispatcher() {
 }
 
 // DispatchCommand 分发命令给插件
-func DispatchCommand(cmd *command.Command, plugins []wrapper) {
+func DispatchCommand(cmd *plugin.Command, plugins []*wrapper) {
 	for _, p := range plugins {
 		if p.Config != nil && !p.Config.Enable {
 			continue
 		}
 
-		if !slices.Contains(p.commands, cmd.Cmd) {
+		if !slices.Contains(p.commands, cmd.Main) {
 			continue
 		}
 
@@ -79,7 +78,7 @@ func DispatchCommand(cmd *command.Command, plugins []wrapper) {
 		if cmd.Sender != nil {
 			sender = cmd.Sender.GetUsername()
 		}
-		if sender != "" && !isAllowed(sender, &p) {
+		if sender != "" && !isAllowed(sender, p) {
 			continue
 		}
 
@@ -90,7 +89,7 @@ func DispatchCommand(cmd *command.Command, plugins []wrapper) {
 				}
 			}()
 
-			if _, err := (*p.commandPlugin).OnCommand(cmd.Cmd, cmd.Args); err != nil {
+			if _, err := (*p.commandPlugin).OnCommand(cmd); err != nil {
 				errMsg := fmt.Sprintf("插件[%s]处理命令失败: %v", p.Name, err)
 				slog.Error(errMsg)
 			}

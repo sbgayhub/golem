@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package plugin;
 
-import "command/command.proto";
 import "message/types.proto";
+import "plugin/command.proto";
 
 
 // metadata 插件元数据
@@ -17,7 +17,6 @@ message Metadata {
   bool next = 6; // 插件执行成功后，是否继续执行后续插件
   bool always_run = 7; // 一直运行，忽略会话劫持
 }
-
 
 // Event 事件
 message Event {
@@ -67,7 +66,7 @@ service PluginService {
   rpc OnCommand(OnCommand.Request) returns (OnCommand.Response); // 处理命令请求
   rpc GetCapabilities(GetCapabilities.Request) returns (GetCapabilities.Response); // 获取插件能力
   rpc GetSubscriptions(GetSubscriptions.Request) returns (GetSubscriptions.Response); // 获取订阅事件列表
-  rpc GetCommands(GetCommands.Request) returns (GetCommands.Response); // 获取命令列表
+  rpc GetCommands(GetCommands.Request) returns (GetCommands.Response); // 获取命令列表与schema
 
   // 插件生命周期接口
   rpc OnLoad(OnLifecycle.Request) returns (OnLifecycle.Response); // 插件加载时调用
@@ -113,10 +112,11 @@ message OnEvent{
 
 message OnCommand{
   message Request {
-    command.Command value = 1;
+    Command value = 1;
   }
   message Response {
-    string value = 1; // 错误信息
+    string result = 1; // 结果
+    string message = 2; // 错误信息
   }
 }
 
@@ -138,6 +138,7 @@ message GetCommands{
   message Request { }
   message Response {
     repeated string values = 1;
+    repeated CommandSchema schemas = 2;
   }
 }
 

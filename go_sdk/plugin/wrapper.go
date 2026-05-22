@@ -94,9 +94,23 @@ func (c client) GetCommands() []string {
 	}
 }
 
-func (c client) OnCommand(command string, args any) (any, error) {
-	//TODO implement me
-	panic("implement me")
+func (c client) GetCommandSchemas() []*CommandSchema {
+	if data, err := c.client.GetCommands(context.Background(), &GetCommands_Request{}); err != nil {
+		return nil
+	} else {
+		return data.Schemas
+	}
+}
+
+func (c client) OnCommand(command *Command) (string, error) {
+	resp, err := c.client.OnCommand(context.Background(), &OnCommand_Request{Value: command})
+	if err != nil {
+		return "", err
+	}
+	if resp != nil && resp.Message != "" {
+		return "", errors.New(resp.Message)
+	}
+	return resp.GetResult(), nil
 }
 
 func (c client) OnLoad() error {
@@ -253,11 +267,11 @@ func (s *server) OnEvent(ctx context.Context, request *OnEvent_Request) (*OnEven
 
 func (s *server) OnCommand(ctx context.Context, request *OnCommand_Request) (*OnCommand_Response, error) {
 	if cp, ok := s.impl.(CommandPlugin); ok {
-		result, err := cp.OnCommand(request.Value.GetCmd(), request.Value.Args)
+		result, err := cp.OnCommand(request.Value)
 		if err != nil {
-			return &OnCommand_Response{Value: err.Error()}, nil
+			return &OnCommand_Response{Message: err.Error()}, nil
 		}
-		return &OnCommand_Response{Value: result}, nil
+		return &OnCommand_Response{Result: result}, nil
 	}
 	return nil, errors.New("[plugin wrapper] 插件不支持命令")
 }
@@ -283,7 +297,11 @@ func (s *server) GetSubscriptions(ctx context.Context, request *GetSubscriptions
 
 func (s *server) GetCommands(ctx context.Context, request *GetCommands_Request) (*GetCommands_Response, error) {
 	if cp, ok := s.impl.(CommandPlugin); ok {
-		return &GetCommands_Response{Values: cp.GetCommands()}, nil
+		schemas := CommandSchemas()
+		if sp, ok := s.impl.(CommandSchemaProvider); ok {
+			schemas = sp.GetCommandSchemas()
+		}
+		return &GetCommands_Response{Values: cp.GetCommands(), Schemas: schemas}, nil
 	}
 	return nil, errors.New("[plugin wrapper] 插件不支持获取调用能力事件")
 }

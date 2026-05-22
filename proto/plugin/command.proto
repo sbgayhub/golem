@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package plugin;
+
+import "contact/contact.proto";
+
+// Command 表示宿主解析后的命令调用上下文
+message Command {
+  string raw = 1; // 原始命令文本
+  string main = 2; // 主命令
+  string sub = 3; // 子命令
+  repeated string positionals = 4; // 位置参数
+  map<string, string> args = 5; // 具名参数（已归一化）
+  bool help = 6; // 是否请求帮助
+  contact.Contact sender = 7; // 命令发送者
+}
+
+// CommandSchema 表示一个可执行命令的 schema
+message CommandSchema {
+  string main = 1; // 主命令
+  string sub = 2; // 子命令
+  string description = 3; // 中文描述
+  string usage = 4; // 用法
+  repeated string examples = 5; // 示例
+  repeated CommandOption options = 6; // 具名参数
+  repeated CommandArgument arguments = 7; // 位置参数
+}
+
+// CommandOption 表示命名参数
+message CommandOption {
+  string name = 1; // 规范名
+  string short = 2; // 短参数
+  string long = 3; // 长参数
+  string description = 4; // 中文描述
+  bool required = 5; // 是否必填
+  bool has_value = 6; // 是否需要值
+  string default_value = 7; // 默认值
+  repeated string choices = 8; // 可选值
+}
+
+// CommandArgument 表示位置参数
+message CommandArgument {
+  string name = 1; // 规范名
+  string description = 2; // 中文描述
+  bool required = 3; // 是否必填
+  bool variadic = 4; // 是否可变长
+  string default_value = 5; // 默认值
+  repeated string choices = 6; // 可选值
+}

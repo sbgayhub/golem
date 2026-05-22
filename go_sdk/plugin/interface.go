@@ -20,7 +20,7 @@ type Lifecycle interface {
 // SessionAbility 会话劫持能力
 type SessionAbility interface {
 	Hold(p Plugin, id string, duration time.Duration) // 劫持会话
-	Release(id string)                                 // 释放会话
+	Release(id string)                                // 释放会话
 }
 
 // CallerAbility 插件调用能力（宿主侧 wrapper 实现）
@@ -40,10 +40,15 @@ type CalledPlugin interface {
 	OnCall(method string, args map[string]string) (string, error) // 调用插件方法时调用
 }
 
+// CommandSchemaProvider 命令 schema 提供接口
+type CommandSchemaProvider interface {
+	GetCommandSchemas() []*CommandSchema // 获取命令 schema
+}
+
 // CommandPlugin 命令插件接口
 type CommandPlugin interface {
-	GetCommands() []string                                            // 获取命令列表
-	OnCommand(command string, args map[string]string) (string, error) // 命令执行时调用
+	GetCommands() []string                      // 获取命令列表
+	OnCommand(command *Command) (string, error) // 命令执行时调用
 }
 
 // Ability 插件能力接口，插件实现禁止使用

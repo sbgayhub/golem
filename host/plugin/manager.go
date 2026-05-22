@@ -1,17 +1,22 @@
 package plugin
 
 import (
-	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
 	"sync"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sbgayhub/golem/sdk/plugin"
 )
 
 var (
 	mu           sync.Mutex
-	plugins      []*wrapper          // 插件集合
-	commandIndex map[string]*wrapper // 命令索引
+	plugins      []*wrapper
+	commandIndex = map[string]*wrapper{} // 命令索引
 )
 
 // 插件包装
@@ -32,97 +37,172 @@ type wrapper struct {
 }
 
 func LoadPlugins() error {
-	mu.Lock()
-	defer mu.Unlock()
+	entries, err := os.ReadDir(pluginDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("读取插件目录失败: %w", err)
+	}
 
-	commandIndex = map[string]*wrapper{}
-	LoadPlugin("")
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if _, err := os.Stat(pluginExecutablePath(name)); err == nil {
+			names = append(names, name)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("检查插件文件失败: %w", err)
+		}
+	}
+	sort.Strings(names)
 
+	for _, name := range names {
+		if err := LoadPlugin(name); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func LoadPlugin(name string) error {
+	if name == "" {
+		return fmt.Errorf("插件名称不能为空")
+	}
+	if findPlugin(name) != nil {
+		return fmt.Errorf("插件已加载：%s", name)
+	}
 
-	//// 获取插件目录下的所有可执行文件
-	//paths, err := goplugin.Discover("*.exe", "../plugins")
-	//if err != nil {
-	//	return err
-	//}
-	//
-	//// 便利可执行文件路径，加载插件
-	//for _, path := range paths {
-	//	metadata, p, err := plugin.Get(path)
-	//	if err != nil {
-	//		return err
-	//	}
-	//	// 注入能力
-	//	if ability, ok := (*p).(plugin.Ability); ok {
-	//		if err := ability.InjectAbilities(ability.GetAbilities()); err != nil {
-	//			return err
-	//		}
-	//	}
-	//	// 添加插件
-	//	m.plugins = append(m.plugins, wrapper{
-	//		Metadata:       metadata,
-	//		plugin:         p,
-	//		subscripptions: (*p).(plugin.EventPlugin).GetSubscriptions(),
-	//		//capability:     (*p).(plugin.CalledPlugin).GetCapabilities(),
-	//		//commands:       (*p).(plugin.CommandPlugin).GetCommands(),
-	//	})
-	//
-	//	slog.Debug("插件加载成功", "name", metadata.Name, "priority", metadata.Priority, "version", metadata.Version)
-	//}
-
-	metadata, p, err := plugin.Get("D:\\Project-Go\\new_golem\\plugins\\example\\golem_plugin_example.exe")
+	metadata, p, err := plugin.Get(pluginExecutablePath(name))
 	if err != nil {
 		return err
 	}
+	if metadata.Name != name {
+		slog.Warn("插件文件名和元数据名称不一致", "expected", name, "actual", metadata.Name)
+	}
 
 	if ability, ok := (*p).(plugin.Ability); ok {
-		ability.InjectAbilities(ability.GetAbilities())
-	}
-
-	// 关联配置
-	cfg, ok := configs[metadata.Name]
-	if !ok {
-		cfg = &Config{Enable: true, Mode: "blacklist"}
-		configs[metadata.Name] = cfg
-	}
-
-	// 配置注入
-	if pc, ok := (*p).(IPluginConfig); ok {
-		if cfg.Config == nil {
-			if data, err := pc.GetDefaultConfig(); err != nil {
-				slog.Warn("获取插件默认配置失败", "name", metadata.Name, "err", err)
-			} else if len(data) > 0 {
-				var m any
-				if err := json.Unmarshal(data, &m); err == nil {
-					cfg.Config = m
-					_ = saveConfig()
-				}
-			}
-		} else {
-			data, err := json.Marshal(cfg.Config)
-			if err != nil {
-				slog.Warn("序列化插件配置失败", "name", metadata.Name, "err", err)
-			} else if err := pc.SetConfig(data); err != nil {
-				slog.Warn("注入插件配置失败", "name", metadata.Name, "err", err)
-			}
+		if err := ability.InjectAbilities(ability.GetAbilities()); err != nil {
+			plugin.Kill(metadata.Name)
+			return err
 		}
 	}
 
-	// 如果 config 中有值，覆盖 metadata
+	cfg := configs[metadata.Name]
+	if cfg == nil {
+		cfg = &Config{Enable: true, Mode: "blacklist"}
+		configs[metadata.Name] = cfg
+	}
+	if err := injectPluginConfig(metadata.Name, p, cfg); err != nil {
+		slog.Warn("应用插件配置失败", "name", metadata.Name, "err", err)
+	}
+	applyMetadataConfig(metadata, cfg)
+
+	w := newWrapper(metadata, cfg, p)
+	if lifecycle, ok := (*p).(plugin.Lifecycle); ok {
+		if err := lifecycle.OnLoad(); err != nil {
+			plugin.Kill(metadata.Name)
+			return err
+		}
+	}
+
+	mu.Lock()
+	plugins = append(plugins, w)
+	sortPlugins()
+	rebuildCommandIndex()
+	mu.Unlock()
+
+	slog.Info("插件加载成功", "name", metadata.Name, "priority", metadata.Priority, "version", metadata.Version)
+	return nil
+}
+
+func UnloadPlugin(name string) error {
+	mu.Lock()
+	w, index := findPluginWithIndex(name)
+	if w == nil {
+		mu.Unlock()
+		return fmt.Errorf("插件不存在：%s", name)
+	}
+	if slices.Contains(w.types, "builtin") {
+		mu.Unlock()
+		return fmt.Errorf("内置插件禁止卸载：%s", name)
+	}
+	plugins = slices.Delete(plugins, index, index+1)
+	rebuildCommandIndex()
+	mu.Unlock()
+
+	if lifecycle, ok := (*w.plugin).(plugin.Lifecycle); ok {
+		if err := lifecycle.OnUnload(); err != nil {
+			return err
+		}
+	}
+	plugin.Kill(w.Name)
+	slog.Info("插件卸载成功", "name", w.Name)
+	return nil
+}
+
+func ReloadPlugin(name string) error {
+	if err := UnloadPlugin(name); err != nil {
+		return err
+	}
+	return LoadPlugin(name)
+}
+
+func pluginExecutablePath(name string) string {
+	return filepath.Join(pluginDir, name, "golem_plugin_"+name+".exe")
+}
+
+func injectPluginConfig(name string, p *plugin.Plugin, cfg *Config) error {
+	pc, ok := (*p).(IPluginConfig)
+	if !ok {
+		return nil
+	}
+
+	if cfg.Config == nil {
+		data, err := pc.GetDefaultConfig()
+		if err != nil {
+			return fmt.Errorf("获取插件默认配置失败: %w", err)
+		}
+		if len(data) == 0 {
+			return nil
+		}
+		var value map[string]any
+		if err := toml.Unmarshal(data, &value); err != nil {
+			return fmt.Errorf("解析插件默认配置失败: %w", err)
+		}
+		cfg.Config = value
+		return saveConfig()
+	}
+
+	data, err := toml.Marshal(cfg.Config)
+	if err != nil {
+		return fmt.Errorf("序列化插件配置失败: %w", err)
+	}
+	if err := pc.SetConfig(data); err != nil {
+		return fmt.Errorf("注入插件配置失败: %w", err)
+	}
+	slog.Debug("插件配置已注入", "name", name)
+	return nil
+}
+
+func applyMetadataConfig(metadata *plugin.Metadata, cfg *Config) {
 	if cfg.Priority != nil {
 		metadata.Priority = *cfg.Priority
 	}
 	if cfg.Next != nil {
 		metadata.Next = *cfg.Next
 	}
+	if cfg.AlwaysRun != nil {
+		metadata.AlwaysRun = *cfg.AlwaysRun
+	}
+}
 
-	w := wrapper{
+func newWrapper(metadata *plugin.Metadata, cfg *Config, p *plugin.Plugin) *wrapper {
+	w := &wrapper{
 		Metadata: metadata,
 		Config:   cfg,
-		types:    []string{},
 		plugin:   p,
 	}
 	if ep, ok := (*p).(plugin.EventPlugin); ok && ep.GetSubscriptions() != nil {
@@ -146,23 +226,54 @@ func LoadPlugin(name string) error {
 	if ab, ok := (*p).(plugin.Ability); ok {
 		w.abilities = ab.GetAbilities()
 	}
-
-	plugins = append(plugins, &w)
-	registerCommandIndex(&w)
-
-	slog.Info("插件加载成功", "name", metadata.Name, "priority", metadata.Priority, "version", metadata.Version)
-	return nil
+	return w
 }
 
-func registerCommandIndex(w *wrapper) {
-	for _, command := range w.commands {
-		if exist := commandIndex[command]; exist != nil {
-			if exist.Metadata.Priority >= w.Metadata.Priority {
-				slog.Warn("命令已被其他插件注册，忽略当前插件", "command", command, "current", w.Name, "exist", exist.Name)
-				continue
-			}
-			slog.Warn("命令注册被更高优先级插件覆盖", "command", command, "current", w.Name, "exist", exist.Name)
+func findPlugin(name string) *wrapper {
+	w, _ := findPluginWithIndex(name)
+	return w
+}
+
+func findPluginWithIndex(name string) (*wrapper, int) {
+	for i, w := range plugins {
+		if w.Name == name {
+			return w, i
 		}
-		commandIndex[command] = w
+	}
+	return nil, -1
+}
+
+func pluginSnapshot() []*wrapper {
+	mu.Lock()
+	defer mu.Unlock()
+
+	values := make([]*wrapper, len(plugins))
+	copy(values, plugins)
+	return values
+}
+
+func sortPlugins() {
+	sort.SliceStable(plugins, func(i, j int) bool {
+		return plugins[i].Metadata.Priority < plugins[j].Metadata.Priority
+	})
+}
+
+func rebuildCommandIndex() {
+	commandIndex = map[string]*wrapper{}
+	for _, w := range plugins {
+		for _, command := range w.commands {
+			if exist := commandIndex[command]; exist != nil {
+				if slices.Contains(exist.types, "builtin") {
+					slog.Warn("命令已被内置插件注册，忽略当前插件", "command", command, "current", w.Name, "exist", exist.Name)
+					continue
+				}
+				if exist.Metadata.Priority <= w.Metadata.Priority {
+					slog.Warn("命令已被更高优先级插件注册，忽略当前插件", "command", command, "current", w.Name, "exist", exist.Name)
+					continue
+				}
+				slog.Warn("命令注册被更高优先级插件覆盖", "command", command, "current", w.Name, "exist", exist.Name)
+			}
+			commandIndex[command] = w
+		}
 	}
 }

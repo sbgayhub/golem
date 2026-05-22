@@ -12,6 +12,7 @@ var defaultCommandRegistry = NewCommandRegistry()
 // CommandRegistry 收集命令声明与处理函数
 type CommandRegistry struct {
 	items map[string]*commandDefinition
+	keys  []string
 }
 
 type commandDefinition struct {
@@ -27,6 +28,11 @@ type commandInvoker func(*Command) (string, error)
 // RegisterCommand 注册到默认命令注册器，schema 由 handler 参数类型自动推导
 func RegisterCommand[T any](handler CommandHandler[T]) error {
 	return registerCommand(defaultCommandRegistry, handler)
+}
+
+// RegisterCommandTo 注册到指定命令注册器，schema 由 handler 参数类型自动推导
+func RegisterCommandTo[T any](r *CommandRegistry, handler CommandHandler[T]) error {
+	return registerCommand(r, handler)
 }
 
 // CommandCommands 返回默认注册器中的主命令集合
@@ -80,6 +86,9 @@ func (r *CommandRegistry) register(schema *CommandSchema, handler commandInvoker
 		return fmt.Errorf("command handler is nil")
 	}
 	key := commandKey(schema.Main, schema.Sub)
+	if _, ok := r.items[key]; !ok {
+		r.keys = append(r.keys, key)
+	}
 	r.items[key] = &commandDefinition{
 		handler: handler,
 		schema:  schema,
@@ -91,7 +100,11 @@ func (r *CommandRegistry) register(schema *CommandSchema, handler commandInvoker
 func (r *CommandRegistry) Commands() []string {
 	seen := map[string]struct{}{}
 	values := make([]string, 0, len(r.items))
-	for _, def := range r.items {
+	for _, key := range r.keys {
+		def := r.items[key]
+		if def == nil {
+			continue
+		}
 		if _, ok := seen[def.schema.Main]; ok {
 			continue
 		}
@@ -104,7 +117,11 @@ func (r *CommandRegistry) Commands() []string {
 // Schemas 返回全部命令 schema
 func (r *CommandRegistry) Schemas() []*CommandSchema {
 	values := make([]*CommandSchema, 0, len(r.items))
-	for _, def := range r.items {
+	for _, key := range r.keys {
+		def := r.items[key]
+		if def == nil {
+			continue
+		}
 		values = append(values, def.schema)
 	}
 	return values

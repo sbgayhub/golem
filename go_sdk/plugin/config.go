@@ -1,9 +1,10 @@
 package plugin
 
 import (
-	"encoding/json"
 	"errors"
 	"reflect"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // ConfigAbility 配置能力结构体，插件嵌入以声明配置
@@ -30,7 +31,7 @@ func (c *ConfigAbility[T]) SaveConfig(p Plugin) error {
 	if c.hostSave == nil {
 		return errors.New("config save ability not injected")
 	}
-	data, err := json.Marshal(c.Config)
+	data, err := toml.Marshal(c.Config)
 	if err != nil {
 		return err
 	}

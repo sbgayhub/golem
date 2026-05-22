@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-plugin"
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sbgayhub/golem/sdk/cdn"
 	"github.com/sbgayhub/golem/sdk/contact"
 	"github.com/sbgayhub/golem/sdk/message"
@@ -461,7 +462,7 @@ func (s *server) GetDefaultConfig(ctx context.Context, _ *GetDefaultConfig_Reque
 		return &GetDefaultConfig_Response{}, nil
 	}
 	slog.Debug("[plugin wrapper] 插件默认配置", "config", field.Interface())
-	data, err := json.Marshal(field.Interface())
+	data, err := toml.Marshal(field.Interface())
 	if err != nil {
 		return nil, err
 	}
@@ -474,7 +475,7 @@ func (s *server) SetConfig(ctx context.Context, req *SetConfig_Request) (*SetCon
 		return &SetConfig_Response{Result: false}, nil
 	}
 	slog.Debug("[plugin wrapper] 注入插件配置", "config", string(req.Data))
-	if err := json.Unmarshal(req.Data, field.Addr().Interface()); err != nil {
+	if err := toml.Unmarshal(req.Data, field.Addr().Interface()); err != nil {
 		return &SetConfig_Response{Result: false}, err
 	}
 	return &SetConfig_Response{Result: true}, nil

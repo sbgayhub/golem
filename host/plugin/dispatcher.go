@@ -21,7 +21,7 @@ func dispatcher() {
 	for e := range events {
 		slog.Debug("消费事件", "topic", e.Topic)
 
-		for _, p := range plugins {
+		for _, p := range pluginSnapshot() {
 			// 跳过禁用的插件
 			if p.Config != nil && !p.Config.Enable {
 				continue

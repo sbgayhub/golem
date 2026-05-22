@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/sbgayhub/golem/sdk/contact"
 	sdk "github.com/sbgayhub/golem/sdk/plugin"
 )
@@ -79,19 +80,18 @@ func (h *hostService) CallPlugin(_ context.Context, req *sdk.CallPlugin_Request)
 }
 
 func (h *hostService) SaveConfig(_ context.Context, req *sdk.SaveConfig_Request) (*sdk.SaveConfig_Response, error) {
-	mu.Lock()
-	w := findWrapperByName(req.PluginId)
-	mu.Unlock()
-
-	if w == nil {
-		return &sdk.SaveConfig_Response{Message: "插件不存在: " + req.PluginId}, nil
-	}
-
-	var cfg any
-	if err := json.Unmarshal(req.Data, &cfg); err != nil {
+	var cfg map[string]any
+	if err := toml.Unmarshal(req.Data, &cfg); err != nil {
 		return &sdk.SaveConfig_Response{Message: "反序列化配置失败: " + err.Error()}, nil
 	}
 
+	mu.Lock()
+	defer mu.Unlock()
+
+	w := findWrapperByName(req.PluginId)
+	if w == nil {
+		return &sdk.SaveConfig_Response{Message: "插件不存在: " + req.PluginId}, nil
+	}
 	w.Config.Config = cfg
 	if err := saveConfig(); err != nil {
 		return &sdk.SaveConfig_Response{Message: "保存配置失败: " + err.Error()}, nil

@@ -42,7 +42,7 @@ func Build(data *contactapi.ModifyContact) (*contact.Contact, error) {
 			Signature: data.GetSignature(),
 		}
 		result.Data = &contact.Contact_Friend{Friend: &friend}
-	case contact.ContactType_CONTACT_TYPE_GROUP:
+	case contact.ContactType_CONTACT_TYPE_CHATROOM:
 		chatroom := contact.Chatroom{
 			Owner: data.GetChatroomOwner(),
 		}
@@ -65,7 +65,7 @@ func getType(data *contactapi.ModifyContact) contact.ContactType {
 	}
 	// 群组
 	if data.GetChatroomOwner() != "" {
-		return contact.ContactType_CONTACT_TYPE_GROUP
+		return contact.ContactType_CONTACT_TYPE_CHATROOM
 	}
 	// 公众号
 	if strings.HasPrefix(data.Username.Value, "gh_") {

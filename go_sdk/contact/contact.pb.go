@@ -28,9 +28,9 @@ type ContactType int32
 const (
 	ContactType_CONTACT_TYPE_UNSPECIFIED ContactType = 0
 	ContactType_CONTACT_TYPE_SELF        ContactType = 1
-	ContactType_CONTACT_TYPE_FRIEND      ContactType = 2
-	ContactType_CONTACT_TYPE_GROUP       ContactType = 3
-	ContactType_CONTACT_TYPE_OFFICIAL    ContactType = 4
+	ContactType_CONTACT_TYPE_FRIEND   ContactType = 2
+	ContactType_CONTACT_TYPE_CHATROOM ContactType = 3
+	ContactType_CONTACT_TYPE_OFFICIAL ContactType = 4
 	ContactType_CONTACT_TYPE_SPECIAL     ContactType = 5
 )
 

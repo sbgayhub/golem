@@ -45,7 +45,7 @@ func Initial() {
 
 	// 从api获取数据
 	stream.Of(contact.Instance.List()...).
-		Filter(func(item *contact.Contact) bool { return item.Type == contact.ContactType_CONTACT_TYPE_GROUP }).
+		Filter(func(item *contact.Contact) bool { return item.Type == contact.ContactType_CONTACT_TYPE_CHATROOM }).
 		ForEach(func(item *contact.Contact) {
 			if chatroom, err := contactapi.Get().Detail([]string{item.Username}); err != nil {
 				slog.Warn("[chatroom ability] 获取群组信息失败", "chatroom", item.Nickname, "err", err)

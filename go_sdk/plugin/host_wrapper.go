@@ -40,10 +40,10 @@ type CallerClient struct {
 	Client HostServiceClient
 }
 
-func (c CallerClient) CallPlugin(pluginId string, method string, args map[string]string) (string, error) {
+func (c CallerClient) CallPlugin(capability string, args map[string]string) (string, error) {
 	data, _ := json.Marshal(args)
 	resp, err := c.Client.CallPlugin(context.Background(), &CallPlugin_Request{
-		Capability: method,
+		Capability: capability,
 		Args:       data,
 	})
 	if err != nil {

@@ -59,11 +59,11 @@ func (h *hostService) CallPlugin(_ context.Context, req *sdk.CallPlugin_Request)
 	mu.Unlock()
 
 	if target == nil {
-		return &sdk.CallPlugin_Response{Value: "无提供对应能力的插件: " + req.Capability}, nil
+		return &sdk.CallPlugin_Response{Value: "未找到可用能力： " + req.Capability}, nil
 	}
 
 	if target.calledPlugin == nil {
-		return &sdk.CallPlugin_Response{Value: "插件不支持命令"}, nil
+		return &sdk.CallPlugin_Response{Value: "插件不支持调用能力： " + req.Capability}, nil
 	}
 
 	// 反序列化 args (bytes → map[string]string)

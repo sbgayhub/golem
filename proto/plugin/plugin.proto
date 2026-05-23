@@ -37,13 +37,6 @@ message SessionExpired {
   string reason = 3; // 到期原因: timeout
 }
 
-// CallEvent 调用事件
-message CallEvent {
-  string method = 1; // 方法
-  string args = 2; // 参数
-}
-
-
 // HostService 宿主提供的插件相关服务
 service HostService {
   // 会话劫持接口
@@ -92,7 +85,8 @@ message GetMetadata{
 
 message OnCall{
   message Request {
-    CallEvent value = 1;
+    string capability = 1; // 调用能力
+    bytes args = 2; // 参数(JSON编码的map[string]string)
   }
   message Response {
     string result = 1; // 结果
@@ -172,7 +166,7 @@ message SessionRelease{
 
 message CallPlugin{
   message Request {
-    string capability = 1; // 调用方法
+    string capability = 1; // 调用能力
     bytes args = 2; // 参数(JSON编码的map[string]string)
   }
   message Response {

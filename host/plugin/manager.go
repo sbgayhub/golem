@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	mu           sync.Mutex
-	plugins      []*wrapper
-	commandIndex = map[string]*wrapper{} // 命令索引
+	mu              sync.Mutex
+	plugins         []*wrapper
+	commandIndex    = map[string]*wrapper{} // 命令索引
+	capabilityIndex = map[string]*wrapper{} // 能力索引
 )
 
 // 插件包装
@@ -112,6 +113,7 @@ func LoadPlugin(name string) error {
 	plugins = append(plugins, w)
 	sortPlugins()
 	rebuildCommandIndex()
+	rebuildCapabilityIndex()
 	mu.Unlock()
 
 	slog.Info("插件加载成功", "name", metadata.Name, "priority", metadata.Priority, "version", metadata.Version)
@@ -131,6 +133,7 @@ func UnloadPlugin(name string) error {
 	}
 	plugins = slices.Delete(plugins, index, index+1)
 	rebuildCommandIndex()
+	rebuildCapabilityIndex()
 	mu.Unlock()
 
 	if lifecycle, ok := (*w.plugin).(plugin.Lifecycle); ok {
@@ -226,6 +229,7 @@ func newWrapper(metadata *plugin.Metadata, cfg *Config, p *plugin.Plugin) *wrapp
 	if ab, ok := (*p).(plugin.Ability); ok {
 		w.abilities = ab.GetAbilities()
 	}
+	slog.Debug("插件wrapper创建完成", "name", w.Name, "types", w.types)
 	return w
 }
 
@@ -274,6 +278,24 @@ func rebuildCommandIndex() {
 				slog.Warn("命令注册被更高优先级插件覆盖", "command", command, "current", w.Name, "exist", exist.Name)
 			}
 			commandIndex[command] = w
+		}
+	}
+}
+
+func rebuildCapabilityIndex() {
+	capabilityIndex = map[string]*wrapper{}
+	for _, w := range plugins {
+		if w.Config != nil && !w.Config.Enable {
+			continue
+		}
+		if w.calledPlugin == nil {
+			continue
+		}
+		for _, capability := range w.capabilities {
+			if _, exist := capabilityIndex[capability]; exist {
+				continue
+			}
+			capabilityIndex[capability] = w
 		}
 	}
 }

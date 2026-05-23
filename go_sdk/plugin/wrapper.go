@@ -80,12 +80,22 @@ func (c client) GetCapabilities() []string {
 	}
 }
 
-func (c client) OnCall(method string, args any) (any, error) {
-	if data, err := c.client.OnCall(context.Background(), &OnCall_Request{}); err != nil {
-		return nil, err
-	} else {
-		return data, nil
+func (c client) OnCall(capability string, args map[string]string) (string, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", err
 	}
+	resp, err := c.client.OnCall(context.Background(), &OnCall_Request{
+		Capability: capability,
+		Args:       data,
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp != nil && resp.Message != "" {
+		return "", errors.New(resp.Message)
+	}
+	return resp.GetResult(), nil
 }
 func (c client) GetCommands() []string {
 	if data, err := c.client.GetCommands(context.Background(), &GetCommands_Request{}); err != nil {
@@ -241,12 +251,11 @@ func (s *server) GetMetadata(ctx context.Context, request *GetMetadata_Request) 
 
 func (s *server) OnCall(ctx context.Context, request *OnCall_Request) (*OnCall_Response, error) {
 	if cp, ok := s.impl.(CalledPlugin); ok {
-		// 将 CallEvent.Args(string) 解析为 map[string]string
 		var args map[string]string
-		if request.Value != nil && request.Value.Args != "" {
-			_ = json.Unmarshal([]byte(request.Value.Args), &args)
+		if len(request.Args) > 0 {
+			_ = json.Unmarshal(request.Args, &args)
 		}
-		result, err := cp.OnCall(request.Value.Method, args)
+		result, err := cp.OnCall(request.Capability, args)
 		if err != nil {
 			return &OnCall_Response{Message: err.Error()}, nil
 		}
@@ -281,7 +290,7 @@ func (s *server) GetCapabilities(ctx context.Context, request *GetCapabilities_R
 	if cp, ok := s.impl.(CalledPlugin); ok {
 		return &GetCapabilities_Response{Values: cp.GetCapabilities()}, nil
 	}
-	return nil, errors.New("[plugin wrapper] 插件不支持获取调用能力事件")
+	return nil, errors.New("[plugin wrapper] 插件不支持获取调用能力")
 }
 
 func (s *server) GetSubscriptions(ctx context.Context, request *GetSubscriptions_Request) (*GetSubscriptions_Response, error) {
@@ -304,7 +313,7 @@ func (s *server) GetCommands(ctx context.Context, request *GetCommands_Request) 
 		}
 		return &GetCommands_Response{Values: cp.GetCommands(), Schemas: schemas}, nil
 	}
-	return nil, errors.New("[plugin wrapper] 插件不支持获取调用能力事件")
+	return nil, errors.New("[plugin wrapper] 插件不支持获取命令")
 }
 
 func (s *server) OnLoad(ctx context.Context, request *OnLifecycle_Request) (*OnLifecycle_Response, error) {

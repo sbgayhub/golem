@@ -2,7 +2,6 @@ package plugin
 
 import (
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -27,10 +26,8 @@ type session struct {
 // --- 内部辅助函数 ---
 
 func findWrapper(capability string) *wrapper {
-	for _, w := range plugins {
-		if slices.Contains(w.capabilities, capability) {
-			return w
-		}
+	if w := capabilityIndex[capability]; w != nil {
+		return w
 	}
 	return nil
 }

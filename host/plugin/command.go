@@ -1,11 +1,15 @@
 package plugin
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/sbgayhub/golem/sdk/contact"
+	"github.com/sbgayhub/golem/sdk/message"
 	sdk "github.com/sbgayhub/golem/sdk/plugin"
 )
 
@@ -17,19 +21,70 @@ type parsedCommand struct {
 }
 
 // HandleCommand 尝试处理文本命令
-func HandleCommand(raw string, sender *contact.Contact) (string, bool, error) {
+func HandleCommand(raw string, sender *contact.Contact) (*message.Message, bool) {
 	parsed, ok, err := parseCommand(raw, sender)
-	if !ok || err != nil {
-		return "", ok, err
+	if !ok {
+		return nil, ok
+	}
+	if err != nil {
+		if bytes := text2image(err.Error()); bytes != nil {
+			return &message.Message{
+				Type:     message.TypeImage,
+				Receiver: sender,
+				Content:  "命令错误",
+				Data:     &message.Message_Image{Image: &message.ImageData{Media: &message.Media{Data: bytes}}},
+			}, true
+		}
+		return &message.Message{
+			Type:     message.TypeImage,
+			Receiver: sender,
+			Content:  err.Error(),
+		}, true
 	}
 	if parsed.help != "" {
-		return parsed.help, true, nil
+		if bytes := text2image(parsed.help); bytes != nil {
+			return &message.Message{
+				Type:     message.TypeImage,
+				Receiver: sender,
+				Content:  "命令错误",
+				Data:     &message.Message_Image{Image: &message.ImageData{Media: &message.Media{Data: bytes}}},
+			}, true
+		}
+		return &message.Message{
+			Type:     message.TypeImage,
+			Receiver: sender,
+			Content:  parsed.help,
+		}, true
 	}
 	result, err := (*parsed.wrapper.commandPlugin).OnCommand(parsed.cmd)
 	if err != nil {
-		return "", true, err
+		return &message.Message{
+			Type:     message.TypeImage,
+			Receiver: sender,
+			Content:  err.Error(),
+		}, true
 	}
-	return result, true, nil
+	return &message.Message{
+		Type:     message.TypeImage,
+		Receiver: sender,
+		Content:  result,
+	}, true
+}
+
+func text2image(text string) []byte {
+	if w, ex := capabilityIndex["text.to.image"]; ex {
+		if called, err := (*w.calledPlugin).OnCall("text.to.image", map[string]string{"text": text}); err != nil {
+			slog.Warn("[text.to.image] 能力调用失败", "plugin", w.Name, "err", err)
+			return nil
+		} else {
+			if bytes, err := base64.StdEncoding.DecodeString(called); err != nil {
+				return nil
+			} else {
+				return bytes
+			}
+		}
+	}
+	return nil
 }
 
 func parseCommand(raw string, sender *contact.Contact) (*parsedCommand, bool, error) {
@@ -266,7 +321,7 @@ func applyArguments(cmd *sdk.Command, schema *sdk.CommandSchema, values []string
 
 func renderMainHelp(main string, schemas []*sdk.CommandSchema) string {
 	lines := []string{"命令：/" + main}
-	var subcommands []string
+	var subcommands []*sdk.CommandSchema
 	for _, schema := range schemas {
 		if schema.GetMain() != main {
 			continue
@@ -277,15 +332,14 @@ func renderMainHelp(main string, schemas []*sdk.CommandSchema) string {
 			}
 			continue
 		}
-		line := "  " + schema.GetSub()
-		if schema.GetDescription() != "" {
-			line += "    " + schema.GetDescription()
-		}
-		subcommands = append(subcommands, line)
+		subcommands = append(subcommands, schema)
 	}
 	if len(subcommands) > 0 {
 		lines = append(lines, "", "子命令：")
-		lines = append(lines, subcommands...)
+		subNameWidth := subcommandNameWidth(subcommands)
+		for _, schema := range subcommands {
+			lines = append(lines, formatSubcommandHelp(schema, subNameWidth))
+		}
 		lines = append(lines, "", "使用 /"+main+" <子命令> -h 查看详细帮助")
 	}
 	return strings.Join(lines, "\n")
@@ -305,30 +359,32 @@ func renderCommandHelp(schema *sdk.CommandSchema) string {
 	}
 	if len(schema.GetArguments()) > 0 {
 		lines = append(lines, "", "位置参数：")
+		nameWidth := argumentNameWidth(schema.GetArguments())
 		for _, arg := range schema.GetArguments() {
-			lines = append(lines, formatArgumentHelp(arg))
+			lines = append(lines, formatArgumentHelp(arg, nameWidth))
 		}
 	}
+	optNameWidth := optionNameWidth(schema.GetOptions())
 	if len(schema.GetOptions()) > 0 {
 		lines = append(lines, "", "参数：")
 		for _, opt := range schema.GetOptions() {
-			lines = append(lines, formatOptionHelp(opt))
+			lines = append(lines, formatOptionHelp(opt, optNameWidth))
 		}
 	}
 	if len(schema.GetExamples()) > 0 {
 		lines = append(lines, "", "示例：")
 		lines = append(lines, schema.GetExamples()...)
 	}
-	lines = append(lines, "", "-h, --help    显示帮助信息")
+	lines = append(lines, "", formatHelpOption(optNameWidth))
 	return strings.Join(lines, "\n")
 }
 
-func formatArgumentHelp(arg *sdk.CommandArgument) string {
+func formatArgumentHelp(arg *sdk.CommandArgument, nameWidth int) string {
 	state := "可选"
 	if arg.GetRequired() {
 		state = "必填"
 	}
-	line := fmt.Sprintf("  %s    %s", arg.GetName(), state)
+	line := fmt.Sprintf("  %-*s    %s", nameWidth, arg.GetName(), state)
 	if arg.GetDescription() != "" {
 		line += "  " + arg.GetDescription()
 	}
@@ -338,19 +394,13 @@ func formatArgumentHelp(arg *sdk.CommandArgument) string {
 	return line
 }
 
-func formatOptionHelp(opt *sdk.CommandOption) string {
-	var names []string
-	if opt.GetShort() != "" {
-		names = append(names, "-"+opt.GetShort())
-	}
-	if opt.GetLong() != "" {
-		names = append(names, "--"+opt.GetLong())
-	}
+func formatOptionHelp(opt *sdk.CommandOption, nameWidth int) string {
+	names := optionNames(opt)
 	state := "可选"
 	if opt.GetRequired() {
 		state = "必填"
 	}
-	line := fmt.Sprintf("  %s    %s", strings.Join(names, ", "), state)
+	line := fmt.Sprintf("  %-*s    %s", nameWidth, names, state)
 	if opt.GetDescription() != "" {
 		line += "  " + opt.GetDescription()
 	}
@@ -358,6 +408,57 @@ func formatOptionHelp(opt *sdk.CommandOption) string {
 		line += "，默认 " + opt.GetDefaultValue()
 	}
 	return line
+}
+
+func optionNames(opt *sdk.CommandOption) string {
+	var names []string
+	if opt.GetShort() != "" {
+		names = append(names, "-"+opt.GetShort())
+	}
+	if opt.GetLong() != "" {
+		names = append(names, "--"+opt.GetLong())
+	}
+	return strings.Join(names, ", ")
+}
+
+func formatSubcommandHelp(schema *sdk.CommandSchema, nameWidth int) string {
+	line := fmt.Sprintf("  %-*s", nameWidth, schema.GetSub())
+	if schema.GetDescription() != "" {
+		line += "    " + schema.GetDescription()
+	}
+	return line
+}
+
+func formatHelpOption(nameWidth int) string {
+	name := "-h, --help"
+	if nameWidth < utf8.RuneCountInString(name) {
+		nameWidth = utf8.RuneCountInString(name)
+	}
+	return fmt.Sprintf("%-*s    显示帮助信息", nameWidth, name)
+}
+
+func argumentNameWidth(args []*sdk.CommandArgument) int {
+	var width int
+	for _, arg := range args {
+		width = max(width, utf8.RuneCountInString(arg.GetName()))
+	}
+	return width
+}
+
+func subcommandNameWidth(schemas []*sdk.CommandSchema) int {
+	var width int
+	for _, schema := range schemas {
+		width = max(width, utf8.RuneCountInString(schema.GetSub()))
+	}
+	return width
+}
+
+func optionNameWidth(options []*sdk.CommandOption) int {
+	var width int
+	for _, opt := range options {
+		width = max(width, utf8.RuneCountInString(optionNames(opt)))
+	}
+	return width
 }
 
 func isHelpToken(token string) bool {

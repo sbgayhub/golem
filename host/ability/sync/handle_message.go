@@ -19,11 +19,9 @@ func handleMessage(messages []*messageapi.NewMessage) {
 		} else {
 			log(data)
 
-			if result, ok, err := plugin.HandleCommand(data.GetContent(), data.GetSender()); ok {
-				if err != nil {
-					reply(data, err.Error())
-				} else if result != "" {
-					reply(data, result)
+			if msg, ok := plugin.HandleCommand(data.GetContent(), data.GetSender()); ok {
+				if _, err := messagesdk.Instance.Send(msg); err != nil {
+					slog.Warn("命令回复失败", "receiver", data.GetSender().GetUsername(), "err", err)
 				}
 				continue
 			}
@@ -36,22 +34,6 @@ func handleMessage(messages []*messageapi.NewMessage) {
 				},
 			})
 		}
-	}
-}
-
-func reply(message *messagesdk.Message, content string) {
-	receiver := message.GetSender()
-	if receiver == nil {
-		slog.Warn("命令回复失败，接收者为空", "content", content)
-		return
-	}
-	text := messagesdk.Message{
-		Type:     messagesdk.TypeText,
-		Receiver: receiver,
-		Content:  content,
-	}
-	if _, err := messagesdk.Instance.Send(&text); err != nil {
-		slog.Warn("命令回复失败", "receiver", receiver.GetUsername(), "err", err)
 	}
 }
 

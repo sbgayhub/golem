@@ -39,7 +39,7 @@ type pmInfoCommand struct {
 }
 
 type pmSetCommand struct {
-	_         struct{} `cmd:"pm set" help:"修改插件运行配置" usage:"/pm set <name> [-p priority] [-a true|false] [-n true|false] [-c config]" example:"/pm set example -p 10\n/pm set example -a true -n false\n/pm set example -c \"name='张三'\nage=18\""`
+	_         struct{} `cmd:"pm set" help:"修改插件运行配置" usage:"/pm set <name> [-p priority] [-a true|false] [-n true|false] [-c config]" example:"/pm set example -p 10\n/pm set example -a true -n false\n/pm set example -c \"name='张三'\\nage=18\""`
 	Name      string   `arg:"name" help:"插件名称" required:"true"`
 	Priority  *int32   `flag:"p,priority" help:"插件优先级"`
 	AlwaysRun *bool    `flag:"a,always_run" help:"是否一直运行"`
@@ -74,6 +74,7 @@ func registerBuiltinPM() error {
 	plugins = append(plugins, w)
 	sortPlugins()
 	rebuildCommandIndex()
+	rebuildCapabilityIndex()
 	return nil
 }
 
@@ -253,6 +254,7 @@ func (p *pmCommandPlugin) set(cmd pmSetCommand) (string, error) {
 	applyMetadataConfig(w.Metadata, w.Config)
 	sortPlugins()
 	rebuildCommandIndex()
+	rebuildCapabilityIndex()
 	err := saveConfig()
 	mu.Unlock()
 	if err != nil {

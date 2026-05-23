@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/sbgayhub/golem/host/api"
 )
 
 // web 消息服务 web 实现
@@ -131,11 +133,11 @@ func (w web) SendApp(receiver, xml string, typ int32) (*SendAppMessageResponse, 
 func (w web) SendLink(receiver, title, desc, url, thumbUrl string) (*SendAppMessageResponse, error) {
 	var resp SendAppMessageResponse
 	if err := api.GetHttp().Post("/api/message/link").Body(map[string]any{
-		"receiver":    receiver,
-		"title":       title,
-		"description": desc,
-		"url":         url,
-		"thumb_url":   thumbUrl,
+		"receiver":  receiver,
+		"title":     title,
+		"desc":      desc,
+		"url":       url,
+		"thumb_url": thumbUrl,
 	}).DoProto(&resp); err != nil {
 		return nil, err
 	}
@@ -160,12 +162,12 @@ func (w web) SendCard(receiver, cardUsername, cardNickname, cardAlias string) (*
 func (w web) SendPosition(receiver, label, poiName string, lon, lat, scale float64) (*SendMessageResponse, error) {
 	var resp SendMessageResponse
 	if err := api.GetHttp().Post("/api/message/position").Body(map[string]any{
-		"receiver":  receiver,
-		"label":     label,
-		"poi_name":  poiName,
-		"longitude": lon,
-		"latitude":  lat,
-		"scale":     scale,
+		"receiver": receiver,
+		"label":    label,
+		"poi_name": poiName,
+		"lon":      lon,
+		"lat":      lat,
+		"scale":    scale,
 	}).DoProto(&resp); err != nil {
 		return nil, err
 	}
@@ -191,10 +193,10 @@ func (w web) ForwardFile(receiver, xml string) (*SendAppMessageResponse, error) 
 func (w web) Revoke(receiver string, newMsgId, clientMsgId, timestamp uint64) (*RevokeMessageResponse, error) {
 	var resp RevokeMessageResponse
 	if err := api.GetHttp().Post("/api/message/revoke").Body(map[string]any{
-		"receiver":      receiver,
-		"new_msg_id":    newMsgId,
-		"client_msg_id": clientMsgId,
-		"timestamp":     timestamp,
+		"receiver":    receiver,
+		"new_id":      newMsgId,
+		"client_id":   clientMsgId,
+		"create_time": timestamp,
 	}).DoProto(&resp); err != nil {
 		return nil, err
 	}

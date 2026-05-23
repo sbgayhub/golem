@@ -28,9 +28,9 @@ type ContactType int32
 const (
 	ContactType_CONTACT_TYPE_UNSPECIFIED ContactType = 0
 	ContactType_CONTACT_TYPE_SELF        ContactType = 1
-	ContactType_CONTACT_TYPE_FRIEND   ContactType = 2
-	ContactType_CONTACT_TYPE_CHATROOM ContactType = 3
-	ContactType_CONTACT_TYPE_OFFICIAL ContactType = 4
+	ContactType_CONTACT_TYPE_FRIEND      ContactType = 2
+	ContactType_CONTACT_TYPE_CHATROOM    ContactType = 3
+	ContactType_CONTACT_TYPE_OFFICIAL    ContactType = 4
 	ContactType_CONTACT_TYPE_SPECIAL     ContactType = 5
 )
 
@@ -40,7 +40,7 @@ var (
 		0: "CONTACT_TYPE_UNSPECIFIED",
 		1: "CONTACT_TYPE_SELF",
 		2: "CONTACT_TYPE_FRIEND",
-		3: "CONTACT_TYPE_GROUP",
+		3: "CONTACT_TYPE_CHATROOM",
 		4: "CONTACT_TYPE_OFFICIAL",
 		5: "CONTACT_TYPE_SPECIAL",
 	}
@@ -48,7 +48,7 @@ var (
 		"CONTACT_TYPE_UNSPECIFIED": 0,
 		"CONTACT_TYPE_SELF":        1,
 		"CONTACT_TYPE_FRIEND":      2,
-		"CONTACT_TYPE_GROUP":       3,
+		"CONTACT_TYPE_CHATROOM":    3,
 		"CONTACT_TYPE_OFFICIAL":    4,
 		"CONTACT_TYPE_SPECIAL":     5,
 	}
@@ -1711,12 +1711,12 @@ const file_contact_contact_proto_rawDesc = "" +
 	"from_scene\x18\x02 \x01(\rR\tfromScene\x12!\n" +
 	"\fsearch_scene\x18\x03 \x01(\rR\vsearchScene\x1a8\n" +
 	"\bResponse\x12,\n" +
-	"\bcontacts\x18\x01 \x01(\v2\x10.contact.ContactR\bcontacts*\xa8\x01\n" +
+	"\bcontacts\x18\x01 \x01(\v2\x10.contact.ContactR\bcontacts*\xab\x01\n" +
 	"\vContactType\x12\x1c\n" +
 	"\x18CONTACT_TYPE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CONTACT_TYPE_SELF\x10\x01\x12\x17\n" +
-	"\x13CONTACT_TYPE_FRIEND\x10\x02\x12\x16\n" +
-	"\x12CONTACT_TYPE_GROUP\x10\x03\x12\x19\n" +
+	"\x13CONTACT_TYPE_FRIEND\x10\x02\x12\x19\n" +
+	"\x15CONTACT_TYPE_CHATROOM\x10\x03\x12\x19\n" +
 	"\x15CONTACT_TYPE_OFFICIAL\x10\x04\x12\x18\n" +
 	"\x14CONTACT_TYPE_SPECIAL\x10\x052\xf7\x04\n" +
 	"\x0eContactService\x122\n" +

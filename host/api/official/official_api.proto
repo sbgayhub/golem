@@ -1,0 +1,94 @@
+syntax = "proto3";
+
+package api.official;
+
+option go_package = "github.com/sbgayhub/golem/host/api/official;officialapi";
+
+import "api/base/base.proto";
+import "google/protobuf/wrappers.proto";
+
+// GetA8KeyResponse 获取公众号 A8Key 响应（镜像 golem.official.GetA8KeyResponse）
+message GetA8KeyResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional string full_url = 2;
+  optional string a8_key = 3;
+  optional string action_code = 4;
+  optional string title = 5;
+  optional string content = 6;
+  optional JSAPIPermissionBitSet jsapi_permission = 7;
+  optional google.protobuf.UInt32Value general_control = 8;
+  optional string user_name = 9;
+  optional string share_url = 15;
+  optional uint32 scope_count = 16;
+  repeated BizScopeInfo scope_list = 17;
+  optional string antispam_ticket = 18;
+  optional string ssid = 20;
+  optional string mid = 21;
+  optional google.protobuf.UInt64Value deep_link = 22;
+  optional .api.base.Buffer jsapi_control_bytes = 23;
+  optional uint32 http_header_count = 24;
+  repeated HttpHeader http_header_list = 25;
+  optional string wording = 26;
+  optional string avatar = 27;
+  optional .api.base.Buffer cookie = 28;
+  optional string menu_wording = 29;
+
+  // JSAPIPermissionBitSet JSAPI 权限位集
+  message JSAPIPermissionBitSet {
+    optional uint32 value1 = 1;
+    optional uint32 value2 = 2;
+    optional uint32 value3 = 3;
+    optional uint32 value4 = 4;
+  }
+
+  // BizScopeInfo 业务授权范围信息
+  message BizScopeInfo {
+    optional string scope = 1;
+    optional uint32 scope_status = 2;
+    optional string scope_description = 3;
+    optional uint32 api_count = 4;
+    repeated google.protobuf.StringValue api_list = 5;
+  }
+
+  // HttpHeader HTTP 头
+  message HttpHeader {
+    optional string key = 1;
+    optional string value = 2;
+  }
+}
+
+// JSAPIPreVerifyResponse JSAPI 预验证响应（镜像 golem.official.JSAPIPreVerifyResponse）
+message JSAPIPreVerifyResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional JSAPIResult jsapi_result = 2;
+  repeated string verify_info_list = 3;
+  repeated string domain_path_list = 4;
+  optional string app_avatar_url = 5;
+  optional string app_nickname = 6;
+
+  // JSAPIResult JSAPI 基础响应
+  message JSAPIResult {
+    optional int32 code = 1;
+    optional string error = 2;
+    optional string json = 3;
+  }
+}
+
+// OauthAuthorizeResponse OAuth 授权响应（镜像 golem.official.OauthAuthorizeResponse）
+message OauthAuthorizeResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  repeated bytes scope_list = 2;
+  optional string app_name = 4;
+  optional string app_icon_url = 5;
+  optional string redirect_url = 6;
+  optional bool is_recent_has_auth = 9;
+  optional bool is_silent_auth = 10;
+  optional bool is_call_server_when_confirm = 11;
+}
+
+// ArticleResult 公众号文章操作结果（golem 普通 Go struct）
+message ArticleResult {
+  string response_body = 1;
+  string cookies = 2;
+  map<string, string> headers = 3;
+}

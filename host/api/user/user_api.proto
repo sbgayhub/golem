@@ -1,0 +1,224 @@
+syntax = "proto3";
+
+package api.user;
+
+option go_package = "github.com/sbgayhub/golem/host/api/user;userapi";
+
+import "api/base/base.proto";
+import "api/message/sync_types.proto";
+import "google/protobuf/wrappers.proto";
+
+// GetProfileResponse 获取用户资料响应（镜像 golem.user.GetProfileResponse）
+message GetProfileResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.message.ModifyUserInfo user_info = 2;
+  optional .api.message.UserInfoExtend user_info_ext = 3;
+}
+
+// UploadAvatarResponse 上传高清头像响应（镜像 golem.user.UploadAvatarResponse）
+message UploadAvatarResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional uint32 size = 2;
+  optional uint32 offset = 3;
+  optional string final_md5 = 4;
+  optional string big_avatar_url = 5;
+  optional string small_avatar_url = 6;
+}
+
+// GetQRCodeResponse 获取二维码响应（镜像 golem.contact.GetQRCodeResponse）
+message GetQRCodeResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.base.Buffer qrcode_buffer = 2;
+  optional string footer_wording = 3;
+  optional uint32 revoke_qrcode = 4;
+  optional string notify_wording = 5;
+  optional string qrcode_url = 6;
+}
+
+// BindEmailResponse 绑定邮箱响应（镜像 golem.user.BindEmailResponse）
+message BindEmailResponse {
+  optional .api.base.BaseResponse base_response = 1;
+}
+
+// SendVerifyEmailResponse 发送验证邮件响应（镜像 golem.user.SendVerifyEmailResponse）
+message SendVerifyEmailResponse {
+  optional .api.base.BaseResponse base_response = 1;
+}
+
+// BindOpMobileResponse 绑定手机号/发送验证码响应（镜像 golem.user.BindOpMobileResponse）
+message BindOpMobileResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional string ticket = 2;
+  optional string sms_no = 3;
+  optional uint32 need_set_password = 4;
+  optional string password = 5;
+  optional string username = 6;
+  optional .api.base.Hosts new_host_list = 7;
+  optional .api.base.BuiltinIPList builtinIplist = 8;
+  optional .api.base.NetworkControl network_control = 9;
+  optional string authTicket = 10;
+  optional uint32 safeDevice = 11;
+  optional string cc = 12;
+  optional uint32 obsoleteItem1 = 13;
+  optional SafeDeviceList safeDeviceList = 14;
+  optional string pureMobile = 15;
+  optional string formatedMobile = 16;
+  optional ShowStyleKey showStyle = 17;
+  optional uint32 mmtlsControlBitFlag = 18;
+  optional string smsUpCode = 19;
+  optional string smsUpMobile = 20;
+  optional uint32 mobileCheckType = 21;
+  optional string regSessionId = 22;
+  optional uint32 restart = 23;
+
+  // SafeDeviceList 安全设备列表（镜像 golem.user.BindOpMobileResponse.SafeDeviceList）
+  message SafeDeviceList {
+    optional int32 count = 1;
+    repeated SafeDevice list = 2;
+
+    // SafeDevice 安全设备（镜像 golem.user.BindOpMobileResponse.SafeDeviceList.SafeDevice）
+    message SafeDevice {
+      optional string name = 1;
+      optional string uuid = 2;
+      optional string type = 3;
+      optional uint32 create_time = 4;
+    }
+  }
+
+  // ShowStyleKey 展示样式键值（镜像 golem.user.BindOpMobileResponse.ShowStyleKey）
+  message ShowStyleKey {
+    uint32 key = 1;
+    optional string value = 2;
+  }
+}
+
+// SetPasswordResponse 修改密码响应（镜像 golem.user.SetPasswordResponse）
+message SetPasswordResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.base.Buffer auto_auth_key = 2;
+}
+
+// VerifyPasswordResponse 验证密码响应（镜像 golem.user.VerifyPasswordResponse）
+message VerifyPasswordResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional google.protobuf.StringValue image_sid = 2;
+  optional .api.base.Buffer image_buffer = 3;
+  optional string ticket = 4;
+  optional google.protobuf.StringValue image_encrypt_key = 5;
+  optional .api.base.Buffer a2_Key = 6;
+  optional .api.base.Buffer ksid = 7;
+  optional string auth_key = 8;
+  optional .api.base.Buffer wt_login_response_buffer = 9;
+}
+
+// GetSafetyInfoResponse 获取安全设备列表响应（镜像 golem.user.GetSafetyInfoResponse）
+message GetSafetyInfoResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional SafetyInfo info = 2;
+
+  // SafetyDevice 安全设备（镜像 golem.user.GetSafetyInfoResponse.SafetyDevice）
+  message SafetyDevice {
+    optional string uuid = 1;
+    optional string device_name = 2;
+    optional string device_type = 3;
+    optional uint64 last_time = 4;
+  }
+
+  // SafetyInfo 安全信息（镜像 golem.user.GetSafetyInfoResponse.SafetyInfo）
+  message SafetyInfo {
+    repeated SafetyDevice device_list = 1;
+    optional bool has_voice = 2;
+    optional bool switch_voice = 3;
+    optional bool has_face = 4;
+    optional bool switch_face = 5;
+    optional bool has_password = 6;
+  }
+}
+
+// DeleteSafeDeviceResponse 删除安全设备响应（镜像 golem.user.DeleteSafeDeviceResponse）
+message DeleteSafeDeviceResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional uint64 rest_count = 2;
+}
+
+// GeneralSetResponse 通用设置响应（镜像 golem.user.GeneralSetResponse）
+message GeneralSetResponse {
+  optional .api.base.BaseResponse base_response = 1;
+}
+
+// SportDeviceInfo 运动设备信息（镜像 golem.user.SportDeviceInfo）
+message SportDeviceInfo {
+  optional string bundle_id = 1;
+  optional string app_name = 2;
+  optional uint32 step_count = 3;
+  optional bool is_apple_watch = 4;
+  optional bool is_white_list = 5;
+  optional bool is_local_iphone = 6;
+}
+
+// UploadDeviceStepResponse 上报设备步数响应（镜像 golem.user.UploadDeviceStepResponse）
+message UploadDeviceStepResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional SportDeviceInfo device_info = 2;
+}
+
+// GetBoundHardDevicesResponse 获取绑定硬件设备响应（镜像 golem.user.GetBoundHardDevicesResponse）
+message GetBoundHardDevicesResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional uint32 count = 2;
+  repeated HardDevice list = 5;
+  optional int64 version = 6;
+  optional int64 continue_flag = 7;
+
+  // HardDevice 绑定硬件设备（镜像 golem.user.GetBoundHardDevicesResponse.HardDevice）
+  message HardDevice {
+    optional Device device = 1;
+    optional Attribute attribute = 2;
+    optional uint32 flag = 3;
+
+    // Device 设备信息（镜像 golem.user.GetBoundHardDevicesResponse.HardDevice.Device）
+    message Device {
+      optional string type = 1;
+      optional string id = 2;
+    }
+
+    // Attribute 设备属性（镜像 golem.user.GetBoundHardDevicesResponse.HardDevice.Attribute）
+    message Attribute {
+      optional string brand_name = 1;
+      optional string auth_key = 2;
+      optional string mac = 3;
+      optional string conn_proto = 4;
+      optional uint32 conn_strategy = 5;
+      optional uint32 close_strategy = 6;
+      optional int32 manu_mac_pos = 7;
+      optional int32 ser_mac_pos = 8;
+      optional string attribute_description = 9;
+      optional string alias = 10;
+      optional string icon_url = 11;
+      optional string jump_url = 12;
+      optional string device_title = 13;
+      optional string device_description = 14;
+      optional string category = 15;
+      optional uint32 device_type_main_device = 16;
+      optional uint32 is_enter_my_device = 17;
+      optional int64 ble_simple_protocol = 18;
+      optional string ability = 19;
+      optional string ability_info = 20;
+      optional string serial_number = 21;
+      optional string sub_device_list = 22;
+    }
+  }
+}
+
+// GetCertResponse 获取证书响应（镜像 golem.user.GetCertResponse）
+message GetCertResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional RSACert cert = 2;
+  optional uint32 cert_version = 3;
+
+  // RSACert RSA 证书（镜像 golem.user.GetCertResponse.RSACert）
+  message RSACert {
+    optional string key_n = 1;
+    optional string key_e = 2;
+  }
+}

@@ -1,0 +1,337 @@
+syntax = "proto3";
+
+package user;
+
+// UserService 用户服务
+service UserService {
+  // GetProfile 获取个人信息
+  rpc GetProfile(GetProfile.Request) returns (GetProfile.Response);
+  // UpdateProfile 更新个人信息
+  rpc UpdateProfile(UpdateProfile.Request) returns (UpdateProfile.Response);
+  // UploadAvatar 上传头像
+  rpc UploadAvatar(UploadAvatar.Request) returns (UploadAvatar.Response);
+  // GetQRCode 获取个人二维码
+  rpc GetQRCode(GetQRCode.Request) returns (GetQRCode.Response);
+  // SetPrivacy 设置隐私选项
+  rpc SetPrivacy(SetPrivacy.Request) returns (SetPrivacy.Response);
+  // SetAlias 设置微信号
+  rpc SetAlias(SetAlias.Request) returns (SetAlias.Response);
+  // VerifyPassword 验证密码
+  rpc VerifyPassword(VerifyPassword.Request) returns (VerifyPassword.Response);
+  // SetPassword 设置密码
+  rpc SetPassword(SetPassword.Request) returns (SetPassword.Response);
+  // SendVerifyMobile 发送手机验证码
+  rpc SendVerifyMobile(SendVerifyMobile.Request) returns (SendVerifyMobile.Response);
+  // BindMobile 绑定手机号
+  rpc BindMobile(BindMobile.Request) returns (BindMobile.Response);
+  // BindEmail 绑定邮箱
+  rpc BindEmail(BindEmail.Request) returns (BindEmail.Response);
+  // SendVerifyEmail 发送验证邮件
+  rpc SendVerifyEmail(SendVerifyEmail.Request) returns (SendVerifyEmail.Response);
+  // GetSafetyInfo 获取安全设备列表
+  rpc GetSafetyInfo(GetSafetyInfo.Request) returns (GetSafetyInfo.Response);
+  // DelSafeDevice 删除安全设备
+  rpc DelSafeDevice(DelSafeDevice.Request) returns (DelSafeDevice.Response);
+  // ReportMotion 上报运动步数
+  rpc ReportMotion(ReportMotion.Request) returns (ReportMotion.Response);
+  // GetBoundHardDevices 获取绑定的硬件设备列表
+  rpc GetBoundHardDevices(GetBoundHardDevices.Request) returns (GetBoundHardDevices.Response);
+  // GetCert 获取证书信息
+  rpc GetCert(GetCert.Request) returns (GetCert.Response);
+}
+
+// BaseResult 通用结果
+message BaseResult {
+  int32 code = 1; // 返回码
+  string message = 2; // 返回消息
+}
+
+// OperationResult 操作结果
+message OperationResult {
+  int32 code = 1; // 返回码
+  uint32 count = 2; // 操作数量
+  int32 result_code = 3; // 结果码
+  bytes message = 4; // 返回消息
+}
+
+// Buffer 字节缓冲区
+message Buffer {
+  uint32 size = 1; // 数据长度
+  bytes data = 2; // 数据内容
+}
+
+// Profile 当前用户资料
+message Profile {
+  string username = 1; // wxid
+  string nickname = 2; // 昵称
+  string alias = 3; // 微信号
+  string email = 4; // 邮箱
+  string mobile = 5; // 手机号
+  uint32 uin = 6; // UIN
+  int32 gender = 7; // 性别
+  string country = 8; // 国家
+  string province = 9; // 省份
+  string city = 10; // 城市
+  string signature = 11; // 签名
+  string big_avatar_url = 12; // 大头像 URL
+  string small_avatar_url = 13; // 小头像 URL
+  string safe_mobile = 14; // 安全手机
+}
+
+// QRCode 个人二维码
+message QRCode {
+  Buffer qrcode = 1; // 二维码图片数据
+  string qrcode_url = 2; // 二维码 URL
+  string footer_wording = 3; // 底部文字
+  string notify_wording = 4; // 通知文字
+}
+
+// Avatar 头像上传结果
+message Avatar {
+  uint32 size = 1; // 总长度
+  uint32 offset = 2; // 起始位置
+  string final_md5 = 3; // 最终 MD5
+  string big_avatar_url = 4; // 大头像 URL
+  string small_avatar_url = 5; // 小头像 URL
+}
+
+// MobileResult 手机操作结果
+message MobileResult {
+  BaseResult base_result = 1; // 基础结果
+  string ticket = 2; // 票据
+  string sms_no = 3; // 短信号码
+  uint32 need_set_password = 4; // 是否需要设置密码
+  string username = 5; // 用户名
+  string auth_ticket = 6; // 认证票据
+  string pure_mobile = 7; // 纯手机号
+  string formated_mobile = 8; // 格式化手机号
+  uint32 mobile_check_type = 9; // 手机校验类型
+  string reg_session_id = 10; // 注册会话 ID
+}
+
+// VerifyPasswordResult 验证密码结果
+message VerifyPasswordResult {
+  BaseResult base_result = 1; // 基础结果
+  string image_sid = 2; // 图片会话 ID
+  Buffer image_buffer = 3; // 图片数据
+  string ticket = 4; // 验证票据
+  string image_encrypt_key = 5; // 图片加密密钥
+  Buffer a2_key = 6; // A2 密钥
+  Buffer ksid = 7; // KSID
+  string auth_key = 8; // 认证密钥
+}
+
+// SafetyDevice 安全设备
+message SafetyDevice {
+  string uuid = 1; // 设备 UUID
+  string device_name = 2; // 设备名称
+  string device_type = 3; // 设备类型
+  uint64 last_time = 4; // 最后登录时间
+}
+
+// SafetyInfo 安全信息
+message SafetyInfo {
+  repeated SafetyDevice device_list = 1; // 安全设备列表
+  bool has_voice = 2; // 是否有语音
+  bool switch_voice = 3; // 语音开关
+  bool has_face = 4; // 是否有人脸
+  bool switch_face = 5; // 人脸开关
+  bool has_password = 6; // 是否有密码
+}
+
+// SportDeviceInfo 运动设备信息
+message SportDeviceInfo {
+  string bundle_id = 1; // Bundle ID
+  string app_name = 2; // 应用名称
+  uint32 step_count = 3; // 步数
+  bool is_apple_watch = 4; // 是否 Apple Watch
+  bool is_white_list = 5; // 是否白名单
+  bool is_local_iphone = 6; // 是否本地 iPhone
+}
+
+// HardDevice 绑定硬件设备
+message HardDevice {
+  string type = 1; // 类型
+  string id = 2; // 设备 ID
+  string brand_name = 3; // 品牌名称
+  string alias = 4; // 别名
+  string icon_url = 5; // 图标 URL
+  string device_title = 6; // 设备标题
+  string device_description = 7; // 设备描述
+  string category = 8; // 分类
+  uint32 flag = 9; // 标志
+}
+
+// Cert 证书信息
+message Cert {
+  string key_n = 1; // RSA 公钥模数
+  string key_e = 2; // RSA 公钥指数
+  uint32 cert_version = 3; // 证书版本
+}
+
+message GetProfile {
+  message Request {}
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Profile profile = 2; // 用户资料
+  }
+}
+
+message UpdateProfile {
+  message Request {
+    string nickname = 1; // 昵称
+    int32 sex = 2; // 性别
+    string country = 3; // 国家
+    string province = 4; // 省份
+    string city = 5; // 城市
+    string signature = 6; // 签名
+  }
+  message Response {
+    OperationResult result = 1; // 操作结果
+  }
+}
+
+message UploadAvatar {
+  message Request {
+    bytes data = 1; // 头像数据
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Avatar avatar = 2; // 头像结果
+  }
+}
+
+message GetQRCode {
+  message Request {
+    int32 style = 1; // 二维码样式
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    QRCode qrcode = 2; // 个人二维码
+  }
+}
+
+message SetPrivacy {
+  message Request {
+    int32 function = 1; // 隐私功能
+    int32 value = 2; // 隐私值
+  }
+  message Response {
+    OperationResult result = 1; // 操作结果
+  }
+}
+
+message SetAlias {
+  message Request {
+    string alias = 1; // 微信号
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+  }
+}
+
+message VerifyPassword {
+  message Request {
+    string password = 1; // 待验证密码
+  }
+  message Response {
+    VerifyPasswordResult result = 1; // 验证结果
+  }
+}
+
+message SetPassword {
+  message Request {
+    string password = 1; // 新密码
+    string ticket = 2; // 验证票据
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Buffer auto_auth_key = 2; // 自动认证密钥
+  }
+}
+
+message SendVerifyMobile {
+  message Request {
+    string mobile = 1; // 手机号
+    uint32 opcode = 2; // 操作码
+  }
+  message Response {
+    MobileResult result = 1; // 手机操作结果
+  }
+}
+
+message BindMobile {
+  message Request {
+    string mobile = 1; // 手机号
+    string verify_code = 2; // 验证码
+  }
+  message Response {
+    MobileResult result = 1; // 手机操作结果
+  }
+}
+
+message BindEmail {
+  message Request {
+    string email = 1; // 邮箱
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+  }
+}
+
+message SendVerifyEmail {
+  message Request {}
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+  }
+}
+
+message GetSafetyInfo {
+  message Request {}
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    SafetyInfo info = 2; // 安全信息
+  }
+}
+
+message DelSafeDevice {
+  message Request {
+    string uuid = 1; // 设备 UUID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    uint64 rest_count = 2; // 剩余安全设备数
+  }
+}
+
+message ReportMotion {
+  message Request {
+    string device_id = 1; // 设备 ID
+    string device_type = 2; // 设备类型
+    int64 step_count = 3; // 步数
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    SportDeviceInfo device_info = 2; // 运动设备信息
+  }
+}
+
+message GetBoundHardDevices {
+  message Request {}
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    repeated HardDevice devices = 2; // 绑定硬件设备
+    int64 version = 3; // 版本
+    int64 continue_flag = 4; // 继续标志
+  }
+}
+
+message GetCert {
+  message Request {
+    uint32 current_version = 1; // 当前证书版本
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Cert cert = 2; // 证书信息
+  }
+}

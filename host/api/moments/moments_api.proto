@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package api.moments;
+
+option go_package = "github.com/sbgayhub/golem/host/api/moments;momentsapi";
+
+import "api/base/base.proto";
+import "api/message/sync_types.proto";
+import "google/protobuf/wrappers.proto";
+
+// TwitterInfo Twitter 信息（镜像 golem.moments.TwitterInfo）
+message TwitterInfo {
+  optional string token = 1;
+  optional string secret = 2;
+}
+
+// BufferUrl 朋友圈缓冲区 URL（镜像 golem.moments.BufferUrl）
+message BufferUrl {
+  optional string url = 1;
+  optional uint32 type = 2;
+  optional uint32 size = 3;
+  optional string md5 = 4;
+}
+
+// ServerConfig 朋友圈服务器配置（镜像 golem.moments.ServerConfig）
+message ServerConfig {
+  optional int32 post_mention_limit = 1;
+  optional int32 copy_and_paste_word_limit = 2;
+}
+
+// ADObject 广告对象（镜像 golem.moments.ADObject）
+message ADObject {
+  .api.message.MomentsObject object = 1;
+  optional google.protobuf.StringValue ad_xml = 2;
+}
+
+// RemindFriendsInfo 提醒好友信息（镜像 golem.moments.RemindFriendsInfo）
+message RemindFriendsInfo {
+  optional uint64 adchatroom_id = 1;
+  optional .api.base.Buffer source_info = 2;
+  optional .api.base.Buffer self_info = 3;
+  optional .api.base.Buffer paid_info = 4;
+  optional .api.base.Buffer extra_info = 5;
+  optional uint64 adchatroom_id64 = 6;
+}
+
+// PostResponse 发布朋友圈响应（镜像 golem.moments.PostResponse）
+message PostResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.message.MomentsObject object = 2;
+  optional string spam_tips = 3;
+}
+
+// OperateResponse 朋友圈对象操作响应（镜像 golem.moments.OperateResponse）
+message OperateResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional uint32 count = 2;
+  repeated int32 list = 3;
+}
+
+// CommentResponse 朋友圈评论响应（镜像 golem.moments.CommentResponse）
+message CommentResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.message.MomentsObject object = 2;
+}
+
+// UploadResponse 朋友圈上传响应（镜像 golem.moments.UploadResponse）
+message UploadResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional uint32 offset = 2;
+  optional uint32 size = 3;
+  optional string client_id = 4;
+  optional BufferUrl buffer_url = 5;
+  optional uint32 thumb_url_count = 6;
+  repeated BufferUrl thumb_url_list = 7;
+  optional uint64 id = 8;
+  optional uint32 type = 9;
+}
+
+// TimelineResponse 朋友圈时间线响应（镜像 golem.moments.TimelineResponse）
+message TimelineResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional string first_page_md5 = 2;
+  optional uint32 object_count = 3;
+  repeated .api.message.MomentsObject object_list = 4;
+  optional uint32 new_request_time = 5;
+  optional uint32 object_count_for_same_md5 = 6;
+  optional uint32 control_flag = 7;
+  optional ServerConfig server_config = 8;
+  optional uint32 advertise_count = 9;
+  repeated Advertise advertise_list = 10;
+  optional .api.base.Buffer session = 11;
+  optional uint32 recommend_count = 12;
+  repeated Recommend recommend_list = 13;
+  optional uint32 delete_advertise_count = 14;
+  repeated google.protobuf.UInt64Value delete_advertise_list = 15;
+  optional uint32 unread_count = 16;
+  repeated uint64 unread_list = 17;
+
+  // Advertise 广告信息（镜像 golem.moments.TimelineResponse.Advertise）
+  message Advertise {
+    optional ADObject object = 1;
+    optional google.protobuf.StringValue info = 2;
+    optional uint32 pos = 3;
+    optional RemindFriendsInfo remind_info = 4;
+  }
+
+  // Recommend 推荐信息（镜像 golem.moments.TimelineResponse.Recommend）
+  message Recommend {
+    optional Object object = 1;
+    optional google.protobuf.StringValue info = 2;
+
+    // Object 推荐对象（镜像 golem.moments.TimelineResponse.Recommend.Object）
+    message Object {
+      optional .api.message.MomentsObject moments_object = 1;
+      optional google.protobuf.StringValue recommend_xml = 2;
+    }
+  }
+}
+
+// UserPageResponse 朋友圈用户页响应（镜像 golem.moments.UserPageResponse）
+message UserPageResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional string first_page_md5 = 2;
+  optional uint32 object_count = 3;
+  repeated .api.message.MomentsObject object_list = 4;
+  optional uint32 object_total_count = 5;
+  optional uint32 new_request_time = 7;
+  optional uint32 object_count_for_same_md5 = 8;
+  optional ServerConfig server_config = 9;
+  optional uint64 limited_id = 10;
+  optional uint64 continue_id = 11;
+  optional string return_tips = 12;
+}
+
+// DetailResponse 朋友圈详情响应（镜像 golem.moments.DetailResponse）
+message DetailResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.message.MomentsObject object = 2;
+}
+
+// SyncResponse 朋友圈同步响应（镜像 golem.moments.SyncResponse）
+message SyncResponse {
+  optional .api.base.BaseResponse base_response = 1;
+  optional .api.base.Commands commands = 2;
+  optional uint32 continue_flag = 3;
+  optional .api.base.Buffer key = 4;
+}

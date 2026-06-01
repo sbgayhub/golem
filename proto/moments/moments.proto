@@ -1,0 +1,263 @@
+syntax = "proto3";
+
+package moments;
+
+// MomentsService 朋友圈服务
+service MomentsService {
+  // Timeline 获取朋友圈时间线
+  rpc Timeline(Timeline.Request) returns (Timeline.Response);
+  // UserPage 获取用户朋友圈主页
+  rpc UserPage(UserPage.Request) returns (UserPage.Response);
+  // Detail 获取单条朋友圈详情
+  rpc Detail(Detail.Request) returns (Detail.Response);
+  // Comment 评论朋友圈
+  rpc Comment(Comment.Request) returns (Comment.Response);
+  // Like 点赞朋友圈
+  rpc Like(Like.Request) returns (Like.Response);
+  // Unlike 取消点赞
+  rpc Unlike(Unlike.Request) returns (Unlike.Response);
+  // Delete 删除朋友圈
+  rpc Delete(Delete.Request) returns (Delete.Response);
+  // DeleteComment 删除朋友圈评论
+  rpc DeleteComment(DeleteComment.Request) returns (DeleteComment.Response);
+  // Post 发布朋友圈
+  rpc Post(Post.Request) returns (Post.Response);
+  // Upload 上传朋友圈媒体
+  rpc Upload(Upload.Request) returns (Upload.Response);
+  // Sync 同步朋友圈数据
+  rpc Sync(Sync.Request) returns (Sync.Response);
+  // SetPrivacy 设置朋友圈隐私
+  rpc SetPrivacy(SetPrivacy.Request) returns (SetPrivacy.Response);
+}
+
+// BaseResult 通用结果
+message BaseResult {
+  int32 code = 1; // 返回码
+  string message = 2; // 返回消息
+}
+
+// Buffer 字节缓冲区
+message Buffer {
+  uint32 size = 1; // 数据长度
+  bytes data = 2; // 数据内容
+}
+
+// BufferUrl 朋友圈媒体 URL
+message BufferUrl {
+  string url = 1; // URL
+  uint32 type = 2; // 类型
+  uint32 size = 3; // 大小
+  string md5 = 4; // MD5
+}
+
+// ServerConfig 朋友圈服务器配置
+message ServerConfig {
+  int32 post_mention_limit = 1; // 发布@限制
+  int32 copy_and_paste_word_limit = 2; // 复制粘贴字数限制
+}
+
+// Moment 朋友圈对象摘要
+message Moment {
+  uint64 id = 1; // 朋友圈 ID
+  string username = 2; // 用户名
+  string nickname = 3; // 昵称
+  uint32 create_time = 4; // 创建时间
+  string object_description = 5; // 对象描述
+  uint32 like_flag = 6; // 点赞标志
+  uint32 like_count = 7; // 点赞数量
+  repeated CommentInfo like_user_list = 8; // 点赞用户列表
+  uint32 comment_count = 9; // 评论数量
+  repeated CommentInfo comment_user_list = 10; // 评论用户列表
+  uint32 with_count = 11; // 关联数量
+  repeated CommentInfo with_user_list = 12; // 关联用户列表
+  string refer_username = 13; // 引用用户名
+  uint64 refer_id = 14; // 引用 ID
+  uint32 delete_flag = 15; // 删除标志
+}
+
+// CommentInfo 朋友圈评论信息
+message CommentInfo {
+  string username = 1; // 用户名
+  string nickname = 2; // 昵称
+  uint32 source = 3; // 来源
+  uint32 type = 4; // 类型
+  string content = 5; // 内容
+  uint32 create_time = 6; // 创建时间
+  int32 comment_id = 7; // 评论 ID
+  int32 reply_comment_id = 8; // 回复评论 ID
+  string reply_username = 9; // 回复用户名
+  uint32 is_not_rich_text = 10; // 是否非富文本
+  uint64 reply_comment_id2 = 11; // 回复评论 ID2
+  uint64 comment_id2 = 12; // 评论 ID2
+  uint32 delete_flag = 13; // 删除标志
+  uint32 comment_flag = 14; // 评论标志
+}
+
+// Command 同步命令
+message Command {
+  int32 id = 1; // 命令 ID
+  Buffer buffer = 2; // 命令数据
+}
+
+message Timeline {
+  message Request {
+    string first_page_md5 = 1; // 首页 MD5
+    uint64 max_id = 2; // 最大 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    string first_page_md5 = 2; // 首页 MD5
+    uint32 object_count = 3; // 对象数量
+    repeated Moment object_list = 4; // 朋友圈对象列表
+    uint32 new_request_time = 5; // 新请求时间
+    uint32 object_count_for_same_md5 = 6; // 相同 MD5 对象数量
+    uint32 control_flag = 7; // 控制标志
+    ServerConfig server_config = 8; // 服务器配置
+    uint32 unread_count = 9; // 未读数量
+    repeated uint64 unread_list = 10; // 未读 ID 列表
+    Buffer session = 11; // 会话
+  }
+}
+
+message UserPage {
+  message Request {
+    string username = 1; // 用户名
+    string first_page_md5 = 2; // 首页 MD5
+    uint64 max_id = 3; // 最大 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    string first_page_md5 = 2; // 首页 MD5
+    uint32 object_count = 3; // 对象数量
+    repeated Moment object_list = 4; // 朋友圈对象列表
+    uint32 object_total_count = 5; // 对象总数
+    uint32 new_request_time = 6; // 新请求时间
+    uint32 object_count_for_same_md5 = 7; // 相同 MD5 对象数量
+    ServerConfig server_config = 8; // 服务器配置
+    uint64 limited_id = 9; // 限制 ID
+    uint64 continue_id = 10; // 继续 ID
+    string return_tips = 11; // 返回提示
+  }
+}
+
+message Detail {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Moment object = 2; // 朋友圈对象
+  }
+}
+
+message Comment {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+    string content = 2; // 评论内容
+    int32 type = 3; // 评论类型
+    int32 reply_comment_id = 4; // 回复评论 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Moment object = 2; // 朋友圈对象
+  }
+}
+
+message Like {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Moment object = 2; // 朋友圈对象
+  }
+}
+
+message Unlike {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    uint32 count = 2; // 操作数量
+    repeated int32 list = 3; // 操作结果列表
+  }
+}
+
+message Delete {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    uint32 count = 2; // 操作数量
+    repeated int32 list = 3; // 操作结果列表
+  }
+}
+
+message DeleteComment {
+  message Request {
+    uint64 id = 1; // 朋友圈 ID
+    uint32 comment_id = 2; // 评论 ID
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    uint32 count = 2; // 操作数量
+    repeated int32 list = 3; // 操作结果列表
+  }
+}
+
+message Post {
+  message Request {
+    string content = 1; // 朋友圈内容
+    repeated string blacklist = 2; // 黑名单用户列表
+    repeated string with_users = 3; // 提醒用户列表
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    Moment object = 2; // 朋友圈对象
+    string spam_tips = 3; // 垃圾提示
+  }
+}
+
+message Upload {
+  message Request {
+    bytes data = 1; // 媒体数据
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    uint32 offset = 2; // 起始位置
+    uint32 size = 3; // 总长度
+    string client_id = 4; // 客户端 ID
+    BufferUrl buffer_url = 5; // 缓冲区 URL
+    uint32 thumb_url_count = 6; // 缩略图 URL 数量
+    repeated BufferUrl thumb_url_list = 7; // 缩略图 URL 列表
+    uint64 id = 8; // ID
+    uint32 type = 9; // 类型
+  }
+}
+
+message Sync {
+  message Request {
+    bytes key = 1; // 同步 Key
+  }
+  message Response {
+    BaseResult base_result = 1; // 基础结果
+    repeated Command commands = 2; // 同步命令列表
+    uint32 continue_flag = 3; // 继续标志
+    Buffer key = 4; // 下次同步 Key
+  }
+}
+
+message SetPrivacy {
+  message Request {
+    int32 function = 1; // 功能类型
+    uint32 value = 2; // 设置值
+  }
+  message Response {
+    int32 code = 1; // 返回码
+    uint32 count = 2; // 操作结果数量
+    int32 result_code = 3; // 结果码
+    bytes message = 4; // 错误信息内容
+  }
+}

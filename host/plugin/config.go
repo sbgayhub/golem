@@ -9,7 +9,7 @@ import (
 )
 
 var configs = map[string]*Config{}                       // 插件配置
-var pluginDir = "../plugins"                             // 插件所在目录
+var pluginDir = "plugins"                                // 插件所在目录
 var configPath = filepath.Join(pluginDir, "config.toml") // 插件配置文件路径
 
 // Config 插件配置
@@ -28,16 +28,29 @@ func loadConfig() error {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		// 配置文件不存在，创建默认配置文件
 		return saveConfig()
+	} else if err != nil {
+		return fmt.Errorf("检查插件配置文件失败: %w", err)
 	}
 
-	file, err := os.ReadFile(configPath)
+	next, err := readPluginConfigFile()
 	if err != nil {
-		return fmt.Errorf("读取插件配置文件失败: %w", err)
-	}
-	if err := toml.Unmarshal(file, &configs); err != nil {
 		return err
 	}
+	configs = next
 	return nil
+}
+
+func readPluginConfigFile() (map[string]*Config, error) {
+	file, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取插件配置文件失败: %w", err)
+	}
+
+	next := map[string]*Config{}
+	if err := toml.Unmarshal(file, &next); err != nil {
+		return nil, fmt.Errorf("反序列化插件配置失败: %w", err)
+	}
+	return next, nil
 }
 
 func saveConfig() error {

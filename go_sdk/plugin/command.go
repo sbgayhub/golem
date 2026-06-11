@@ -300,14 +300,14 @@ func bindValue(v reflect.Value, cmd *Command) error {
 		}
 		if optTag := field.Tag.Get("flag"); optTag != "" {
 			option := buildOptionSchema(field, optTag)
-			raw := cmd.Args[option.Name]
-			if raw == "" {
+			raw, ok := cmd.Args[option.Name]
+			if !ok {
 				raw = option.DefaultValue
 			}
-			if raw == "" && !option.HasValue && cmd.Args[option.Name] != "" {
+			if raw == "" && !option.HasValue && ok {
 				raw = "true"
 			}
-			if raw == "" {
+			if raw == "" && !ok {
 				continue
 			}
 			if err := setFieldValue(fieldValue, raw); err != nil {

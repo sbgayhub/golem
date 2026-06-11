@@ -25,7 +25,7 @@ type SessionAbility interface {
 
 // CallerAbility 插件调用能力（宿主侧 wrapper 实现）
 type CallerAbility interface {
-	CallPlugin(capability string, args map[string]string) (string, error)
+	CallPlugin(capability string, args map[string]string) (string, []byte, error)
 }
 
 // EventPlugin 事件插件接口
@@ -36,8 +36,8 @@ type EventPlugin interface {
 
 // CalledPlugin 调用插件接口
 type CalledPlugin interface {
-	GetCapabilities() []string                                        // 获取插件能力
-	OnCall(capability string, args map[string]string) (string, error) // 调用插件能力时调用
+	GetCapabilities() []string                                                // 获取插件能力
+	OnCall(capability string, args map[string]string) (string, []byte, error) // 调用插件能力时调用
 }
 
 // CommandSchemaProvider 命令 schema 提供接口

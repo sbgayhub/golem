@@ -19,9 +19,17 @@ func Initial() error {
 	if err := registerBuiltinPM(); err != nil {
 		return err
 	}
+	if err := registerBuiltinCM(); err != nil {
+		return err
+	}
 
 	// 加载插件
 	if err := LoadPlugins(); err != nil {
+		return err
+	}
+
+	// 启动插件配置文件监听器
+	if err := startConfigWatcher(); err != nil {
 		return err
 	}
 
@@ -32,7 +40,9 @@ func Initial() error {
 }
 
 // Destroy 注销插件管理器
-func Destroy() error {
+func Destroy() {
+	stopConfigWatcher()
+
 	mu.Lock()
 	close(events)
 	mu.Unlock()
@@ -41,5 +51,4 @@ func Destroy() error {
 		sdk.Kill(w.Name)
 		slog.Info("插件退出", "name", w.Name)
 	}
-	return nil
 }

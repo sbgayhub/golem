@@ -59,11 +59,11 @@ func (h *hostService) CallPlugin(_ context.Context, req *sdk.CallPlugin_Request)
 	mu.Unlock()
 
 	if target == nil {
-		return &sdk.CallPlugin_Response{Value: "未找到可用能力： " + req.Capability}, nil
+		return &sdk.CallPlugin_Response{Message: "未找到可用能力： " + req.Capability}, nil
 	}
 
 	if target.calledPlugin == nil {
-		return &sdk.CallPlugin_Response{Value: "插件不支持调用能力： " + req.Capability}, nil
+		return &sdk.CallPlugin_Response{Message: "插件不支持调用能力： " + req.Capability}, nil
 	}
 
 	// 反序列化 args (bytes → map[string]string)
@@ -72,11 +72,11 @@ func (h *hostService) CallPlugin(_ context.Context, req *sdk.CallPlugin_Request)
 		_ = json.Unmarshal(req.Args, &args)
 	}
 
-	result, err := (*target.calledPlugin).OnCall(req.Capability, args)
+	mime, data, err := (*target.calledPlugin).OnCall(req.Capability, args)
 	if err != nil {
-		return &sdk.CallPlugin_Response{Value: err.Error()}, nil
+		return &sdk.CallPlugin_Response{Message: err.Error()}, nil
 	}
-	return &sdk.CallPlugin_Response{Value: result}, nil
+	return &sdk.CallPlugin_Response{Mime: mime, Data: data}, nil
 }
 
 func (h *hostService) SaveConfig(_ context.Context, req *sdk.SaveConfig_Request) (*sdk.SaveConfig_Response, error) {

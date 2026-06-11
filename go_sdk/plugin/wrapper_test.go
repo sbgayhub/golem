@@ -24,6 +24,7 @@ type testPointerCommandInput struct {
 	_       struct{} `cmd:"test set" help:"测试指针参数"`
 	Enabled *bool    `flag:"e,enabled" help:"是否启用"`
 	Limit   *int32   `flag:"l,limit" help:"限制值"`
+	Note    *string  `flag:"n,note" help:"备注"`
 }
 
 func TestRegisterCommandBindsHandlerInputAutomatically(t *testing.T) {
@@ -141,12 +142,27 @@ func TestBindSupportsPointerFields(t *testing.T) {
 	if got.Limit == nil || *got.Limit != 30 {
 		t.Fatalf("limit not bound as int32 pointer: %#v", got.Limit)
 	}
+	if got.Note != nil {
+		t.Fatalf("unset note should remain nil: %#v", got.Note)
+	}
 
 	empty, err := Bind[testPointerCommandInput](&Command{Main: "test", Sub: "set"})
 	if err != nil {
 		t.Fatalf("bind empty command: %v", err)
 	}
-	if empty.Enabled != nil || empty.Limit != nil {
+	if empty.Enabled != nil || empty.Limit != nil || empty.Note != nil {
 		t.Fatalf("unset pointer fields should remain nil: %+v", empty)
+	}
+
+	emptyNote, err := Bind[testPointerCommandInput](&Command{
+		Main: "test",
+		Sub:  "set",
+		Args: map[string]string{"note": ""},
+	})
+	if err != nil {
+		t.Fatalf("bind empty note command: %v", err)
+	}
+	if emptyNote.Note == nil || *emptyNote.Note != "" {
+		t.Fatalf("empty note should bind as empty string pointer: %#v", emptyNote.Note)
 	}
 }

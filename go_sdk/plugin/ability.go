@@ -47,7 +47,7 @@ func inject(plugin Plugin, typ reflect.Type, client any) {
 		if field.Anonymous {
 			if field.Type == typ || (typ.Kind() == reflect.Interface && field.Type.Implements(typ)) {
 				fieldVal.Set(reflect.ValueOf(client))
-				slog.Info("[inject] 匿名嵌入注入成功", "type", typ.Name(), "field", field.Name)
+				slog.Debug("[inject] 匿名嵌入注入成功", "type", typ.Name(), "field", field.Name)
 				return
 			}
 			continue
@@ -61,7 +61,7 @@ func inject(plugin Plugin, typ reflect.Type, client any) {
 				ptr := unsafe.Pointer(fieldVal.UnsafeAddr())
 				reflect.NewAt(fieldVal.Type(), ptr).Elem().Set(reflect.ValueOf(client))
 			}
-			slog.Info("[inject] 命名字段注入成功", "type", typ.Name(), "field", field.Name)
+			slog.Debug("[inject] 命名字段注入成功", "type", typ.Name(), "field", field.Name)
 			return
 		}
 	}
@@ -86,7 +86,7 @@ func injectConfigSave(plugin Plugin, saveFunc func(pluginName string, data []byt
 					ptr := unsafe.Pointer(fieldVal.UnsafeAddr())
 					reflect.NewAt(fieldVal.Type(), ptr).Elem().Set(reflect.ValueOf(saveFunc))
 				}
-				slog.Info("[inject] ConfigAbility.hostSave 注入成功")
+				slog.Debug("[inject] ConfigAbility.hostSave 注入成功")
 				return
 			}
 		}

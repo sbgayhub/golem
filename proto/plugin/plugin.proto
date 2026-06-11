@@ -89,8 +89,9 @@ message OnCall{
     bytes args = 2; // 参数(JSON编码的map[string]string)
   }
   message Response {
-    string result = 1; // 结果
-    string message = 2; // 错误信息
+    string mime = 1; // 返回数据类型
+    bytes data = 2; // 返回数据
+    string message = 3; // 错误信息
   }
 }
 
@@ -170,7 +171,9 @@ message CallPlugin{
     bytes args = 2; // 参数(JSON编码的map[string]string)
   }
   message Response {
-    string value = 1; // 返回结果
+    string mime = 1; // 返回数据类型
+    bytes data = 2; // 返回数据
+    string message = 3; // 错误信息
   }
 }
 
@@ -190,6 +193,15 @@ message InjectAbility{
     uint32 session = 5; // 会话管理服务地址
     uint32 caller = 6; // 插件调用服务地址
     uint32 config = 7; // 配置管理服务地址
+    uint32 favor = 8; // 收藏服务地址
+    uint32 label = 9; // 标签服务地址
+    uint32 login = 10; // 登录服务地址
+    uint32 miniapp = 11; // 小程序服务地址
+    uint32 moments = 12; // 朋友圈服务地址
+    uint32 official = 13; // 公众号服务地址
+    uint32 payment = 14; // 支付服务地址
+    uint32 report = 15; // 状态通知服务地址
+    uint32 user = 16; // 用户服务地址
   }
   message Response {
     string value = 1; // 错误信息

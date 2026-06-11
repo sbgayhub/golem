@@ -2,16 +2,21 @@ package plugin
 
 import (
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/sbgayhub/golem/sdk/plugin"
 )
+
+const pluginExecutablePrefix = "golem_plugin_"
 
 var (
 	mu              sync.Mutex
@@ -19,6 +24,11 @@ var (
 	commandIndex    = map[string]*wrapper{} // 命令索引
 	capabilityIndex = map[string]*wrapper{} // 能力索引
 )
+
+type pluginExecutableFile struct {
+	name string
+	path string
+}
 
 // 插件包装
 type wrapper struct {
@@ -38,30 +48,13 @@ type wrapper struct {
 }
 
 func LoadPlugins() error {
-	entries, err := os.ReadDir(pluginDir)
+	executables, err := discoverPluginExecutables()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("读取插件目录失败: %w", err)
+		return err
 	}
 
-	names := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if _, err := os.Stat(pluginExecutablePath(name)); err == nil {
-			names = append(names, name)
-		} else if !os.IsNotExist(err) {
-			return fmt.Errorf("检查插件文件失败: %w", err)
-		}
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		if err := LoadPlugin(name); err != nil {
+	for _, executable := range executables {
+		if err := loadPluginFromPath(executable.name, executable.path); err != nil {
 			return err
 		}
 	}
@@ -76,12 +69,31 @@ func LoadPlugin(name string) error {
 		return fmt.Errorf("插件已加载：%s", name)
 	}
 
-	metadata, p, err := plugin.Get(pluginExecutablePath(name))
+	executable, err := findPluginExecutable(name)
 	if err != nil {
 		return err
 	}
-	if metadata.Name != name {
-		slog.Warn("插件文件名和元数据名称不一致", "expected", name, "actual", metadata.Name)
+	return loadPluginFromPath(name, executable.path)
+}
+
+func loadPluginFromPath(expectedName, path string) error {
+	if expectedName == "" {
+		return fmt.Errorf("插件名称不能为空")
+	}
+	if findPlugin(expectedName) != nil {
+		return fmt.Errorf("插件已加载：%s", expectedName)
+	}
+
+	metadata, p, err := plugin.Get(path)
+	if err != nil {
+		return err
+	}
+	if metadata.Name != expectedName {
+		slog.Warn("插件文件名和元数据名称不一致", "expected", expectedName, "actual", metadata.Name)
+	}
+	if findPlugin(metadata.Name) != nil {
+		plugin.Kill(metadata.Name)
+		return fmt.Errorf("插件已加载：%s", metadata.Name)
 	}
 
 	if ability, ok := (*p).(plugin.Ability); ok {
@@ -153,8 +165,115 @@ func ReloadPlugin(name string) error {
 	return LoadPlugin(name)
 }
 
-func pluginExecutablePath(name string) string {
-	return filepath.Join(pluginDir, name, "golem_plugin_"+name+".exe")
+func discoverPluginExecutables() ([]pluginExecutableFile, error) {
+	if _, err := os.Stat(pluginDir); err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("读取插件目录失败: %w", err)
+	}
+
+	var executables []pluginExecutableFile
+	err := filepath.WalkDir(pluginDir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("遍历插件目录失败: %w", err)
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		executable, err := pluginExecutableFromDirEntry(path, entry)
+		if err != nil {
+			return err
+		}
+		if executable == nil {
+			return nil
+		}
+
+		executables = append(executables, *executable)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	
+	sort.Slice(executables, func(i, j int) bool {
+		return executables[i].path < executables[j].path
+	})
+	return executables, nil
+}
+
+func findPluginExecutable(name string) (pluginExecutableFile, error) {
+	executables, err := discoverPluginExecutables()
+	if err != nil {
+		return pluginExecutableFile{}, err
+	}
+	for _, executable := range executables {
+		if executable.name == name {
+			return executable, nil
+		}
+	}
+	return pluginExecutableFile{}, fmt.Errorf("插件文件不存在：%s", name)
+}
+
+func pluginExecutableFromDirEntry(path string, entry fs.DirEntry) (*pluginExecutableFile, error) {
+	fileName := entry.Name()
+	if !strings.HasPrefix(fileName, pluginExecutablePrefix) {
+		return nil, nil
+	}
+
+	info, err := entry.Info()
+	if err != nil {
+		return nil, fmt.Errorf("检查插件文件失败: %w", err)
+	}
+	if !isPluginExecutable(info) {
+		return nil, nil
+	}
+
+	name := pluginNameFromExecutable(fileName)
+	if name == "" {
+		return nil, nil
+	}
+	return &pluginExecutableFile{name: name, path: path}, nil
+}
+
+func isPluginExecutable(info fs.FileInfo) bool {
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	if info.Mode().Perm()&0111 != 0 {
+		return true
+	}
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	return hasExecutableExtension(info.Name())
+}
+
+func pluginNameFromExecutable(fileName string) string {
+	name := strings.TrimPrefix(fileName, pluginExecutablePrefix)
+	if ext := filepath.Ext(name); hasExecutableExtension(ext) {
+		name = strings.TrimSuffix(name, ext)
+	}
+	return name
+}
+
+func hasExecutableExtension(name string) bool {
+	ext := strings.ToLower(filepath.Ext(name))
+	if ext == "" {
+		ext = strings.ToLower(name)
+	}
+	switch ext {
+	case ".exe", ".com", ".bat", ".cmd":
+		return true
+	}
+
+	for _, candidate := range strings.Split(os.Getenv("PATHEXT"), ";") {
+		if strings.EqualFold(strings.TrimSpace(candidate), ext) {
+			return true
+		}
+	}
+	return false
 }
 
 func injectPluginConfig(name string, p *plugin.Plugin, cfg *Config) error {

@@ -1,13 +1,14 @@
 package plugin
 
 import (
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/sbgayhub/golem/host/config"
+	"github.com/sbgayhub/golem/sdk/chatroom"
 	"github.com/sbgayhub/golem/sdk/contact"
 	"github.com/sbgayhub/golem/sdk/message"
 	sdk "github.com/sbgayhub/golem/sdk/plugin"
@@ -21,11 +22,22 @@ type parsedCommand struct {
 }
 
 // HandleCommand 尝试处理文本命令
-func HandleCommand(raw string, sender *contact.Contact) (*message.Message, bool) {
+func HandleCommand(raw string, sender *contact.Contact, member *chatroom.Member) (*message.Message, bool) {
 	parsed, ok, err := parseCommand(raw, sender)
 	if !ok {
 		return nil, ok
 	}
+
+	// 权限校验
+	owner := config.Get().Owner
+	forbidden := config.Get().Forbidden
+	if owner != "" && !((sender != nil && sender.Username == owner) || (member != nil && member.Username == owner)) {
+		if forbidden != "" {
+			return &message.Message{Type: message.TypeText, Receiver: sender, Content: forbidden}, true
+		}
+		return nil, false
+	}
+
 	if err != nil {
 		if len(strings.Split(err.Error(), "\n")) > 3 {
 			if bytes := text2image(err.Error()); bytes != nil {
@@ -37,11 +49,7 @@ func HandleCommand(raw string, sender *contact.Contact) (*message.Message, bool)
 				}, true
 			}
 		}
-		return &message.Message{
-			Type:     message.TypeText,
-			Receiver: sender,
-			Content:  err.Error(),
-		}, true
+		return &message.Message{Type: message.TypeText, Receiver: sender, Content: err.Error()}, true
 	}
 	if parsed.help != "" {
 		if bytes := text2image(parsed.help); bytes != nil {
@@ -52,38 +60,25 @@ func HandleCommand(raw string, sender *contact.Contact) (*message.Message, bool)
 				Data:     &message.Message_Image{Image: &message.ImageData{Media: &message.Media{Data: bytes}}},
 			}, true
 		}
-		return &message.Message{
-			Type:     message.TypeText,
-			Receiver: sender,
-			Content:  parsed.help,
-		}, true
+		return &message.Message{Type: message.TypeText, Receiver: sender, Content: parsed.help}, true
 	}
 	result, err := (*parsed.wrapper.commandPlugin).OnCommand(parsed.cmd)
 	if err != nil {
-		return &message.Message{
-			Type:     message.TypeText,
-			Receiver: sender,
-			Content:  err.Error(),
-		}, true
+		return &message.Message{Type: message.TypeText, Receiver: sender, Content: err.Error()}, true
 	}
-	return &message.Message{
-		Type:     message.TypeText,
-		Receiver: sender,
-		Content:  result,
-	}, true
+	return &message.Message{Type: message.TypeText, Receiver: sender, Content: result}, true
 }
 
 func text2image(text string) []byte {
 	if w, ex := capabilityIndex["text.to.image"]; ex {
-		if called, err := (*w.calledPlugin).OnCall("text.to.image", map[string]string{"context": text, "bg_color": "#F7F7F7"}); err != nil {
+		if mime, data, err := (*w.calledPlugin).OnCall("text.to.image", map[string]string{"context": text, "bg_color": "#F7F7F7"}); err != nil {
 			slog.Warn("[text.to.image] 能力调用失败", "plugin", w.Name, "err", err)
 			return nil
+		} else if mime != "image" {
+			slog.Warn("[text.to.image] 能力返回类型不匹配", "plugin", w.Name, "mime", mime)
+			return nil
 		} else {
-			if bytes, err := base64.StdEncoding.DecodeString(called); err != nil {
-				return nil
-			} else {
-				return bytes
-			}
+			return data
 		}
 	}
 	return nil

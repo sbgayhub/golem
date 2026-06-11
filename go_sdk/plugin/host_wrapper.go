@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 )
@@ -40,14 +41,20 @@ type CallerClient struct {
 	Client HostServiceClient
 }
 
-func (c CallerClient) CallPlugin(capability string, args map[string]string) (string, error) {
-	data, _ := json.Marshal(args)
+func (c CallerClient) CallPlugin(capability string, args map[string]string) (string, []byte, error) {
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "", nil, err
+	}
 	resp, err := c.Client.CallPlugin(context.Background(), &CallPlugin_Request{
 		Capability: capability,
 		Args:       data,
 	})
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	return resp.Value, nil
+	if resp != nil && resp.Message != "" {
+		return "", nil, errors.New(resp.Message)
+	}
+	return resp.GetMime(), resp.GetData(), nil
 }

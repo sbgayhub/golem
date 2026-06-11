@@ -83,9 +83,9 @@ message EmojiData {
 
 // LocationData 位置消息数据
 message LocationData {
-  string latitude = 1;  // 纬度
-  string longitude = 2; // 经度
-  string scale = 3;     // 缩放比例
+  double latitude = 1;  // 纬度
+  double longitude = 2; // 经度
+  int32 scale = 3;     // 缩放比例
   string poi_name = 4;  // POI 名称
   string label = 5;     // 位置标签
 }

@@ -44,7 +44,7 @@ func (c Client) Forward(msg *Message, receiver string) (*Forward_Response, error
 func (c Client) Revoke(receiver string, newMsgId uint64) (*Revoke_Response, error) {
 	return c.Client.Revoke(context.Background(), &Revoke_Request{
 		Receiver: receiver,
-		NewMsgId: newMsgId,
+		NewId:    newMsgId,
 	})
 }
 
@@ -111,7 +111,7 @@ func (s Server) Forward(ctx context.Context, request *Forward_Request) (*Forward
 
 // Revoke 撤回消息
 func (s Server) Revoke(ctx context.Context, request *Revoke_Request) (*Revoke_Response, error) {
-	return s.Impl.Revoke(request.Receiver, request.NewMsgId)
+	return s.Impl.Revoke(request.Receiver, request.NewId)
 }
 
 // Download 下载媒体资源（server-stream）

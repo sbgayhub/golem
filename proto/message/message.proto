@@ -31,8 +31,9 @@ message Send {
   }
   // Response 发送消息响应
   message Response {
-    uint64 new_msg_id = 1; // 新消息 ID
+    uint64 new_id = 1; // 新消息 ID
     uint32 create_time = 2; // 创建时间
+    Media media = 3;
   }
 }
 
@@ -42,7 +43,7 @@ message Forward {
     Message message = 2; // 要转发的消息
   }
   message Response {
-    uint64 new_msg_id = 1; // 新消息 ID
+    uint64 new_id = 1; // 新消息 ID
     uint32 create_time = 2; // 创建时间
   }
 }
@@ -50,7 +51,7 @@ message Forward {
 message Revoke {
   message Request {
     string receiver = 1; // 会话 wxid
-    uint64 new_msg_id = 2; // 消息 ID
+    uint64 new_id = 2; // 消息 ID
   }
   message Response {
     int32 code = 1; // 状态码

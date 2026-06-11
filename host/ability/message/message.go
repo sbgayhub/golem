@@ -3,9 +3,13 @@ package messageability
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	api "github.com/sbgayhub/golem/host/api/message"
 	"github.com/sbgayhub/golem/sdk/contact"
@@ -17,81 +21,169 @@ type ability struct {
 	api api.MessageService
 }
 
+var (
+	outboundReady       atomic.Bool
+	errOutboundNotReady = errors.New("基础数据初始化未完成，已禁止发送消息")
+)
+
 func init() {
+	outboundReady.Store(true)
 	sdk.Instance = &ability{api: api.Get()}
+}
+
+// SetOutboundReady 设置消息出站开关。
+func SetOutboundReady(ready bool) {
+	outboundReady.Store(ready)
+}
+
+// OutboundReady 返回消息出站是否可用。
+func OutboundReady() bool {
+	return outboundReady.Load()
+}
+
+func ensureOutboundReady() error {
+	if !OutboundReady() {
+		return errOutboundNotReady
+	}
+	return nil
 }
 
 // Send 发送消息（根据类型分发到对应 API）
 func (a *ability) Send(msg *sdk.Message) (*sdk.Send_Response, error) {
+	if msg == nil {
+		return nil, errors.New("消息不可为空")
+	}
+	if msg.GetReceiver() == nil || msg.GetReceiver().GetUsername() == "" {
+		return nil, errors.New("消息接收人不可为空")
+	}
+	if err := ensureOutboundReady(); err != nil {
+		return nil, err
+	}
+
+	var result sdk.Send_Response
 	receiver := msg.GetReceiver().GetUsername()
-	switch msg.GetType() {
-	case sdk.TypeText:
+	slog.Info(fmt.Sprintf("[%s] -> %s : %s", msg.GetType().GetDesc(), msg.GetReceiver().GetNickname(), msg.Content))
+
+	switch msg.GetType().GetCode() {
+	case sdk.TypeText.Code:
 		data := msg.GetText()
 		content := msg.GetContent()
 		if content == "" {
 			content = data.GetContent()
 		}
+		if content == "" {
+			return nil, errors.New("消息正文不可为空")
+		}
 		remind := strings.Join(data.GetReminds(), ",")
-		_, err := a.api.SendText(receiver, content, remind)
+		resp, err := a.api.SendText(receiver, content, remind)
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeImage:
+		if len(resp.GetList()) > 0 {
+			item := resp.GetList()[0]
+			result.NewId = item.GetNewId()
+			result.CreateTime = item.GetCreateTime()
+		}
+	case sdk.TypeImage.Code:
 		data := msg.GetImage()
 		if data.GetMedia() == nil {
 			break
 		}
-		_, err := a.api.SendImage(receiver, bytes.NewReader(data.GetMedia().Data))
+		resp, err := a.api.SendImage(receiver, bytes.NewReader(data.GetMedia().Data))
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeVoice:
+		result.NewId = resp.GetNewId()
+		result.CreateTime = resp.GetCreateTime()
+		result.Media = &sdk.Media{
+			Key:  resp.GetAesKey(),
+			Url:  resp.GetFileId(),
+			Size: resp.GetSize(),
+		}
+	case sdk.TypeVoice.Code:
 		data := msg.GetVoice()
 		if data.GetMedia() == nil {
 			break
 		}
-		_, err := a.api.SendVoice(receiver, bytes.NewReader(nil), int32(data.GetDuration()), 0)
+		resp, err := a.api.SendVoice(receiver, bytes.NewReader(data.GetMedia().Data), int32(data.GetDuration()), 0)
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeVideo:
+		result.NewId = resp.GetNewId()
+		result.CreateTime = resp.GetCreateTime()
+		result.Media = &sdk.Media{
+			Url:  resp.GetClientId(),
+			Size: uint32(resp.GetSize()),
+		}
+	case sdk.TypeVideo.Code:
 		data := msg.GetVideo()
 		if data.GetMedia() == nil {
 			break
 		}
-		_, err := a.api.SendVideo(receiver, nil, bytes.NewReader(nil), data.GetDuration())
+		resp, err := a.api.SendVideo(receiver, nil, bytes.NewReader(data.GetMedia().Data), data.GetDuration())
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeEmoji:
+		result.NewId = resp.GetNewId()
+		//result.CreateTime = resp.CreateTime
+		result.Media = &sdk.Media{
+			Key:  resp.GetAesKey(),
+			Url:  resp.GetExtendXml(),
+			Size: uint32(resp.GetVideoOffset()),
+		}
+	case sdk.TypeEmoji.Code:
 		data := msg.GetEmoji()
 		if data.GetMedia() == nil {
 			break
 		}
-		_, err := a.api.SendEmoji(receiver, data.GetMedia().GetMd5(), nil)
+		resp, err := a.api.SendEmoji(receiver, data.GetMedia().GetMd5(), data.GetMedia().Data)
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeLocation:
+		if len(resp.GetResult()) > 0 {
+			item := resp.GetResult()[0]
+			result.NewId = item.GetNewId()
+			result.Media = &sdk.Media{Md5: item.GetMd5(), Size: uint32(item.GetSize())}
+		}
+	case sdk.TypeLocation.Code:
 		data := msg.GetLocation()
-		_, err := a.api.SendPosition(receiver, data.GetLabel(), data.GetPoiName(), 0, 0, 0)
+		resp, err := a.api.SendPosition(receiver, data.GetLabel(), data.GetPoiName(), data.GetLongitude(), data.GetLatitude(), float64(data.GetScale()))
 		if err != nil {
 			return nil, err
 		}
-	case sdk.TypeApplication:
+		if len(resp.GetList()) > 0 {
+			item := resp.GetList()[0]
+			result.NewId = item.GetNewId()
+			result.CreateTime = item.GetCreateTime()
+		}
+	case sdk.TypeApplication.Code:
 		data := msg.GetApp()
-		_, err := a.api.SendApp(receiver, data.GetXml(), int32(data.GetSubType()))
+		resp, err := a.api.SendApp(receiver, data.GetXml(), int32(data.GetSubType()))
 		if err != nil {
 			return nil, err
 		}
+		result.NewId = resp.GetNewId()
+		result.CreateTime = uint32(resp.GetCreateTime())
 	default:
 		slog.Debug("发送消息", "content", msg.Content)
 	}
-	return &sdk.Send_Response{}, nil
+
+	// 如果有撤回时间
+	if msg.Timestamp != 0 && result.NewId != 0 {
+		time.AfterFunc(time.Duration(msg.Timestamp)*time.Second, func() {
+			if _, err := a.api.Revoke(receiver, result.NewId, 0, uint64(result.CreateTime)); err != nil {
+				slog.Warn("消息撤回失败", "err", err)
+			}
+		})
+	}
+	return &result, nil
 }
 
 // Forward 转发消息（根据类型调用对应转发 API）
 func (a *ability) Forward(msg *sdk.Message, receiver string) (*sdk.Forward_Response, error) {
+	if err := ensureOutboundReady(); err != nil {
+		return nil, err
+	}
 	switch msg.GetType() {
 	case sdk.TypeImage:
 		data := msg.GetImage()
@@ -122,7 +214,7 @@ func (a *ability) Forward(msg *sdk.Message, receiver string) (*sdk.Forward_Respo
 		if err != nil {
 			return nil, err
 		}
-		return &sdk.Forward_Response{NewMsgId: resp.NewMsgId, CreateTime: resp.CreateTime}, nil
+		return &sdk.Forward_Response{NewId: resp.NewId, CreateTime: resp.CreateTime}, nil
 	}
 	return &sdk.Forward_Response{}, nil
 }
@@ -149,7 +241,7 @@ func (a *ability) Download(msg *sdk.Message) (io.ReadCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		return io.NopCloser(bytes.NewReader(resp.GetData())), nil
+		return io.NopCloser(bytes.NewReader(resp.GetChunk().GetData())), nil
 	case sdk.TypeVideo:
 		data := msg.GetVideo()
 		if data.GetMedia() == nil {
@@ -159,7 +251,7 @@ func (a *ability) Download(msg *sdk.Message) (io.ReadCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		return io.NopCloser(bytes.NewReader(resp.GetData())), nil
+		return io.NopCloser(bytes.NewReader(resp.GetChunk().GetData())), nil
 	case sdk.TypeVoice:
 		data := msg.GetVoice()
 		if data.GetMedia() == nil {
@@ -169,7 +261,7 @@ func (a *ability) Download(msg *sdk.Message) (io.ReadCloser, error) {
 		if err != nil {
 			return nil, err
 		}
-		return io.NopCloser(bytes.NewReader(resp.GetData())), nil
+		return io.NopCloser(bytes.NewReader(resp.GetData().GetData())), nil
 	}
 	return nil, io.ErrUnexpectedEOF
 }

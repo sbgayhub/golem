@@ -67,11 +67,13 @@ func Build(msg *messageapi.NewMessage) (*sdk.Message, error) {
 
 func buildText(msg *sdk.Message, raw *messageapi.NewMessage) {
 	var t struct {
-		_       xml.Name `xml:"msgsource"`
+		XmlName xml.Name `xml:"msgsource"`
 		Reminds string   `xml:"atuserlist"`
 	}
-	xml.Unmarshal([]byte(raw.GetSource()), &t)
-	reminds := []string{}
+	if err := xml.Unmarshal([]byte(raw.GetSource()), &t); err != nil {
+		return
+	}
+	var reminds []string
 	if t.Reminds != "" {
 		reminds = strings.Split(t.Reminds, ",")
 	}
@@ -107,8 +109,8 @@ func buildImage(msg *sdk.Message, raw *messageapi.NewMessage) {
 
 func buildVoice(msg *sdk.Message, raw *messageapi.NewMessage) {
 	var temp struct {
-		_     xml.Name `xml:"msg"`
-		Voice struct {
+		XmlName xml.Name `xml:"msg"`
+		Voice   struct {
 			Key      string `xml:"aeskey,attr"`
 			Url      string `xml:"voiceurl,attr"`
 			Size     uint32 `xml:"length,attr"`
@@ -128,8 +130,8 @@ func buildVoice(msg *sdk.Message, raw *messageapi.NewMessage) {
 
 func buildVideo(msg *sdk.Message, raw *messageapi.NewMessage) {
 	var temp struct {
-		_     xml.Name `xml:"msg"`
-		Video struct {
+		XmlName xml.Name `xml:"msg"`
+		Video   struct {
 			Size     uint32 `xml:"length,attr"`
 			Duration uint32 `xml:"playlength,attr"`
 			Md5      string `xml:"md5,attr"`
@@ -175,13 +177,13 @@ func buildEmoji(msg *sdk.Message, raw *messageapi.NewMessage) {
 
 func buildLocation(msg *sdk.Message, raw *messageapi.NewMessage) {
 	var temp struct {
-		_        xml.Name `xml:"msg"`
+		XmlName  xml.Name `xml:"msg"`
 		Location struct {
-			Latitude  string `xml:"latitude"`
-			Longitude string `xml:"longitude"`
-			Scale     string `xml:"scale"`
-			PoiName   string `xml:"poiname"`
-			Label     string `xml:"label"`
+			Latitude  float64 `xml:"latitude"`
+			Longitude float64 `xml:"longitude"`
+			Scale     int32   `xml:"scale"`
+			PoiName   string  `xml:"poiname"`
+			Label     string  `xml:"label"`
 		} `xml:"location"`
 	}
 	if err := xml.Unmarshal([]byte(raw.GetContent().GetValue()), &temp); err != nil {
@@ -200,11 +202,11 @@ func buildLocation(msg *sdk.Message, raw *messageapi.NewMessage) {
 
 func buildApp(msg *sdk.Message, raw *messageapi.NewMessage) {
 	var temp struct {
-		_     xml.Name `xml:"msg"`
-		Title string   `xml:"appmsg>title"`
-		Type  uint32   `xml:"appmsg>type"`
-		Url   string   `xml:"appmsg>url"`
-		Desc  string   `xml:"appmsg>des"`
+		XmlName xml.Name `xml:"msg"`
+		Title   string   `xml:"appmsg>title"`
+		Type    uint32   `xml:"appmsg>type"`
+		Url     string   `xml:"appmsg>url"`
+		Desc    string   `xml:"appmsg>des"`
 	}
 	if err := xml.Unmarshal([]byte(raw.GetContent().GetValue()), &temp); err != nil {
 		slog.Warn("parse app xml failed", "err", err)

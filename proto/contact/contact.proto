@@ -2,9 +2,6 @@ syntax = "proto3";
 
 package contact;
 
-import "chatroom/chatroom.proto";
-
-
 // ==================== 枚举 ====================
 
 // ContactType 联系人类型
@@ -53,6 +50,17 @@ message Chatroom {
 // Official 公众号特有数据
 message Official {}
 
+// SelfInfo 当前登录账号信息
+message SelfInfo {
+  string username = 1; // wxid
+  string nickname = 2; // 昵称
+  string alias = 3; // 微信号
+  string avatar = 4; // 头像 URL
+  uint32 uin = 5; // UIN
+  string email = 6; // 邮箱
+  string mobile = 7; // 手机号
+}
+
 
 // ==================== 服务定义 ====================
 
@@ -62,6 +70,8 @@ service ContactService {
   rpc Get(Get.Request) returns (Get.Response);
   // List 获取联系人列表
   rpc List(List.Request) returns (List.Response);
+  // GetSelf 获取当前登录账号信息
+  rpc GetSelf(GetSelf.Request) returns (GetSelf.Response);
   rpc SetRemark(SetRemark.Request) returns (SetRemark.Response);
   rpc AddFriend(AddFriend.Request) returns (AddFriend.Response);
   rpc VerifyFriend(VerifyFriend.Request) returns (VerifyFriend.Response);
@@ -85,6 +95,14 @@ message List {
   }
   message Response {
     repeated Contact contacts = 1; // 联系人列表
+  }
+}
+
+message GetSelf {
+  message Request {
+  }
+  message Response {
+    optional SelfInfo self = 1; // 当前登录账号信息
   }
 }
 

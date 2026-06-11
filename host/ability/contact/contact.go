@@ -7,17 +7,20 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 
 	"github.com/duke-git/lancet/v2/slice"
-	"github.com/sbgayhub/golem/host/api"
 	contactapi "github.com/sbgayhub/golem/host/api/contact"
 	sdk "github.com/sbgayhub/golem/sdk/contact"
 )
 
 // ability 联系人能力实现（缓存型）
 type ability struct {
-	api   contactapi.ContactService
-	cache map[string]*sdk.Contact
+	api    contactapi.ContactService
+	cache  map[string]*sdk.Contact
+	self   *sdk.SelfInfo
+	selfMu sync.RWMutex
 }
 
 var instance ability
@@ -63,6 +66,16 @@ func Initial() {
 	Destroy()
 }
 
+// SetSelf 保存当前登录账号信息。
+func SetSelf(self *sdk.SelfInfo) {
+	instance.setSelf(self)
+}
+
+// GetSelf 获取当前登录账号信息。
+func GetSelf() *sdk.SelfInfo {
+	return instance.GetSelf()
+}
+
 func Destroy() {
 	marshal, err := json.Marshal(instance.cache)
 	if err != nil {
@@ -103,6 +116,51 @@ func Refresh() error {
 	return nil
 }
 
+// RefreshOne 刷新指定联系人缓存。
+func RefreshOne(key string) (*sdk.Contact, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, fmt.Errorf("联系人 key 不能为空")
+	}
+
+	contact := instance.Get(key)
+	if contact == nil || contact.Username == "" {
+		return nil, fmt.Errorf("联系人不存在：%s", key)
+	}
+
+	detail, err := instance.api.Detail([]string{contact.Username})
+	if err != nil {
+		return nil, fmt.Errorf("[contact ability] 获取联系人 [%s] 详细信息失败: %w", contact.Username, err)
+	}
+	list := detail.GetContactList()
+	if len(list) == 0 {
+		return nil, fmt.Errorf("联系人不存在：%s", key)
+	}
+
+	build, err := Build(list[0])
+	if err != nil {
+		return nil, fmt.Errorf("[contact ability] 构建联系人 [%s] 失败: %w", contact.Username, err)
+	}
+	instance.cache[build.Username] = build
+	Destroy()
+	return build, nil
+}
+
+func (a *ability) setSelf(self *sdk.SelfInfo) {
+	a.selfMu.Lock()
+	defer a.selfMu.Unlock()
+
+	a.self = cloneSelfInfo(self)
+}
+
+// GetSelf 获取当前登录账号信息
+func (a *ability) GetSelf() *sdk.SelfInfo {
+	a.selfMu.RLock()
+	defer a.selfMu.RUnlock()
+
+	return cloneSelfInfo(a.self)
+}
+
 // Get 按键查询缓存联系人，支持前缀：username::（默认）、nickname::、remark::
 func (a *ability) Get(key string) *sdk.Contact {
 	if c := getStrategy(key).find(a.cache); c != nil {
@@ -125,9 +183,9 @@ func (a *ability) SetRemark(username, remark string) error {
 	if response, err := a.api.SetRemark(username, remark); err != nil {
 		return err
 	} else {
-		var result sdk.SetRemark_Response
-		if err := api.TransformProto(response, &result); err != nil {
-			return err
+		_ = sdk.SetRemark_Response{
+			Code:    response.GetCode(),
+			Message: string(response.GetResult().GetMessage()),
 		}
 		return nil
 	}
@@ -188,5 +246,20 @@ func (a *ability) Search(keyword string, fromScene, searchScene uint32) *sdk.Con
 		Avatar:   search.GetSmallAvatarUrl(),
 		Type:     sdk.ContactType_CONTACT_TYPE_FRIEND,
 		Data:     nil,
+	}
+}
+
+func cloneSelfInfo(self *sdk.SelfInfo) *sdk.SelfInfo {
+	if self == nil {
+		return nil
+	}
+	return &sdk.SelfInfo{
+		Username: self.Username,
+		Nickname: self.Nickname,
+		Alias:    self.Alias,
+		Avatar:   self.Avatar,
+		Uin:      self.Uin,
+		Email:    self.Email,
+		Mobile:   self.Mobile,
 	}
 }

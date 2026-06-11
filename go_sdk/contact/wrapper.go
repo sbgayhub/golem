@@ -30,6 +30,15 @@ func (c Client) List() []*Contact {
 	return resp.Contacts
 }
 
+// GetSelf 获取当前登录账号信息
+func (c Client) GetSelf() *SelfInfo {
+	resp, err := c.Client.GetSelf(context.Background(), &GetSelf_Request{})
+	if err != nil || resp.Self == nil {
+		return nil
+	}
+	return resp.Self
+}
+
 // SetRemark 设置联系人备注
 func (c Client) SetRemark(username, remark string) error {
 	if _, err := c.Client.SetRemark(context.Background(), &SetRemark_Request{
@@ -123,6 +132,12 @@ func (s Server) List(ctx context.Context, request *List_Request) (*List_Response
 		return nil, errors.New("not found")
 	}
 	return &List_Response{Contacts: contacts}, nil
+}
+
+// GetSelf 获取当前登录账号信息
+func (s Server) GetSelf(ctx context.Context, request *GetSelf_Request) (*GetSelf_Response, error) {
+	self := s.Impl.GetSelf()
+	return &GetSelf_Response{Self: self}, nil
 }
 
 // SetRemark 设置联系人备注

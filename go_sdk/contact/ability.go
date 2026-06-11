@@ -6,6 +6,8 @@ type Ability interface {
 	Get(key string) *Contact
 	// List 获取联系人列表
 	List() []*Contact
+	// GetSelf 获取当前登录账号信息
+	GetSelf() *SelfInfo
 	// SetRemark 设置联系人备注
 	SetRemark(username, remark string) error
 	// AddFriend 发送好友申请

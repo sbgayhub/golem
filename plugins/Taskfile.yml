@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+vars:
+  # 为空时输出到插件目录；非空时输出到仓库根目录下的指定目录。
+  DIR: 'host/plugins'
+  PLUGINS: [ai, cron, example, gg, news, reread, statistics, universal]
+  PROJECT_DIR: '{{joinPath .TASKFILE_DIR ".."}}'
+
+tasks:
+  build:*:
+    desc: 构建指定插件，例如 task build:ai
+    vars:
+      PLUGIN: '{{index .MATCH 0}}'
+    cmds:
+      - task: _build
+        vars:
+          PLUGIN: '{{.PLUGIN}}'
+
+  buildall:
+    desc: 构建所有插件
+    cmds:
+      - for:
+          var: PLUGINS
+          as: PLUGIN
+        task: _build
+        vars:
+          PLUGIN: '{{.PLUGIN}}'
+
+  _build:
+    internal: true
+    requires:
+      vars:
+        - name: PLUGIN
+          enum:
+            ref: .PLUGINS
+    vars:
+      CUSTOM_DIR: '{{.DIR | default ""}}'
+      OUT_DIR: '{{if .CUSTOM_DIR}}{{joinPath .PROJECT_DIR .CUSTOM_DIR}}{{else}}{{joinPath .TASKFILE_DIR .PLUGIN}}{{end}}'
+      OUT_FILE: '{{joinPath .OUT_DIR (printf "golem_plugin_%s%s" .PLUGIN exeExt)}}'
+    cmds:
+      - go build -C "{{joinPath .TASKFILE_DIR .PLUGIN}}" -o "{{.OUT_FILE}}" .

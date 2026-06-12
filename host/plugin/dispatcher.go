@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/duke-git/lancet/v2/strutil"
+	"github.com/sbgayhub/golem/host/config"
 	"github.com/sbgayhub/golem/sdk/plugin"
 )
 
@@ -76,6 +77,9 @@ func shouldDispatchEvent(e *plugin.Event, p *wrapper) bool {
 	}
 	if !strutil.HasPrefixAny(e.Topic, p.subscriptions) {
 		return false
+	}
+	if e.Sender != "" && config.Get().Owner == e.Sender {
+		return true
 	}
 	if e.Sender != "" && !isAllowed(e.Sender, p) {
 		return false

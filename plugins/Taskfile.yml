@@ -5,7 +5,7 @@ version: '3'
 vars:
   # 为空时输出到插件目录；非空时输出到仓库根目录下的指定目录。
   DIR: 'host/plugins'
-  PLUGINS: [ai, cron, example, gg, news, reread, statistics, universal]
+  PLUGINS: [ai, cron, gg, news, reread, statistics, universal, meme, video_parser]
   PROJECT_DIR: '{{joinPath .TASKFILE_DIR ".."}}'
 
 tasks:

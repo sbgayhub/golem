@@ -41,7 +41,7 @@ func (p *AiPlugin) chat(sessionKey string) (string, error) {
 
 	messages := make([]openAIMessage, 0, p.maxContextMessages()+1)
 	if prompt := activePromptContent(config); prompt != "" {
-		messages = append(messages, openAIMessage{Role: "system", Content: prompt})
+		messages = append(messages, openAIMessage{Role: "system", Content: p.getPreMadePrompts() + prompt})
 	}
 	messages = append(messages, p.contextMessages(sessionKey)...)
 	if len(messages) == 0 {

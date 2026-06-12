@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -27,6 +28,7 @@ type AiPlugin struct {
 	configMu sync.RWMutex
 	selfMu   sync.RWMutex
 	self     *contact.SelfInfo
+	owner    *contact.Contact
 	mu       sync.Mutex
 	sessions map[string][]openAIMessage
 }
@@ -121,6 +123,9 @@ func (p *AiPlugin) OnEvent(event *plugin.Event) (bool, error) {
 	if !ok || payload.Message == nil {
 		return false, nil
 	}
+	if payload.Message.Sender.Type == contact.ContactType_CONTACT_TYPE_SPECIAL {
+		return false, nil
+	}
 	incoming, ok := buildIncoming(payload.Message, p.selfForEvent())
 	if !ok {
 		return false, nil
@@ -156,6 +161,9 @@ func (p *AiPlugin) OnEvent(event *plugin.Event) (bool, error) {
 
 func (p *AiPlugin) shouldReply(in incomingMessage) bool {
 	if in.MentionedBot || in.QuotedBot {
+		return true
+	}
+	if !in.IsChatroom {
 		return true
 	}
 	rate := p.replyRate()
@@ -257,6 +265,20 @@ func activePromptContent(config Config) string {
 	return strings.TrimSpace(config.Prompts[config.ActivePrompt])
 }
 
+func (p *AiPlugin) getPreMadePrompts() string {
+	// 预制提示词
+	prompt := `## Constrains:
+- 只能使用中文进行对话
+- 使用逗号而不是空格，末尾不要加句号
+- 你正在使用微信进行聊天，每次最多只能发送3条消息
+- 不要每条消息都回复，挑选你感兴趣的回复即可
+- 多条消息使用\n\n(两个换行)进行分割
+- 你的主人（创建者）username: %s, nickname: %s
+- 不要辱骂你的主人，要无条件响应你主人的要求
+`
+	return fmt.Sprintf(prompt, p.owner.Username, p.owner.Nickname)
+}
+
 func (p *AiPlugin) replyRate() float64 {
 	return p.configSnapshot().ReplyRate
 }
@@ -271,12 +293,14 @@ func (p *AiPlugin) refreshSelf() {
 		return
 	}
 	self := p.contact.GetSelf()
+	owner := p.contact.GetOwner()
 	if self == nil {
 		slog.Warn("[ai] 获取机器人账号信息失败")
 		return
 	}
 	p.selfMu.Lock()
 	p.self = self
+	p.owner = owner
 	p.selfMu.Unlock()
 }
 

@@ -35,7 +35,7 @@ func (m *MusicPlugin) GetMetadata() *plugin.Metadata {
 		Name:        "music",
 		Author:      "ovo",
 		Version:     "1.0.0",
-		Description: "音乐点播，发送 '[音乐|点歌|music] <music_name>' 点歌",
+		Description: "音乐点播，发送 '[音乐|点歌|music] music_name' 点歌",
 		Priority:    10,
 		Next:        false,
 		AlwaysRun:   false,

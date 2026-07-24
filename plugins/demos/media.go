@@ -290,19 +290,19 @@ func (p *DemosPlugin) sendVoice(receiver *contact.Contact, audioURL string) {
 		return
 	}
 
-	inputFile, err := os.CreateTemp("", "demos-audio-src-*")
+	srcFile, err := os.CreateTemp("", "demos-audio-src-*")
 	if err != nil {
 		p.sendText(receiver, "语音处理失败")
 		return
 	}
-	inputPath := inputFile.Name()
-	defer os.Remove(inputPath)
-	if _, err := inputFile.Write(data); err != nil {
-		_ = inputFile.Close()
+	srcPath := srcFile.Name()
+	defer os.Remove(srcPath)
+	if _, err := srcFile.Write(data); err != nil {
+		_ = srcFile.Close()
 		p.sendText(receiver, "语音处理失败")
 		return
 	}
-	if err := inputFile.Close(); err != nil {
+	if err := srcFile.Close(); err != nil {
 		p.sendText(receiver, "语音处理失败")
 		return
 	}
@@ -316,25 +316,33 @@ func (p *DemosPlugin) sendVoice(receiver *contact.Contact, audioURL string) {
 		"src_header", hexHeader(data, 16),
 	)
 
-	voicePath := inputPath
+	// 转码前从源文件取时长（silk 文件 ffprobe 取不到，必须提前取）
+	durationMs, err := p.mediaDurationMs(srcPath)
+	if err != nil {
+		slog.Warn("[demos] 获取源文件时长失败，使用默认值", "err", err)
+		durationMs = 5000
+	}
+
+	voicePath := srcPath
 	converted := false
 	if srcFormatCode != 0 && srcFormatCode != 4 {
-		convertedFile, err := os.CreateTemp("", "demos-audio-*.amr")
+		// 优先尝试 SILK，失败或无配置则降级到 AMR
+		var silkMs int
+		voicePath, silkMs, err = p.tryConvertToSILK(srcPath, durationMs)
 		if err != nil {
-			p.sendText(receiver, "语音处理失败")
-			return
+			slog.Warn("[demos] silk 编码失败，降级到 amr", "err", err)
+			voicePath, err = p.tryConvertToAMR(srcPath)
+			if err != nil {
+				slog.Error("[demos] 语音转码全部失败", "url", audioURL, "err", err)
+				p.sendText(receiver, "语音发送失败，链接："+audioURL)
+				return
+			}
+		} else {
+			// 超预算被裁剪时，气泡时长与实际数据保持一致
+			durationMs = silkMs
 		}
-		convertedPath := convertedFile.Name()
-		_ = convertedFile.Close()
-		defer os.Remove(convertedPath)
-
-		if err := convertToAMR(inputPath, convertedPath); err != nil {
-			slog.Error("[demos] 转换语音为 AMR 失败", "url", audioURL, "err", err)
-			p.sendText(receiver, "语音发送失败，链接："+audioURL)
-			return
-		}
-		voicePath = convertedPath
 		converted = true
+		defer os.Remove(voicePath)
 	}
 
 	voiceData, err := os.ReadFile(voicePath)
@@ -342,60 +350,50 @@ func (p *DemosPlugin) sendVoice(receiver *contact.Contact, audioURL string) {
 		p.sendText(receiver, "语音处理失败")
 		return
 	}
+	voiceData = ensureTencentSilk(voiceData)
 
-	finalFormatCode := detectAudioFormatCode(voiceData)
-	durationMs, err := p.mediaDurationMs(voicePath)
-	if err != nil {
-		slog.Warn("[demos] 获取语音时长失败，使用默认值", "err", err)
-		durationMs = 5000
-	}
-
-	if converted && !isValidAMRNB(voiceData) {
-		slog.Error("[demos] AMR 转码结果校验失败：文件头不是 AMR-NB",
-			"size", len(voiceData),
-			"duration_ms", durationMs,
-			"detected_format", finalFormatCode,
-			"header_hex", hexHeader(voiceData, 16),
-		)
-		p.sendText(receiver, "语音发送失败，链接："+audioURL)
-		return
-	}
-
+	finalFmt := int32(detectAudioFormatCode(voiceData))
 	slog.Debug("[demos] 语音准备发送",
 		"converted", converted,
-		"final_format", finalFormatCode,
+		"final_format", finalFmt,
 		"size", len(voiceData),
 		"duration_ms", durationMs,
 		"header_hex", hexHeader(voiceData, 16),
 	)
 
+	voice := &message.VoiceData{
+		Media:    &message.Media{Data: voiceData},
+		Duration: uint32(durationMs),
+	}
+	// host 现状：Format 字段非空即按 4=SILK 发送，为空按 0=AMR 发送（与字段值无关）。
+	// 因此只在 SILK 数据时设置 Format，AMR 保持空，两条路径均正确。
+	if finalFmt == 4 {
+		voice.Format = &finalFmt
+	}
+
 	msg := &message.Message{
 		Type:     message.TypeVoice,
 		Receiver: receiver,
 		Content:  "[语音]",
-		Data: &message.Message_Voice{Voice: &message.VoiceData{
-			Media:    &message.Media{Data: voiceData},
-			Duration: uint32(durationMs),
-		}},
+		Data:     &message.Message_Voice{Voice: voice},
 	}
 	if _, err := p.message.Send(msg); err != nil {
 		if strings.Contains(err.Error(), "code: -104") {
-			slog.Warn("[demos] 语音发送返回 -104（经验证语音已实际送达，跳过降级文本）",
+			slog.Warn("[demos] 语音发送返回 -104（语音已实际送达，跳过降级文本）",
 				"err", err,
 				"converted", converted,
 				"duration_ms", durationMs,
 				"size", len(voiceData),
-				"valid_amr_nb", isValidAMRNB(voiceData),
+				"final_format", finalFmt,
 			)
 		} else {
 			slog.Error("[demos] 发送语音失败",
 				"err", err,
 				"converted", converted,
-				"detected_format", finalFormatCode,
+				"detected_format", finalFmt,
 				"duration_ms", durationMs,
 				"size", len(voiceData),
 				"header_hex", hexHeader(voiceData, 16),
-				"valid_amr_nb", isValidAMRNB(voiceData),
 			)
 			p.sendText(receiver, "语音发送失败，链接："+audioURL)
 		}
@@ -403,10 +401,15 @@ func (p *DemosPlugin) sendVoice(receiver *contact.Contact, audioURL string) {
 }
 
 func detectAudioFormatCode(data []byte) int {
+	// 微信语音是腾讯变体 SILK：标准头 "#!SILK_V3" 前多一个 0x02 字节
+	if len(data) >= 10 && data[0] == 0x02 && string(data[1:10]) == "#!SILK_V3" {
+		return 4
+	}
 	if len(data) >= 9 && string(data[:9]) == "#!SILK_V3" {
 		return 4
 	}
-	if len(data) >= 6 && strings.HasPrefix(string(data[:6]), "#!AMR") {
+	// 只认 AMR-NB（"#!AMR\n"）；AMR-WB 微信不收，落到 -1 走转码
+	if isValidAMRNB(data) {
 		return 0
 	}
 	if len(data) >= 12 {
@@ -418,6 +421,21 @@ func detectAudioFormatCode(data []byte) int {
 		}
 	}
 	return -1
+}
+
+// ensureTencentSilk 把标准 SILK v3 流转成微信要求的腾讯变体：
+// 头部补 0x02 前缀，去掉末尾的 0xFFFF 流结束标记（若存在）。
+// 已是腾讯变体或非 SILK 数据则原样返回。
+func ensureTencentSilk(data []byte) []byte {
+	if len(data) < 9 || string(data[:9]) != "#!SILK_V3" {
+		return data
+	}
+	if n := len(data); n >= 2 && data[n-2] == 0xFF && data[n-1] == 0xFF {
+		data = data[:n-2]
+	}
+	out := make([]byte, 0, len(data)+1)
+	out = append(out, 0x02)
+	return append(out, data...)
 }
 
 func convertToAMR(inputPath, outputPath string) error {
@@ -436,6 +454,134 @@ func convertToAMR(inputPath, outputPath string) error {
 		return fmt.Errorf("ffmpeg 转 AMR 失败: %w, output: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
+}
+
+// tryConvertToSILK 用 ffmpeg + silk_v3_encoder.exe 把音频转为微信可用的腾讯变体 SILK。
+// durationMs 为源音频时长；上传通道对单条语音有大小上限（见 silk_max_bytes），
+// 超预算时先降码率（下限 8000bps），仍不够则裁剪时长。返回 silk 路径与实际编码时长(毫秒)。
+// 若编码器路径未配置或执行失败返回 error，调用方应降级到 AMR。
+func (p *DemosPlugin) tryConvertToSILK(srcPath string, durationMs int) (string, int, error) {
+	enc := p.Config.SilkEncoderPath
+	if enc == "" {
+		return "", 0, fmt.Errorf("silk_encoder_path 未配置")
+	}
+
+	sampleRate := p.Config.SilkSampleRate
+	if sampleRate <= 0 {
+		sampleRate = 24000
+	}
+
+	const minRate, maxRate = 8000, 24000
+	rate := maxRate
+	actualMs := durationMs
+	if budget := p.Config.SilkMaxBytes; budget > 0 && durationMs > 0 {
+		if need := budget * 8 * 1000 / durationMs; need < rate {
+			rate = need
+		}
+		if rate < minRate {
+			rate = minRate
+			actualMs = budget * 8 * 1000 / rate
+		}
+	}
+
+	pcmFile, err := os.CreateTemp("", "demos-audio-*.pcm")
+	if err != nil {
+		return "", 0, err
+	}
+	pcmPath := pcmFile.Name()
+	_ = pcmFile.Close()
+	defer os.Remove(pcmPath)
+
+	// step 1: ffmpeg 转 PCM（s16le 单声道；超预算时 -t 裁尾）
+	ffArgs := []string{
+		"-i", srcPath,
+		"-ar", strconv.Itoa(sampleRate),
+		"-ac", "1",
+		"-f", "s16le",
+	}
+	if actualMs < durationMs {
+		ffArgs = append(ffArgs, "-t", fmt.Sprintf("%.3f", float64(actualMs)/1000))
+	}
+	ffArgs = append(ffArgs, "-y", pcmPath)
+	out, err := exec.Command("ffmpeg", ffArgs...).CombinedOutput()
+	if err != nil {
+		return "", 0, fmt.Errorf("ffmpeg 转 PCM 失败: %w, output: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// step 2: PCM -> SILK
+	silkFile, err := os.CreateTemp("", "demos-audio-*.silk")
+	if err != nil {
+		return "", 0, err
+	}
+	silkPath := silkFile.Name()
+	_ = silkFile.Close()
+
+	// -Fs_API 是输入 PCM 采样率，必须与 ffmpeg 的 -ar 一致，否则变速变调；
+	// -rate 是目标码率(bps)而非采样率（Mp3ToSilkUtil.java 注释有误，值恰好撞对）；
+	// -tencent 输出微信要求的腾讯变体（头部 0x02 前缀、无 0xFFFF 结尾），
+	// 缺了它产出标准 SILK，微信手机/PC 端都判语音损坏。
+	silkCmd := exec.Command(enc,
+		pcmPath,
+		silkPath,
+		"-Fs_API", strconv.Itoa(sampleRate),
+		"-rate", strconv.Itoa(rate),
+		"-tencent",
+	)
+	out, err = silkCmd.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(silkPath)
+		return "", 0, fmt.Errorf("silk_v3_encoder 编码失败: %w, output: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	// 校验产出
+	sData, err := os.ReadFile(silkPath)
+	if err != nil {
+		_ = os.Remove(silkPath)
+		return "", 0, fmt.Errorf("读取 silk 文件失败: %w", err)
+	}
+	if detectAudioFormatCode(sData) != 4 {
+		_ = os.Remove(silkPath)
+		return "", 0, fmt.Errorf("silk 编码结果不是合法 SILK 格式")
+	}
+	if rate < maxRate || actualMs < durationMs {
+		slog.Info("[demos] 语音超出大小预算，已自适应",
+			"budget_bytes", p.Config.SilkMaxBytes,
+			"rate_bps", rate,
+			"src_ms", durationMs,
+			"encoded_ms", actualMs,
+			"silk_bytes", len(sData),
+		)
+	}
+
+	return silkPath, actualMs, nil
+}
+
+// tryConvertToAMR 将音频转为 AMR-NB；返回临时文件路径。
+func (p *DemosPlugin) tryConvertToAMR(srcPath string) (string, error) {
+	outFile, err := os.CreateTemp("", "demos-audio-*.amr")
+	if err != nil {
+		return "", err
+	}
+	outPath := outFile.Name()
+	_ = outFile.Close()
+
+	if err := convertToAMR(srcPath, outPath); err != nil {
+		_ = os.Remove(outPath)
+		return "", err
+	}
+
+	// 校验 AMR 头
+	amrData, err := os.ReadFile(outPath)
+	if err != nil {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("读取 AMR 文件失败: %w", err)
+	}
+	if !isValidAMRNB(amrData) {
+		_ = os.Remove(outPath)
+		return "", fmt.Errorf("AMR 转码结果校验失败：文件头不是 AMR-NB")
+	}
+
+	return outPath, nil
 }
 
 // isValidAMRNB 校验是否为合法的 AMR-NB 文件（微信语音要求）。

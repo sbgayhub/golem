@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gogpu/gg/text"
@@ -46,6 +47,11 @@ type WordCloudPlugin struct {
 	segmenter *segmenter
 	font      *text.FontSource
 
+	// 词典/字体懒加载：首次生成词云时初始化，之后常驻直到卸载（/pm reload 会 Kill 进程，下次再懒加载）
+	initMu       sync.Mutex
+	initErr      error
+	loadNotified atomic.Bool // 首次加载提示只发一次，避免多群并发刷屏
+
 	mu      sync.Mutex
 	running map[string]bool // 在途生成的群聊，防止同群并发刷屏
 }
@@ -72,8 +78,8 @@ func (p *WordCloudPlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "wordcloud",
 		Author:      "ovo",
-		Version:     "1.0.1",
-		Description: "词云插件：统计群聊历史发言生成词云图片。历史发言经 statistics.query_messages 能力获取（需启用 statistics 插件），图片经 CDN 上传发送。",
+		Version:     "1.0.2",
+		Description: "词云插件：统计群聊历史发言生成词云图片。历史发言经 statistics.query_messages 能力获取（需启用 statistics 插件），图片经 CDN 上传发送。分词词典与字体首次生成时再加载。",
 		Priority:    0,
 		Next:        false,
 		AlwaysRun:   false,
@@ -85,31 +91,53 @@ func (p *WordCloudPlugin) GetSubscriptions() []string {
 	return []string{message.TypeText.Topic}
 }
 
-// OnLoad 插件加载：初始化分词器与字体
+// OnLoad 插件加载：不预加载词典/字体，避免启动即占用大量内存；首次生成词云时再懒加载。
 func (p *WordCloudPlugin) OnLoad() error {
-	seg, err := newSegmenter()
-	if err != nil {
-		return fmt.Errorf("初始化分词器失败: %w", err)
-	}
-	p.segmenter = seg
-
-	font, err := p.loadFont()
-	if err != nil {
-		return fmt.Errorf("加载字体失败: %w", err)
-	}
-	p.font = font
-
-	slog.Info("[wordcloud] 插件加载成功", "font", font.Name())
+	slog.Info("[wordcloud] 插件加载成功（词典/字体将在首次生成时加载）")
 	return nil
 }
 
-// OnUnload 插件卸载：释放字体资源
+// OnUnload 插件卸载：释放字体与分词器引用（进程随卸被 Kill，内存一并回收）
 func (p *WordCloudPlugin) OnUnload() error {
 	if p.font != nil {
 		_ = p.font.Close()
 		p.font = nil
 	}
+	p.segmenter = nil
 	slog.Info("[wordcloud] 插件已卸载")
+	return nil
+}
+
+// resourcesReady 词典与字体是否已成功加载（只读检查，供发「首次稍慢」提示）
+func (p *WordCloudPlugin) resourcesReady() bool {
+	p.initMu.Lock()
+	defer p.initMu.Unlock()
+	return p.segmenter != nil && p.font != nil
+}
+
+// ensureResources 确保分词器与字体已加载。多群并发时串行化，成功后常驻；失败允许下次重试。
+func (p *WordCloudPlugin) ensureResources() error {
+	p.initMu.Lock()
+	defer p.initMu.Unlock()
+	if p.segmenter != nil && p.font != nil {
+		return nil
+	}
+
+	slog.Info("[wordcloud] 开始懒加载分词词典与字体")
+	seg, err := newSegmenter()
+	if err != nil {
+		p.initErr = fmt.Errorf("初始化分词器失败: %w", err)
+		return p.initErr
+	}
+	font, err := p.loadFont()
+	if err != nil {
+		p.initErr = fmt.Errorf("加载字体失败: %w", err)
+		return p.initErr
+	}
+	p.segmenter = seg
+	p.font = font
+	p.initErr = nil
+	slog.Info("[wordcloud] 词典与字体加载完成", "font", font.Name())
 	return nil
 }
 
@@ -205,6 +233,21 @@ func (p *WordCloudPlugin) generateAndSend(msg *message.Message, trg trigger, cha
 	if len(msgs) == 0 {
 		p.replyText(replyTo, noMessageHint(trg, displayName))
 		return
+	}
+
+	// 查询通过且确有可统计消息后，再懒加载词典/字体（无效请求不触发加载）
+	if !p.resourcesReady() {
+		// 提示必须在 ensureResources 阻塞加载之前发出；多群并发只提示一次
+		if p.loadNotified.CompareAndSwap(false, true) {
+			p.replyText(replyTo, "首次生成词云需加载分词词典与字体，可能稍慢，请稍候~")
+		}
+		if err := p.ensureResources(); err != nil {
+			// 加载失败允许下次重试，并重新提示
+			p.loadNotified.Store(false)
+			slog.Warn("[wordcloud] 资源初始化失败", "err", err)
+			p.replyText(replyTo, "初始化词云资源失败："+err.Error())
+			return
+		}
 	}
 
 	freq := p.segmenter.countWords(msgs)

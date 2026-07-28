@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -111,6 +112,11 @@ func (p *SetuPlugin) OnEvent(e *plugin.Event) (bool, error) {
 		return p.handleBoy(receiver)
 	}
 
+	// 诊断：setu测cdn [url]，不填 url 则用默认猫图
+	if text == "setu测cdn" || strings.HasPrefix(text, "setu测cdn ") {
+		return p.handleDiagCdn(receiver, strings.TrimSpace(strings.TrimPrefix(text, "setu测cdn")))
+	}
+
 	// 前缀匹配：来点XX（搜索）
 	if strings.HasPrefix(text, "来点") && len([]rune(text)) > 2 {
 		keyword := string([]rune(text)[2:])
@@ -118,4 +124,26 @@ func (p *SetuPlugin) OnEvent(e *plugin.Event) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// handleDiagCdn 诊断用：走与 sendImage 相同的 p.cdn.UploadImage 路径，显式回执成/败（不降级吞错）。
+// 用途：和 hermes 切到 message.Send 之后的发图做对照，确认 cdn 这条路是否自愈。
+// imgURL 为空时用默认猫图，便于直接发“setu测cdn”快速复测。
+func (p *SetuPlugin) handleDiagCdn(receiver *contact.Contact, imgURL string) (bool, error) {
+	const defaultURL = "https://cdn2.thecatapi.com/images/42r.jpg"
+	if strings.TrimSpace(imgURL) == "" {
+		imgURL = defaultURL
+	}
+	data, err := p.downloadMedia(imgURL)
+	if err != nil {
+		p.sendText(receiver, "setu测cdn：下载失败 "+err.Error()+" url="+imgURL)
+		return true, nil
+	}
+	if _, err := p.cdn.UploadImage(receiver.GetUsername(), bytes.NewReader(data)); err != nil {
+		slog.Error("[setu] 诊断发图 cdn.UploadImage 失败", "url", imgURL, "err", err)
+		p.sendText(receiver, "setu测cdn：cdn 上传失败 "+err.Error()+" url="+imgURL)
+		return true, nil
+	}
+	p.sendText(receiver, fmt.Sprintf("setu测cdn：成功直发图（%d 字节，走 cdn.UploadImage）url=%s", len(data), imgURL))
+	return true, nil
 }

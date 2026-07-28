@@ -10,8 +10,10 @@ func main() {
 	p := &DemosPlugin{
 		ConfigAbility: plugin.ConfigAbility[Config]{
 			Config: Config{
-				VideoNative: true,
-				MaxList:     3,
+				VideoNative:    true,
+				MaxList:        3,
+				SilkSampleRate: 24000,
+				SilkMaxBytes:   28000,
 			},
 		},
 		client: newHTTPClient(),

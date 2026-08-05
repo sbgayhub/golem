@@ -25,6 +25,8 @@ vars:
       setu,
       farm,
       robbery,
+      hermes,
+      hermes_bridge,
     ]
 
 tasks:

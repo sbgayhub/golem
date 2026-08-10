@@ -16,8 +16,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.4.0",
-		Description: "Hermes 官方平台适配器桥：SSE 入站、HTTP 出站（含 mentions 真 @、AppMsg 卡片/音乐卡片）、self/群/成员查询。群门闩+去抖。",
+		Version:     "0.11.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；管理台（登录页、侧栏、表情按情绪加载）。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,
@@ -38,19 +38,23 @@ func (p *BridgePlugin) GetSubscriptions() []string {
 	}
 }
 
-// OnLoad 启动桥 HTTP；本 host 不调 OnEnable，启停绑在 OnLoad/OnUnload。
+// OnLoad 启动业务桥与本机管理台 HTTP；本 host 不调 OnEnable，启停绑在 OnLoad/OnUnload。
 func (p *BridgePlugin) OnLoad() error {
 	p.stopped.Store(false)
 	p.refreshSelf()
 	if err := p.startHTTP(); err != nil {
 		slog.Error("[hermes_bridge] HTTP 桥启动失败", "err", err)
 	}
+	if err := p.startAdminHTTP(); err != nil {
+		slog.Error("[hermes_bridge] 管理台启动失败", "err", err)
+	}
 	return nil
 }
 
-// OnUnload 停止桥 HTTP 与所有去抖 timer
+// OnUnload 停止业务桥、管理台与所有去抖 timer
 func (p *BridgePlugin) OnUnload() error {
 	p.stopSessions()
+	p.stopAdminHTTP()
 	p.stopHTTP()
 	return nil
 }
@@ -99,6 +103,16 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 			"is_owner", in.SpeakerIsOwner,
 			"is_chatroom", in.IsChatroom,
 			"text", singleLine(in.Text))
+		chatType := "private"
+		if in.IsChatroom {
+			chatType = "group"
+		}
+		p.trace(adminTrace{
+			Kind: "dropped", Reason: "not_in_whitelist",
+			SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(),
+			ChatType: chatType, UserName: in.SpeakerName, UserID: in.SpeakerID,
+			Text: singleLine(in.Text),
+		})
 		return false, nil
 	}
 
@@ -114,6 +128,16 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	if isApprovalReplyText(in.Text) {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃审批捷径", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_approval",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -146,9 +170,25 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 			slog.Info("[hermes_bridge] 打断捷径已取消去抖 pending",
 				"session", in.SessionKey, "cancelled", cancelled, "dropped", dropped,
 				"user", in.SpeakerName, "owner", in.SpeakerIsOwner)
+			p.trace(adminTrace{
+				Kind: "cancelled", Reason: "interrupt",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				UserName: in.SpeakerName, UserID: in.SpeakerID, MsgCount: dropped,
+				Text: singleLine(in.Text),
+			})
 		}
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃打断捷径", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_interrupt",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -186,6 +226,16 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		}
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃新开会话捷径", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_reset",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -217,6 +267,16 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	if in.SpeakerIsOwner && isMemberArchiveText(in.Text) {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃归档捷径", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_archive",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -246,6 +306,16 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	if !in.IsChatroom {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃私聊", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_private",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -281,6 +351,12 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	// 回滚开关：group_push_all=true 时与改前门闩前行为一致，每条立即推
 	if cfg.GroupPushAll {
 		if p.hub.subscriberCount() == 0 {
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_group_push_all",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: "group", UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
 			return false, nil
 		}
 		ev := bridgeEvent{
@@ -344,12 +420,25 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 
 	// 未触发：只记不推
 	if !triggered {
+		p.trace(adminTrace{
+			Kind: "context_only", Reason: "gate_not_triggered",
+			SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+			ChatType: "group", UserName: in.SpeakerName, UserID: in.SpeakerID,
+			Text: singleLine(in.Text), Addressing: in.Addressing, TriggerReason: in.TriggerReason,
+		})
 		return false, nil
 	}
 
 	// 无订阅者仍保留上下文；不调度 flush（避免标 Flushed 却推不出去）
 	if p.hub.subscriberCount() == 0 {
 		slog.Info("[hermes_bridge] 群触发但无 SSE 订阅者，仅记上下文", "session", in.SessionKey)
+		p.trace(adminTrace{
+			Kind: "dropped", Reason: "no_subscribers_group_trigger",
+			SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+			ChatType: "group", UserName: in.SpeakerName, UserID: in.SpeakerID,
+			Text: singleLine(in.Text), TriggerReason: in.TriggerReason, Addressing: in.Addressing,
+			Subscribers: 0,
+		})
 		return false, nil
 	}
 
@@ -363,6 +452,12 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		IsOwner:       in.SpeakerIsOwner,
 		Addressing:    in.Addressing,
 		TriggerReason: in.TriggerReason,
+	})
+	p.trace(adminTrace{
+		Kind: "scheduled", Reason: "debounce",
+		SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+		ChatType: "group", UserName: in.SpeakerName, UserID: in.SpeakerID,
+		Text: singleLine(in.Text), TriggerReason: in.TriggerReason, Addressing: in.Addressing,
 	})
 	return false, nil
 }
@@ -456,7 +551,7 @@ func (p *BridgePlugin) sendPlainText(receiver *contact.Contact, content string) 
 
 func (p *BridgePlugin) statusText() string {
 	cfg := p.configSnapshot()
-	// 主人 / Listen 不写明文：status 可能在群里由主人触发，避免泄露 wxid 与监听地址。
+	// 主人 / 业务 Listen 不写明文：status 可能在群里由主人触发，避免泄露 wxid 与对 LAN 地址。
 	ownerOK := "未识别"
 	p.selfMu.RLock()
 	if p.owner != nil && strings.TrimSpace(p.owner.GetUsername()) != "" {
@@ -467,6 +562,13 @@ func (p *BridgePlugin) statusText() string {
 	triggers := strings.Join(cfg.TriggerNames, ", ")
 	if triggers == "" {
 		triggers = "（未配置）"
+	}
+	adminLine := "管理台: 未启用"
+	if addr := strings.TrimSpace(cfg.AdminListen); addr != "" {
+		adminLine = "管理台: " + addr
+		if strings.TrimSpace(cfg.AdminToken) == "" {
+			adminLine += "（admin_token 未配置，API 不可用）"
+		}
 	}
 	lines := []string{
 		"hermes_bridge 状态：",
@@ -483,6 +585,7 @@ func (p *BridgePlugin) statusText() string {
 		"主人: " + ownerOK,
 		// 白名单只报数量：status 常在群里回，避免摊开 wxid / @chatroom
 		fmt.Sprintf("白名单: %d 个", len(cfg.Targets)),
+		adminLine,
 	}
 	return strings.Join(lines, "\n")
 }

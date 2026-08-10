@@ -81,6 +81,11 @@ func (p *BridgePlugin) handleStatus(hermesStatusCommand) (string, error) {
 }
 
 func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
+	cfg := p.configSnapshot()
+	adminHint := "管理台未启用（admin_listen 为空）"
+	if addr := strings.TrimSpace(cfg.AdminListen); addr != "" {
+		adminHint = "本机管理台 http://" + addr + "/ui/ （需配置 admin_token，与业务 token 分离）"
+	}
 	return strings.Join([]string{
 		"hermes_bridge 管理命令（仅主人，host 层已校验）：",
 		"/hermes status — 查看桥状态、群门闩与白名单",
@@ -90,6 +95,9 @@ func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
 		"/hermes video <url> — 诊断直发视频",
 		"/hermes emoji <url|md5> — 诊断直发表情（URL下载压缩 / md5引用原图不压）",
 		"/hermes help — 本说明",
+		"",
+		adminHint,
+		"也可在管理台远程加白名单/调门闩，不必人在群里发 enable。",
 		"",
 		"群聊：闲聊进本地上下文；@ / 引用机器人 / trigger_names / 冒泡 才去抖一批推 SSE。",
 		"私聊：白名单或主人会话逐条推。审批回复用 yes/no（不要 /approve）。",

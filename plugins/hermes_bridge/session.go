@@ -410,6 +410,12 @@ func (p *BridgePlugin) flushSession(key string) {
 
 	if p.hub.subscriberCount() == 0 {
 		slog.Debug("[hermes_bridge] flush 时无 SSE 订阅者，丢弃批次", "session", key, "n", len(unflushed))
+		p.trace(adminTrace{
+			Kind: "dropped", Reason: "no_subscribers_flush",
+			SessionKey: key, ChatID: meta.ChatID, ChatName: meta.ChatName, ChatType: meta.ChatType,
+			UserName: meta.UserName, UserID: meta.UserID, TriggerReason: meta.TriggerReason,
+			Addressing: meta.Addressing, MsgCount: len(unflushed), Subscribers: 0,
+		})
 		return
 	}
 
@@ -420,6 +426,7 @@ func (p *BridgePlugin) flushSession(key string) {
 		return
 	}
 	p.hub.broadcast(data)
+	p.tracePushed(ev, len(unflushed))
 	slog.Info("[hermes_bridge] 群批次已推送",
 		"session", key, "msgs", len(unflushed), "user", meta.UserName)
 }
@@ -610,6 +617,13 @@ func singleLine(s string) string {
 func (p *BridgePlugin) pushImmediate(ev bridgeEvent, sessionKey string, seq int64) {
 	if p.hub.subscriberCount() == 0 {
 		slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃立即推送", "session", sessionKey)
+		p.trace(adminTrace{
+			Kind: "dropped", Reason: "no_subscribers_push",
+			SessionKey: sessionKey, ChatID: ev.ChatID, ChatName: ev.ChatName,
+			ChatType: ev.ChatType, UserName: ev.UserName, UserID: ev.UserID,
+			Text: singleLine(ev.Text), TriggerReason: ev.TriggerReason, Addressing: ev.Addressing,
+			Subscribers: 0,
+		})
 		return
 	}
 	data, err := ev.toJSON()
@@ -618,6 +632,7 @@ func (p *BridgePlugin) pushImmediate(ev bridgeEvent, sessionKey string, seq int6
 		return
 	}
 	p.hub.broadcast(data)
+	p.tracePushed(ev, 1)
 	if sessionKey != "" && seq > 0 {
 		p.sessMu.Lock()
 		if st := p.sessions[sessionKey]; st != nil {

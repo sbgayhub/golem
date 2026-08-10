@@ -88,6 +88,18 @@ type Config struct {
 	// RecordImageRevoke：仅 via=send 时，发完记录是否撤回临时图（默认 false 不撤）。
 	RecordImageVia    string `toml:"record_image_via" comment:"url嵌记录实验：空=关（仅media_ref）；send=会话Send；cdn=filehelper Upload"`
 	RecordImageRevoke *bool  `toml:"record_image_revoke" comment:"via=send 时是否撤回临时图；默认 false"`
+
+	// AdminListen 管理台 HTTP 监听；默认仅本机，与业务桥 Listen 分离。
+	// 空字符串 = 不启管理台。远程管理请走 Tailscale 等，勿轻易改成 0.0.0.0。
+	AdminListen string `toml:"admin_listen" comment:"管理台监听，默认 127.0.0.1:8644；空=关闭；勿与业务口混用 0.0.0.0"`
+	// AdminToken 管理 API / UI 登录用 Bearer；须与业务 Token 不同。空则管理 API 拒绝读写。
+	AdminToken string `toml:"admin_token" comment:"管理台 Bearer token，勿与业务 token 相同"`
+
+	// HermesOpsURL VM 上 hermes_ops 基址（只读运维代理）。空=管理台 Hermes 页不可用。
+	// 例：http://192.168.47.128:8650  （Ubuntu VM IP，勿与业务桥 8643 混淆）
+	HermesOpsURL string `toml:"hermes_ops_url" comment:"VM hermes_ops 基址，空=关闭 Hermes 只读页"`
+	// HermesOpsToken 调用 ops 时的 Bearer；可与 admin_token 不同；空则代理不带鉴权头
+	HermesOpsToken string `toml:"hermes_ops_token" comment:"调用 hermes_ops 的 Bearer，建议与 ops 侧一致"`
 }
 
 // BridgePlugin 插件主结构
@@ -104,13 +116,15 @@ type BridgePlugin struct {
 	self   *contact.SelfInfo
 	owner  *contact.Contact
 
-	hub *sseHub
+	hub        *sseHub
+	adminTrace *adminTraceHub
 
 	rateMu    sync.Mutex
 	sendTimes []time.Time
 
-	srvMu   sync.Mutex
-	httpSrv *http.Server
+	srvMu    sync.Mutex
+	httpSrv  *http.Server
+	adminSrv *http.Server
 
 	dlClient    *http.Client
 	mediaClient *http.Client
@@ -163,9 +177,15 @@ func main() {
 				EmojiBurstCount:       3,
 				EmojiBurstWindowSec:   30,
 				EmojiBurstCooldownMin: 5,
+				// 管理台默认只绑本机，与业务 0.0.0.0:8643 分离
+				AdminListen:    "127.0.0.1:8644",
+				AdminToken:     "",
+				HermesOpsURL:   "",
+				HermesOpsToken: "",
 			},
 		},
 		hub:         newSSEHub(),
+		adminTrace:  newAdminTraceHub(),
 		sessions:    map[string]*sessionState{},
 		lastBubble:  map[string]time.Time{},
 		emojiSeen:   map[string][]time.Time{},

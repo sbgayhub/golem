@@ -10,20 +10,15 @@ Golem 侧微信桥，对接 Hermes 官方平台适配器 `wechat_golem`（见仓
 ```
 微信 ↔ Golem host (Windows)
          └ hermes_bridge
-              ├ GET  /health          无鉴权探活
-              ├ GET  /events          SSE 入站（Bearer）
-              ├ GET  /media           ?ref=media_N 按需取回入站媒体（懒下载）
-              ├ POST /send            出站文本（可选 mentions=[wxid…] 真 @）
-              ├ POST /send_image|video|voice|emoji
-              ├ POST /send_app         出站 AppMsg 卡片（sub_type+xml，音乐等）
-              ├ POST /send_record      出站聊天记录卡片（type=19，对齐 meme list / /pm list）
-              ├ POST /send_quote       出站引用回复（type=57，一期文本；桥拼 XML）
-              ├ GET  /status
-              ├ GET  /self            机器人昵称/wxid
-              ├ GET  /group_info      ?chat_id=
-              ├ GET  /group_members   ?chat_id=
-              └ POST /group_member_detail  {chat_id, wxids}
-                    ↕ LAN
+              ├ 业务口 listen（默认 0.0.0.0:8643，给 VM / Hermes）
+              │    GET  /health  /events  /media  /status  /self …
+              │    POST /send  /send_image|video|voice|emoji  /send_app|record|quote …
+              └ 管理台 admin_listen（默认 127.0.0.1:8644，仅本机）
+                   GET  /ui/              单页管理台（embed）
+                   GET  /admin/meta       无鉴权发现入口（供以后 Golem 总控跳转）
+                   GET  /admin/overview   总览 JSON（Bearer admin_token）
+                   …/targets …/config …/contacts/search …/inbound …/sessions …/diagnose …/hermes/*
+                    ↕ LAN（仅业务口）
 Ubuntu VM: Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
 
@@ -53,7 +48,15 @@ token = "与 WECHAT_GOLEM_TOKEN 一致的长随机串"
 max_text_len = 2000
 send_rate_per_min = 20
 max_body_bytes = 83886080   # 80MB，含 base64 媒体
-# targets 用 /hermes enable 管理，不必手写
+# targets 用 /hermes enable 或本机管理台管理，不必手写
+
+# 本机管理台（与业务口分离；默认只绑 127.0.0.1）
+admin_listen = "127.0.0.1:8644"  # 空=关闭管理台；勿轻易改成 0.0.0.0
+admin_token = "另一条长随机串"    # 与业务 token 不同；空则 /admin/* 拒绝
+
+# Hermes 只读 ops（VM 上 hermes_ops；管理台「Hermes」页）
+# hermes_ops_url   = "http://192.168.47.128:8650"
+# hermes_ops_token = "与 VM HERMES_OPS_TOKEN 一致"
 
 # 群触发（对齐旧 hermes）
 trigger_names = []              # 如 ["小赫"]，包含则触发
@@ -69,16 +72,31 @@ emoji_burst_window_seconds = 30
 emoji_burst_cooldown_minutes = 5
 ```
 
+## 本机管理台（v0.5+）
+
+- 地址：`http://127.0.0.1:8644/ui/`（随 `admin_listen`）
+- 登录：页面填 `admin_token`（存浏览器 localStorage；请求头 `Authorization: Bearer …` 或 `X-Admin-Token`）
+- 能力：
+  - 总览（SSE 订阅数/红灯项）
+  - 白名单启停（可搜联系人，**不必人在群里**）
+  - 门闩热更新（即时生效并 `saveConfig`）
+  - **入站旁路**（`/admin/inbound/recent` + SSE stream：pushed/dropped/context_only/scheduled/cancelled）
+  - **本地 session 态**（`/admin/sessions`：去抖 pending、未推缓冲、冒泡/斗图冷却；非 Hermes gateway session）
+  - **诊断试发**（`POST /admin/diagnose`：image/video/emoji，等价 `/hermes image|…`）
+  - **Hermes 只读**（需 `hermes_ops_url`：gateway/工具/sessions/日志；**表情库**与**群友档案**浏览；档案可轻写；源码 `hermes_ops/`，运维见其 README）
+- 发现钩子：`GET /admin/meta`（无鉴权，无敏感字段）→ `{name,version,ui,admin_listen,auth}`，以后 Golem 总控可外链跳转
+- **不要**把 `admin_listen` 暴露到与业务口相同的 `0.0.0.0`；远程请用 Tailscale 等，且 token 与 bot token 分离
+
 > 已有 `plugins/config.toml` 时：host `SetConfig` 用 `toml.Unmarshal` 注入，**缺字段会保留** `main()` 默认值  
->（门闩开、`bubble_rate=0.1`、`debounce_seconds=3`、`max_context_messages=40`、斗图门闩 30s/3条/冷却5min）。  
+>（门闩开、`bubble_rate=0.1`、`debounce_seconds=3`、`max_context_messages=40`、斗图门闩 30s/3条/冷却5min、`admin_listen=127.0.0.1:8644`）。  
 > 仅当你在 toml 里显式写了对应键才会覆盖。回滚门闩：写 `group_push_all = true`；关斗图门闩：写 `emoji_burst_count = 0`。
 
 ## 管理命令（仅主人，host 已拦）
 
 | 命令 | 说明 |
 |---|---|
-| `/hermes status` | 监听、token 掩码、SSE 订阅数、群门闩/去抖/冒泡、白名单 |
-| `/hermes enable [名称]` | 当前会话加入路由白名单 |
+| `/hermes status` | token 掩码、SSE、门闩、白名单数量、管理台地址 |
+| `/hermes enable [名称]` | 当前会话加入白名单（也可用管理台远程加） |
 | `/hermes disable` | 移出白名单 |
 | `/hermes image <url>` | 诊断：宿主机下载并直发图片 |
 | `/hermes video <url>` | 诊断：宿主机下载并直发视频 |
@@ -90,7 +108,7 @@ emoji_burst_cooldown_minutes = 5
 > - `/send_app` 是通用 AppMsg 通道；聊天记录更推荐结构化 `/send_record`（桥拼 type=19 XML，对齐 meme list / /pm list）；链接等仍可走 `/send_app` 自带 XML。
 > - Agent 侧：`wechat_send_record`（items/lines/records）→ 桥 `/send_record`；`wechat_send_music` → `/send_app`。
 > - 业务（搜歌 API、选 AppID 让来源显示更随机、何时发列表卡片）全部留在 Hermes 侧 agent；桥不内置音乐搜索、不内置 AppID 表（与表情库同理：桥只补数据通道，业务归 Hermes）。
-| `/hermes help` | 本说明 |
+| `/hermes help` | 本说明（含管理台入口） |
 
 Host 会拦截**所有**未注册的 `/` 命令（`未知命令：/xxx`），消息不会进本桥。  
 Hermes 危险命令审批请用微信纯文本 **`yes` / `no`**，不要发 `/approve`。  

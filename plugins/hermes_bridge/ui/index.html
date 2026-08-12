@@ -3,7 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>hermes_bridge</title>
+  <meta name="theme-color" content="#0a0e13" />
+  <title>hermes_bridge · 本机管理台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b9dff'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='800' text-anchor='middle' fill='white' font-family='system-ui'%3EH%3C/text%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -39,18 +41,18 @@
         </div>
       </div>
       <nav class="nav" id="nav">
-        <button type="button" data-tab="overview" class="active"><span class="nav-ico">◈</span>总览</button>
-        <button type="button" data-tab="targets"><span class="nav-ico">◎</span>白名单</button>
-        <button type="button" data-tab="gate"><span class="nav-ico">▤</span>门闩</button>
+        <button type="button" data-tab="overview" class="active" title="桥运行态与红灯"><span class="nav-ico">◈</span>总览</button>
+        <button type="button" data-tab="targets" title="会话路由 · 不必人在群里"><span class="nav-ico">◎</span>白名单</button>
+        <button type="button" data-tab="gate" title="触发策略 · 热更新"><span class="nav-ico">▤</span>门闩</button>
         <div class="nav-label">观察</div>
-        <button type="button" data-tab="inbound"><span class="nav-ico">◉</span>入站</button>
-        <button type="button" data-tab="sessions"><span class="nav-ico">☰</span>会话</button>
+        <button type="button" data-tab="inbound" title="门闩旁路 · 非业务 SSE"><span class="nav-ico">◉</span>入站</button>
+        <button type="button" data-tab="sessions" title="桥本地会话 · 门闩/去抖"><span class="nav-ico">☰</span>会话</button>
         <div class="nav-label">Hermes</div>
-        <button type="button" data-tab="hermes"><span class="nav-ico">⬡</span>运维</button>
-        <button type="button" data-tab="stickers"><span class="nav-ico">☺</span>表情</button>
-        <button type="button" data-tab="profiles"><span class="nav-ico">☺</span>档案</button>
+        <button type="button" data-tab="hermes" title="只读 ops 反代"><span class="nav-ico">⬡</span>运维</button>
+        <button type="button" data-tab="stickers" title="先选情绪 · 再加载 · 可试发"><span class="nav-ico">☺</span>表情</button>
+        <button type="button" data-tab="profiles" title="群友偏好 · 短词"><span class="nav-ico">👤</span>档案</button>
         <div class="nav-label">工具</div>
-        <button type="button" data-tab="diagnose"><span class="nav-ico">⚡</span>诊断</button>
+        <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico">⚡</span>诊断</button>
       </nav>
       <div class="sidebar-foot">
         <button type="button" id="btnLogout" class="ghost btn-block">退出登录</button>
@@ -95,22 +97,22 @@
 
         <section id="panel-gate" class="panel" data-title="门闩" data-sub="触发策略 · 热更新">
           <p id="gate-preview" class="lead"></p>
-          <form id="gate-form" class="form">
+          <form id="gate-form" class="form form-compact">
             <label>点名 trigger_names（逗号）
-              <input id="f-triggers" />
+              <input id="f-triggers" spellcheck="false" />
             </label>
-            <label class="check"><input type="checkbox" id="f-pushall" /> 关闭门闩 group_push_all</label>
-            <label>去抖秒数<input type="number" id="f-debounce" min="0" /></label>
-            <label>冒泡 0~1<input type="number" id="f-bubble" min="0" max="1" step="0.01" /></label>
+            <label class="check"><input type="checkbox" id="f-pushall" /> 关闭门闩 group_push_all（群每条都推）</label>
+            <label>去抖秒数<input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
+            <label>冒泡 0~1<input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
             <label>冒泡冷却分<input type="number" id="f-bubble-cd" min="0" /></label>
-            <label>上下文条数<input type="number" id="f-ctx" min="1" /></label>
-            <label>斗图第 N 条<input type="number" id="f-burst" min="0" /></label>
+            <label>上下文条数<input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
+            <label>斗图第 N 条<input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
             <label>斗图窗口秒<input type="number" id="f-burst-win" min="1" /></label>
             <label>斗图冷却分<input type="number" id="f-burst-cd" min="0" /></label>
             <label>文本上限字<input type="number" id="f-text" min="1" /></label>
             <label>出站条/分<input type="number" id="f-rate" min="1" /></label>
             <div class="form-actions">
-              <button type="submit" class="primary">保存</button>
+              <button type="submit" class="primary" id="btnGateSave">保存</button>
             </div>
           </form>
         </section>
@@ -146,10 +148,10 @@
           </div>
           <div id="hermes-alerts" class="alerts"></div>
           <div class="cards" id="hermes-cards"></div>
-          <div class="section-head"><h3>工具注册</h3></div>
-          <pre id="hermes-tools" class="code-block">—</pre>
-          <div class="section-head"><h3>Sessions</h3></div>
-          <pre id="hermes-sessions" class="code-block">—</pre>
+          <div class="section-head"><h3>工具注册</h3><span id="hermes-tools-count" class="muted"></span></div>
+          <div id="hermes-tools" class="list"></div>
+          <div class="section-head"><h3>Sessions</h3><span id="hermes-sessions-count" class="muted"></span></div>
+          <div id="hermes-sessions" class="list"></div>
           <div class="section-head"><h3>日志</h3></div>
           <div class="toolbar">
             <select id="hermes-log-file">

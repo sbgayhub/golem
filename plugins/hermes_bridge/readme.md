@@ -85,6 +85,10 @@ emoji_burst_cooldown_minutes = 5
   - **诊断试发**（`POST /admin/diagnose`：image/video/emoji，等价 `/hermes image|…`）
   - **Hermes 只读**（需 `hermes_ops_url`：gateway/工具/sessions/日志；**表情库**与**群友档案**浏览；档案可轻写；源码 `hermes_ops/`，运维见其 README）
 - 发现钩子：`GET /admin/meta`（无鉴权，无敏感字段）→ `{name,version,ui,admin_listen,auth}`，以后 Golem 总控可外链跳转
+- **UI 开发**：页面由 `embed.go` 编译期嵌入（`//go:embed ui/*`）——改 `ui/` 下源码后**必须重编译**才生效：
+  `cd plugins && task build:hermes_bridge` 再重载 host（浏览器里是 exe 内嵌版，不是磁盘源码）。验证用真实 `admin_token`
+  （运行目录 `config.toml`）：浏览器开 `http://127.0.0.1:8644/ui/`，或 `curl -H "Authorization: Bearer $TOKEN" …/admin/overview`。
+  改前端前先读 `admin*.go` 与 `hermes_ops/hermes_ops.py` 确认 API 契约；dev mock `_mock.py` 已废弃删除。
 - **不要**把 `admin_listen` 暴露到与业务口相同的 `0.0.0.0`；远程请用 Tailscale 等，且 token 与 bot token 分离
 
 > 已有 `plugins/config.toml` 时：host `SetConfig` 用 `toml.Unmarshal` 注入，**缺字段会保留** `main()` 默认值  

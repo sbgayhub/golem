@@ -421,10 +421,12 @@ def list_stickers(*, n: int = 20, page: int = 1, mood: str = "", tag: str = "", 
 
 def sticker_facets() -> dict:
     """情绪/标签计数，供 UI 先选再加载，避免一次拉全库。
-    计数规则必须和 list_stickers 完全一致：mood/tags 都用精确匹配（见 list_stickers 注释）。"""
+    计数规则必须和 list_stickers 完全一致：mood 精确匹配、tag 子串匹配（见 list_stickers 注释）。
+    注：tag 用子串匹配，故 tag 计数 = 库中「含该 tag 子串」的去重表情数，与 ?tag= 返回的 total_matched 对齐。"""
     idx = sticker_load_index()
     mood_c: dict[str, int] = {}
-    tag_c: dict[str, int] = {}
+    tag_keys: dict[str, None] = {}
+    entries: list[tuple[str, dict]] = []
     total = 0
     no_mood = 0
     for md5, e in idx.items():
@@ -433,8 +435,8 @@ def sticker_facets() -> dict:
             continue
         total += 1
         brief = sticker_entry_brief(md5_s, e if isinstance(e, dict) else {})
-        # 与 list_stickers 内部使用同一份清理逻辑：strip + 去空，保留原大小写
-        # 计数也用 strip 后的小写做 key（与 list_stickers 的 .lower() 比对一致）
+        entries.append((md5_s, brief))
+        # 与 list_stickers 内部使用同一份清理逻辑：strip + 去空
         moods_raw = [str(x).strip() for x in (brief.get("moods") or []) if str(x).strip()]
         tags_raw = [str(x).strip() for x in (brief.get("tags") or []) if str(x).strip()]
         if not moods_raw:
@@ -442,7 +444,22 @@ def sticker_facets() -> dict:
         for m in moods_raw:
             mood_c[m.lower()] = mood_c.get(m.lower(), 0) + 1
         for tg in tags_raw:
-            tag_c[tg.lower()] = tag_c.get(tg.lower(), 0) + 1
+            tag_keys[tg.lower()] = None
+
+    # tag 计数与 list_stickers 的子串匹配对齐：一张表情命中即计 1（去重），
+    # 避免「猫」把「橘猫/猫娘」在同一张图里算两次，导致计数多于实际张数
+    def _tag_substr_count(needle_l: str) -> int:
+        c = 0
+        for _md5, brief in entries:
+            tags = [str(x).lower() for x in (brief.get("tags") or []) if str(x).strip()]
+            if any(needle_l in t for t in tags):
+                c += 1
+        return c
+
+    tag_c: dict[str, int] = {}
+    for k in tag_keys:
+        tag_c[k] = _tag_substr_count(k)
+
     moods_list = [{"name": k, "count": v} for k, v in mood_c.items()]
     moods_list.sort(key=lambda x: (-x["count"], x["name"]))
     tags_list = [{"name": k, "count": v} for k, v in tag_c.items()]

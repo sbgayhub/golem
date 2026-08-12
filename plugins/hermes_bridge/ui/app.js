@@ -71,6 +71,36 @@
     return Number.isFinite(n) ? n : 0;
   }
 
+  // 触发/丢弃原因的中文映射（门闩语义，入站 trace 与本地会话共用）
+  const TRIGGER_CN = {
+    trigger_name: "点名",
+    bubble: "冒泡",
+    emoji_burst: "斗图",
+    session_reset: "新开会话",
+    member_archive: "归档",
+  };
+  const REASON_CN = {
+    sse: "已推",
+    debounce: "去抖",
+    interrupt: "打断",
+    no_adapter: "无适配器",
+    gate_not_triggered: "未触发门闩",
+  };
+
+  function fmtDate(ts) {
+    if (!ts) return "";
+    return new Date(ts * 1000).toLocaleDateString();
+  }
+
+  function truncate(s, n) {
+    s = String(s == null ? "" : s);
+    return s.length > n ? s.slice(0, n) + "…" : s;
+  }
+
+  function cleanLabel(v) {
+    return v == null || v === "" || v === "none" || v === "unknown" ? null : v;
+  }
+
   async function api(path, opts = {}) {
     const headers = Object.assign({}, opts.headers || {});
     const token = getToken();
@@ -160,32 +190,32 @@
   });
 
   // ---- navigation ----
+  function refreshBtn(fn) {
+    const b = document.createElement("button");
+    b.className = "primary";
+    b.textContent = "刷新";
+    b.title = "重新拉取本页数据";
+    b.onclick = fn;
+    return b;
+  }
+
   const pageActions = {
-    overview: () => {
-      const b = document.createElement("button");
-      b.className = "primary";
-      b.textContent = "刷新";
-      b.onclick = () => loadOverview();
-      return [b];
-    },
-    sessions: () => {
-      const b = document.createElement("button");
-      b.className = "primary";
-      b.textContent = "刷新";
-      b.onclick = () => loadSessions();
-      return [b];
-    },
-    hermes: () => {
-      const b = document.createElement("button");
-      b.className = "primary";
-      b.textContent = "刷新";
-      b.onclick = () => loadHermes();
-      return [b];
-    },
+    overview: () => [refreshBtn(loadOverview)],
+    targets: () => [refreshBtn(loadTargets)],
+    gate: () => [refreshBtn(loadGate)],
+    sessions: () => [refreshBtn(loadSessions)],
+    hermes: () => [refreshBtn(loadHermes)],
+    profiles: () => [refreshBtn(loadProfiles)],
+    diagnose: () => [refreshBtn(loadDiagChats)],
   };
 
   function setPage(tab) {
-    document.querySelectorAll("#nav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+    document.querySelectorAll("#nav button").forEach((b) => {
+      const on = b.dataset.tab === tab;
+      b.classList.toggle("active", on);
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     const panel = $("panel-" + tab);
     if (!panel) return;
@@ -357,6 +387,8 @@
 
   // ---- gate ----
   async function loadGate() {
+    $("gate-preview").textContent = "加载门闩配置…";
+    $("btnGateSave").disabled = true;
     try {
       const c = await api("/admin/config");
       $("gate-preview").textContent = c.gate_summary || "";
@@ -372,7 +404,10 @@
       $("f-text").value = c.max_text_len;
       $("f-rate").value = c.send_rate_per_min;
     } catch (e) {
+      $("gate-preview").textContent = "加载失败: " + e.message;
       toastErr(e.message);
+    } finally {
+      $("btnGateSave").disabled = false;
     }
   }
 
@@ -409,31 +444,57 @@
 
   function fmtTs(ts) {
     if (!ts) return "";
-    return new Date(ts * 1000).toLocaleTimeString();
+    const d = new Date(ts * 1000);
+    const today = new Date();
+    const sameDay = d.toDateString() === today.toDateString();
+    const t = d.toLocaleTimeString();
+    return sameDay ? t : (d.getMonth() + 1) + "-" + d.getDate() + " " + t;
   }
 
   function renderTrace(ev, prepend) {
     if (!ev || ev.id == null || seenTrace.has(ev.id)) return;
     seenTrace.add(ev.id);
+    // 首个事件进来时清掉空态占位
+    const listEl = $("trace-list");
+    const empty = listEl.querySelector(".empty");
+    if (empty) empty.remove();
     const el = document.createElement("div");
     el.className = "trace-item " + (ev.kind || "");
-    const bits = [ev.chat_name || ev.chat_id, ev.user_name, ev.trigger_reason, ev.reason, ev.text]
+    const tr = cleanLabel(ev.trigger_reason);
+    const rs = cleanLabel(ev.reason);
+    const bits = [
+      ev.chat_name || ev.chat_id,
+      ev.user_name,
+      tr ? (TRIGGER_CN[tr] || tr) : null,
+      rs ? (REASON_CN[rs] || rs) : null,
+      ev.text ? truncate(ev.text, 80) : null,
+    ]
       .filter(Boolean)
       .join(" · ");
-    el.innerHTML = `<div class="k">${esc(ev.kind || "?")}</div>
+    const kindTitle = {
+      pushed: "已推 SSE",
+      scheduled: "去抖中",
+      context_only: "只记不推",
+      dropped: "丢弃",
+      cancelled: "打断作废",
+    }[ev.kind] || ev.kind;
+    el.innerHTML = `<div class="k" title="${esc(kindTitle)}">${esc(ev.kind || "?")}</div>
       <div><span class="muted">${esc(fmtTs(ev.ts))} #${ev.id}</span>
       ${ev.msg_count ? " ×" + ev.msg_count : ""}
-      <div>${esc(bits)}</div></div>`;
-    if (prepend) $("trace-list").prepend(el);
-    else $("trace-list").appendChild(el);
+      <div title="${esc(ev.text || "")}">${esc(bits)}</div></div>`;
+    if (prepend) listEl.prepend(el);
+    else listEl.appendChild(el);
   }
 
   async function loadTraceRecent() {
     try {
       const data = await api("/admin/inbound/recent?n=80");
-      $("trace-list").innerHTML = "";
+      const events = data.events || [];
+      $("trace-list").innerHTML = events.length
+        ? ""
+        : `<div class="empty">暂无入站事件 — 点「实时」订阅旁路，或群消息经门闩后落在这里</div>`;
       seenTrace.clear();
-      (data.events || []).forEach((ev) => renderTrace(ev, false));
+      events.forEach((ev) => renderTrace(ev, false));
     } catch (e) {
       toastErr(e.message);
     }
@@ -501,11 +562,13 @@
               if (s.bubble_cool_remain_sec) flags.push("冒泡 " + s.bubble_cool_remain_sec + "s");
               if (s.burst_cool_remain_sec) flags.push("斗图 " + s.burst_cool_remain_sec + "s");
               if (!s.in_whitelist) flags.push("非白名单");
+              const trig = s.last_trigger ? " · " + (TRIGGER_CN[s.last_trigger] || esc(s.last_trigger)) : "";
+              const who = s.last_user_name ? " · " + esc(s.last_user_name) : "";
               return `<div class="item">
               <span class="tag ${s.chat_type === "group" ? "group" : "private"}">${s.chat_type === "group" ? "群" : "私聊"}</span>
               <div class="grow">
                 <strong>${esc(s.chat_name || s.chat_id || s.session_key)}</strong>
-                <div class="muted">${esc(s.session_key)} · 上下文 ${s.context_count}${s.last_trigger ? " · " + esc(s.last_trigger) : ""}</div>
+                <div class="muted">${esc(s.chat_id || s.session_key)} · 上下文 ${s.context_count}${trig}${who}</div>
                 ${flags.length ? `<div class="muted">${esc(flags.join(" · "))}</div>` : ""}
               </div></div>`;
             })
@@ -517,11 +580,74 @@
   }
 
   // ---- hermes ----
+  function renderHermesTools(data) {
+    const box = $("hermes-tools");
+    const count = $("hermes-tools-count");
+    const regs = data.registered_samples || [];
+    const crashes = data.crash_samples || [];
+    count.textContent = regs.length + " 注册 / " + crashes.length + " 崩溃";
+    const parts = [];
+    if (data.ok) {
+      parts.push('<div class="alerts ok"><ul><li>工具注册看起来正常（日志尾扫描）</li></ul></div>');
+    } else {
+      parts.push(`<div class="alerts"><ul><li>${esc(data.hint || "工具注册异常")}</li></ul></div>`);
+    }
+    if (crashes.length) {
+      parts.push('<div class="section-head"><h3>崩溃样本</h3></div>');
+      parts.push(
+        crashes
+          .map((c) => `<div class="item reg-item" title="${esc(c)}"><span class="tag bad">crash</span><div class="grow mono">${esc(c)}</div></div>`)
+          .join("")
+      );
+    }
+    if (regs.length) {
+      parts.push('<div class="section-head"><h3>已注册（日志尾）</h3></div>');
+      parts.push(
+        regs
+          .map((r) => `<div class="item reg-item" title="${esc(r)}"><span class="tag ok">ok</span><div class="grow mono">${esc(r)}</div></div>`)
+          .join("")
+      );
+    }
+    box.innerHTML = parts.join("") || '<div class="empty">无工具注册日志</div>';
+  }
+
+  function renderHermesSessions(data) {
+    const box = $("hermes-sessions");
+    const count = $("hermes-sessions-count");
+    const list = data.sessions || [];
+    count.textContent = list.length ? list.length + " 条" : "0";
+    if (!list.length) {
+      const note = data.note ? esc(data.note) : "无 Hermes gateway session";
+      box.innerHTML =
+        '<div class="empty">' + note + "</div>" +
+        (data.raw ? `<pre class="code-block">${esc(data.raw)}</pre>` : "");
+      return;
+    }
+    const KV = (k, v) => {
+      if (v == null || v === "" || v === 0 || (Array.isArray(v) && !v.length)) return "";
+      const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+      if (s.length > 60) return "";
+      return `<span class="kv"><b>${esc(k)}</b>${esc(s)}</span>`;
+    };
+    box.innerHTML = list
+      .map((s) => {
+        const bits = Object.entries(s || {})
+          .map(([k, v]) => KV(k, v))
+          .join("");
+        return `<div class="item session-item"><div class="kv-wrap">${bits || "<span class='muted'>—</span>"}</div></div>`;
+      })
+      .join("");
+  }
+
   async function loadHermes() {
     const stEl = $("hermes-ops-status");
     stEl.textContent = "…";
     stEl.className = "pill";
     showSkeleton("hermes-cards", 3, "card");
+    $("hermes-tools").innerHTML = '<div class="empty">加载中…</div>';
+    $("hermes-sessions").innerHTML = '<div class="empty">加载中…</div>';
+    $("hermes-tools-count").textContent = "";
+    $("hermes-sessions-count").textContent = "";
     try {
       const meta = await api("/admin/hermes/meta");
       if (!meta.configured) {
@@ -530,6 +656,8 @@
         $("hermes-alerts").innerHTML =
           "<ul><li>配置 hermes_ops_url；脚本放 <code>~/.hermes/ops/</code></li></ul>";
         $("hermes-cards").innerHTML = "";
+        renderHermesTools({ ok: false, hint: "未配置 hermes_ops_url", registered_samples: [], crash_samples: [] });
+        renderHermesSessions({ sessions: [] });
         return;
       }
       let line = meta.ops_url || "ops";
@@ -550,17 +678,14 @@
         card("tools", ov.tools_ok ? "ok" : "检查", ov.tools_ok ? "ok" : "bad"),
         card("HOME", ov.hermes_home || "—"),
       ].join("");
-      const tools = await api("/admin/hermes/tools/check");
-      $("hermes-tools").textContent = JSON.stringify(
-        { ok: tools.ok, hint: tools.hint, registered_samples: tools.registered_samples, crash_samples: tools.crash_samples },
-        null,
-        2
-      );
-      $("hermes-sessions").textContent = JSON.stringify(await api("/admin/hermes/sessions?n=30"), null, 2);
+      renderHermesTools(await api("/admin/hermes/tools/check"));
+      renderHermesSessions(await api("/admin/hermes/sessions?n=30"));
     } catch (e) {
       stEl.textContent = "失败";
       stEl.className = "pill err";
       $("hermes-alerts").innerHTML = `<ul><li>${esc(e.message)}</li></ul>`;
+      renderHermesTools({ ok: false, hint: e.message, registered_samples: [], crash_samples: [] });
+      renderHermesSessions({ sessions: [] });
       toastErr(e.message);
     }
   }
@@ -952,14 +1077,20 @@
       const list = data.profiles || [];
       $("profile-list").innerHTML = list.length
         ? list
-            .map(
-              (p) => `<div class="item btn-profile" data-wxid="${esc(p.wxid)}" style="cursor:pointer">
+            .map((p) => {
+              const prefs = (p.preferences || []).slice(0, 3).join(" / ");
+              const up = fmtDate(p.updated_at);
+              const metaBits = [];
+              if (p.personality) metaBits.push(truncate(p.personality, 64));
+              if (prefs) metaBits.push("偏好 " + prefs);
+              if (up) metaBits.push("更新 " + up);
+              return `<div class="item btn-profile" data-wxid="${esc(p.wxid)}" style="cursor:pointer">
             <div class="grow">
               <strong>${esc(p.display_name || p.wxid || "")}</strong>
               <div class="muted">${esc(p.wxid || "")}</div>
-              <div class="muted">${esc(p.personality || "")}</div>
-            </div></div>`
-            )
+              ${metaBits.map((m) => `<div class="muted">${esc(m)}</div>`).join("")}
+            </div></div>`;
+            })
             .join("")
         : `<div class="empty">无档案</div>`;
       $("profile-list").querySelectorAll(".btn-profile").forEach((el) => {

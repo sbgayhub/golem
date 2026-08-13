@@ -165,7 +165,7 @@ func (a *ability) Send(msg *sdk.Message) (*sdk.Send_Response, error) {
 		}
 	case sdk.TypeApplication.Code, sdk.TypeAppChatRecord.Code, sdk.TypeAppMusic.Code:
 		data := msg.GetApp()
-		resp, err := a.api.SendApp(receiver, data.GetXml(), int32(data.GetSubType()))
+		resp, err := a.api.SendApp(receiver, data.GetXml(), data.GetExtendXml(), int32(data.GetSubType()))
 		if err != nil {
 			return nil, err
 		}

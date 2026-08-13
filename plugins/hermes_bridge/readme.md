@@ -78,7 +78,7 @@ emoji_burst_cooldown_minutes = 5
 - 登录：页面填 `admin_token`（存浏览器 localStorage；请求头 `Authorization: Bearer …` 或 `X-Admin-Token`）
 - 能力：
   - 总览（SSE 订阅数/红灯项）
-  - 白名单启停（可搜联系人，**不必人在群里**）
+  - 白名单启停（可搜联系人）
   - 门闩热更新（即时生效并 `saveConfig`）
   - **入站旁路**（`/admin/inbound/recent` + SSE stream：pushed/dropped/context_only/scheduled/cancelled）
   - **本地 session 态**（`/admin/sessions`：去抖 pending、未推缓冲、冒泡/斗图冷却；非 Hermes gateway session）
@@ -89,6 +89,7 @@ emoji_burst_cooldown_minutes = 5
   `cd plugins && task build:hermes_bridge` 再重载 host（浏览器里是 exe 内嵌版，不是磁盘源码）。验证用真实 `admin_token`
   （运行目录 `config.toml`）：浏览器开 `http://127.0.0.1:8644/ui/`，或 `curl -H "Authorization: Bearer $TOKEN" …/admin/overview`。
   改前端前先读 `admin*.go` 与 `hermes_ops/hermes_ops.py` 确认 API 契约；dev mock `_mock.py` 已废弃删除。
+  v0.12 视觉为绿色小清新（浅底、鼠尾草绿强调）；总览按链路/容量/身份分组；`Ctrl/⌘ K` 打开命令面板，字母键可跳页（输入框内不触发）。
 - **不要**把 `admin_listen` 暴露到与业务口相同的 `0.0.0.0`；远程请用 Tailscale 等，且 token 与 bot token 分离
 
 > 已有 `plugins/config.toml` 时：host `SetConfig` 用 `toml.Unmarshal` 注入，**缺字段会保留** `main()` 默认值  

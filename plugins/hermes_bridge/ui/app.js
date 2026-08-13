@@ -21,6 +21,31 @@
   function toastWarn(msg) { toast(msg, { warn: true, dur: 3500 }); }
   function toastErr(msg) { toast(msg, { err: true, dur: 4000 }); }
 
+  function askConfirm(msg, title) {
+    return new Promise((resolve) => {
+      const root = $("confirm");
+      const ok = $("confirm-ok");
+      const cancel = $("confirm-cancel");
+      if (!root || !ok || !cancel) {
+        resolve(window.confirm(msg));
+        return;
+      }
+      $("confirm-title").textContent = title || "确认";
+      $("confirm-msg").textContent = msg;
+      root.hidden = false;
+      root.classList.remove("hidden");
+      const done = (v) => {
+        root.classList.add("hidden");
+        root.hidden = true;
+        ok.onclick = null;
+        cancel.onclick = null;
+        resolve(v);
+      };
+      ok.onclick = () => done(true);
+      cancel.onclick = () => done(false);
+    });
+  }
+
   // ---- loading helpers ----
   function showLoading(el, msg) {
     if (typeof el === "string") el = $(el);
@@ -254,31 +279,43 @@
   function applyOverview(o) {
     $("ver").textContent = "v" + (o.version || "");
     const subsCls = o.subscribers > 0 ? "ok" : "bad";
-    $("overview-cards").innerHTML = [
+    const fill = (id, html) => {
+      const el = $(id);
+      if (el) el.innerHTML = html;
+    };
+    fill("overview-link", [
       card("SSE 订阅者", o.subscribers, subsCls),
+      card("Hermes ops", o.hermes_ops_configured ? "已配置" : "未配置", o.hermes_ops_configured ? "ok" : ""),
+      card("业务监听", o.listen || "—"),
+      card("管理监听", o.admin_listen || "—"),
+    ].join(""));
+    fill("overview-capacity", [
       card("白名单", o.targets),
       card("本地会话", o.local_sessions),
-      card("去抖 pending", o.pending_debounce),
-      card("未推缓冲", o.buffered_unflushed),
+      card("去抖 pending", o.pending_debounce, o.pending_debounce ? "ok" : ""),
+      card("未推缓冲", o.buffered_unflushed, o.buffered_unflushed ? "ok" : ""),
       card("media_ref", o.media_refs),
-      card("业务 token", o.token_masked || "—"),
+      card("限流", `${o.send_rate_per_min}/分`),
+    ].join(""));
+    fill("overview-identity", [
       card("主人", o.owner_ok ? o.owner_name || "已识别" : "未识别", o.owner_ok ? "ok" : "bad"),
       card("机器人", o.self_name || o.self_id || "—"),
-      card("管理监听", o.admin_listen || "—"),
-      card("业务监听", o.listen || "—"),
-      card("限流", `${o.send_rate_per_min}/分`),
-      card("Hermes ops", o.hermes_ops_configured ? "已配置" : "未配置", o.hermes_ops_configured ? "ok" : ""),
-    ].join("");
+      card("业务 token", `<span class="mono">${esc(o.token_masked || "—")}</span>`),
+    ].join(""));
     $("gate-summary").textContent = o.gate_summary || "";
     const alerts = o.alerts || [];
-    $("alerts").innerHTML = alerts.length
+    const alertEl = $("alerts");
+    alertEl.classList.toggle("ok", alerts.length === 0);
+    alertEl.innerHTML = alerts.length
       ? "<ul>" + alerts.map((a) => `<li>${esc(a)}</li>`).join("") + "</ul>"
-      : "";
+      : "<ul><li>链路安静，没有红灯</li></ul>";
   }
 
   async function loadOverview() {
     try {
-      showSkeleton("overview-cards", 12, "card");
+      showSkeleton("overview-link", 4, "card");
+      showSkeleton("overview-capacity", 6, "card");
+      showSkeleton("overview-identity", 3, "card");
       applyOverview(await api("/admin/overview"));
     } catch (e) {
       if (e.status === 401) {
@@ -286,7 +323,7 @@
         showLogin("登录已失效");
         return;
       }
-      showError("overview-cards", e.message);
+      showError("overview-link", e.message);
       $("alerts").innerHTML = `<ul><li>${esc(e.message)}</li></ul>`;
       toastErr(e.message);
     }
@@ -313,7 +350,7 @@
       $("target-list").querySelectorAll(".btn-del").forEach((btn) => {
         btn.addEventListener("click", async () => {
           const id = btn.closest(".item").dataset.id;
-          if (!confirm("移出白名单？\n" + id)) return;
+          if (!(await askConfirm("移出白名单？\n" + id, "移出白名单"))) return;
           try {
             await api("/admin/targets/" + encodeURIComponent(id), { method: "DELETE" });
             toastOk("已移除");
@@ -730,6 +767,20 @@
     } catch (_) {}
   }
 
+  function openStickerDrawer() {
+    const drawer = $("sticker-drawer");
+    if (!drawer) return;
+    drawer.hidden = false;
+    drawer.classList.remove("hidden");
+  }
+
+  function closeStickerDrawer() {
+    const drawer = $("sticker-drawer");
+    if (!drawer) return;
+    drawer.classList.add("hidden");
+    drawer.hidden = true;
+  }
+
   function clearStickerDetail() {
     document.querySelectorAll(".sticker-card.selected").forEach((c) => c.classList.remove("selected"));
     selectedStickerMd5 = "";
@@ -741,10 +792,10 @@
     }
     const detail = $("sticker-detail");
     if (detail) {
-      detail.classList.add("hidden");
       detail.classList.remove("muted", "empty");
       detail.innerHTML = "";
     }
+    closeStickerDrawer();
   }
 
   async function loadStickerFacets() {
@@ -836,7 +887,7 @@
       return;
     }
     if (!md5 || md5.length !== 32) return toastErr("md5 无效");
-    if (!confirm("试发到\n" + chat + "\n" + md5)) return;
+    if (!(await askConfirm("试发到\n" + chat + "\n" + md5, "试发表情"))) return;
     try {
       const res = await fetch("/admin/diagnose", {
         method: "POST",
@@ -983,7 +1034,8 @@
           $("sticker-selected").title = md5;
           $("sticker-selected").classList.remove("muted");
           const detail = $("sticker-detail");
-          detail.classList.remove("hidden", "muted", "empty");
+          openStickerDrawer();
+          detail.classList.remove("muted", "empty");
           detail.innerHTML = `<div class="detail-loading"><span class="spinner"></span>加载详情…</div>`;
           try {
             const d = await api("/admin/hermes/stickers/" + encodeURIComponent(md5));
@@ -1000,9 +1052,8 @@
                 </div>
                 <div class="detail-info">${metaBits}</div>
                 <div class="detail-actions">
-                  <button type="button" class="primary" id="dSend" title="试发到 chat_id 输入框中的目标">↑ 试发</button>
-                  <button type="button" class="ghost" id="dCopy" title="复制 md5">复制</button>
-                  <button type="button" class="ghost close-x" id="dClose" title="关闭详情" aria-label="关闭">×</button>
+                  <button type="button" class="primary" id="dSend" title="试发到 chat_id 输入框中的目标">试发</button>
+                  <button type="button" class="ghost" id="dCopy" title="复制 md5">复制 md5</button>
                 </div>
               </div>`;
             $("dSend").onclick = () => sendStickerMd5(md5);
@@ -1014,7 +1065,6 @@
                 toastErr(md5);
               }
             };
-            $("dClose").onclick = () => clearStickerDetail();
           } catch (e) {
             toastErr(e.message);
             clearStickerDetail();
@@ -1084,7 +1134,7 @@
               if (p.personality) metaBits.push(truncate(p.personality, 64));
               if (prefs) metaBits.push("偏好 " + prefs);
               if (up) metaBits.push("更新 " + up);
-              return `<div class="item btn-profile" data-wxid="${esc(p.wxid)}" style="cursor:pointer">
+              return `<div class="item btn-profile" data-wxid="${esc(p.wxid)}">
             <div class="grow">
               <strong>${esc(p.display_name || p.wxid || "")}</strong>
               <div class="muted">${esc(p.wxid || "")}</div>
@@ -1094,7 +1144,11 @@
             .join("")
         : `<div class="empty">无档案</div>`;
       $("profile-list").querySelectorAll(".btn-profile").forEach((el) => {
-        el.addEventListener("click", () => fillProfile(el.dataset.wxid));
+        el.addEventListener("click", () => {
+          $("profile-list").querySelectorAll(".btn-profile").forEach((n) => n.classList.remove("selected"));
+          el.classList.add("selected");
+          fillProfile(el.dataset.wxid);
+        });
       });
     } catch (e) {
       toastErr(e.message);
@@ -1151,7 +1205,7 @@
   });
   $("btnProfileDel").addEventListener("click", async () => {
     const wxid = $("pf-wxid").value.trim();
-    if (!wxid || !confirm("删除 " + wxid + "？")) return;
+    if (!wxid || !(await askConfirm("删除 " + wxid + "？", "删除档案"))) return;
     try {
       $("profile-result").textContent = JSON.stringify(
         await api("/admin/hermes/member_profiles/" + encodeURIComponent(wxid), { method: "DELETE" }),
@@ -1202,6 +1256,144 @@
       toastErr(e.message || String(e));
     }
   });
+
+  // ---- command palette ----
+  const PAGES = [
+    { tab: "overview", title: "总览", hint: "桥运行态与红灯" },
+    { tab: "targets", title: "白名单", hint: "会话路由" },
+    { tab: "gate", title: "门闩", hint: "触发策略" },
+    { tab: "inbound", title: "入站", hint: "旁路 trace" },
+    { tab: "sessions", title: "会话", hint: "桥本地 session" },
+    { tab: "hermes", title: "运维", hint: "Hermes ops" },
+    { tab: "stickers", title: "表情", hint: "情绪库" },
+    { tab: "profiles", title: "档案", hint: "群友偏好" },
+    { tab: "diagnose", title: "诊断", hint: "媒体试发" },
+  ];
+  let cmdkIndex = 0;
+
+  function cmdkVisible() {
+    const el = $("cmdk");
+    return el && !el.classList.contains("hidden");
+  }
+
+  function filteredPages() {
+    const q = (($("cmdk-q") && $("cmdk-q").value) || "").trim().toLowerCase();
+    if (!q) return PAGES;
+    return PAGES.filter((p) => (p.title + p.hint + p.tab).toLowerCase().includes(q));
+  }
+
+  function renderCmdk() {
+    const list = $("cmdk-list");
+    if (!list) return;
+    const items = filteredPages();
+    if (!items.length) {
+      list.innerHTML = `<div class="empty">无匹配页面</div>`;
+      return;
+    }
+    if (cmdkIndex >= items.length) cmdkIndex = 0;
+    list.innerHTML = items
+      .map(
+        (p, i) =>
+          `<button type="button" class="cmdk-item${i === cmdkIndex ? " active" : ""}" data-tab="${esc(p.tab)}"><strong>${esc(p.title)}</strong><span class="muted">${esc(p.hint)}</span></button>`
+      )
+      .join("");
+    list.querySelectorAll(".cmdk-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        closeCmdk();
+        setPage(btn.dataset.tab);
+      });
+    });
+  }
+
+  function openCmdk() {
+    const el = $("cmdk");
+    if (!el || $("app-shell").classList.contains("hidden")) return;
+    el.hidden = false;
+    el.classList.remove("hidden");
+    cmdkIndex = 0;
+    if ($("cmdk-q")) $("cmdk-q").value = "";
+    renderCmdk();
+    setTimeout(() => $("cmdk-q") && $("cmdk-q").focus(), 20);
+  }
+
+  function closeCmdk() {
+    const el = $("cmdk");
+    if (!el) return;
+    el.classList.add("hidden");
+    el.hidden = true;
+  }
+
+  if ($("btnCommand")) $("btnCommand").addEventListener("click", openCmdk);
+  if ($("cmdk-q")) $("cmdk-q").addEventListener("input", () => {
+    cmdkIndex = 0;
+    renderCmdk();
+  });
+  if ($("cmdk")) {
+    $("cmdk").addEventListener("click", (ev) => {
+      if (ev.target === $("cmdk")) closeCmdk();
+    });
+  }
+  if ($("confirm")) {
+    $("confirm").addEventListener("click", (ev) => {
+      if (ev.target === $("confirm") && $("confirm-cancel")) $("confirm-cancel").click();
+    });
+  }
+
+  document.addEventListener("keydown", (ev) => {
+    const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target && ev.target.tagName) || "");
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {
+      ev.preventDefault();
+      if (cmdkVisible()) closeCmdk();
+      else openCmdk();
+      return;
+    }
+    if (ev.key === "Escape") {
+      if (cmdkVisible()) {
+        ev.preventDefault();
+        closeCmdk();
+        return;
+      }
+      if ($("sticker-drawer") && !$("sticker-drawer").classList.contains("hidden")) {
+        ev.preventDefault();
+        clearStickerDetail();
+        return;
+      }
+      if ($("confirm") && !$("confirm").classList.contains("hidden") && $("confirm-cancel")) {
+        $("confirm-cancel").click();
+      }
+      return;
+    }
+    if (cmdkVisible()) {
+      const items = filteredPages();
+      if (ev.key === "ArrowDown") {
+        ev.preventDefault();
+        cmdkIndex = (cmdkIndex + 1) % Math.max(items.length, 1);
+        renderCmdk();
+      } else if (ev.key === "ArrowUp") {
+        ev.preventDefault();
+        cmdkIndex = (cmdkIndex - 1 + Math.max(items.length, 1)) % Math.max(items.length, 1);
+        renderCmdk();
+      } else if (ev.key === "Enter") {
+        ev.preventDefault();
+        const pick = items[cmdkIndex];
+        if (pick) {
+          closeCmdk();
+          setPage(pick.tab);
+        }
+      }
+      return;
+    }
+    if (inField || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    const map = { g: "overview", b: "targets", m: "gate", i: "inbound", s: "sessions", h: "hermes", e: "stickers", p: "profiles", d: "diagnose" };
+    if (map[ev.key] && !$("app-shell").classList.contains("hidden")) setPage(map[ev.key]);
+  });
+
+  if ($("btnDrawerClose")) $("btnDrawerClose").addEventListener("click", clearStickerDetail);
+  if ($("sticker-drawer")) {
+    $("sticker-drawer").addEventListener("click", (ev) => {
+      if (ev.target === $("sticker-drawer")) clearStickerDetail();
+    });
+  }
 
   // boot
   tryEnter();

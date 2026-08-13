@@ -1,0 +1,34 @@
+name: wechat_golem
+label: WeChat (Golem bridge)
+kind: platform
+version: 1.0.0
+description: >
+  Hermes 官方平台适配器：经 Golem hermes_bridge HTTP/SSE 桥接微信。
+  适配器跑在 Ubuntu VM，Golem 桥跑在 Windows 宿主机。
+author: ovo
+requires_env:
+  - name: WECHAT_GOLEM_TOKEN
+    description: "与 Golem hermes_bridge 插件 token 一致的 Bearer"
+    prompt: "Bridge token"
+    password: true
+  - name: WECHAT_GOLEM_BASE_URL
+    description: "宿主机桥地址，如 http://192.168.47.1:8643（VM 经 VMware 宿主机网关，不跟物理网卡 DHCP 变）"
+    prompt: "Bridge base URL"
+    password: false
+optional_env:
+  - name: WECHAT_GOLEM_HOME_CHANNEL
+    description: "cron 默认投递会话 wxid（群或私聊）"
+    prompt: "Home channel wxid"
+    password: false
+  - name: WECHAT_GOLEM_HOME_CHANNEL_NAME
+    description: "home channel 显示名"
+    prompt: "Home channel name"
+    password: false
+  - name: WECHAT_GOLEM_ALLOWED_USERS
+    description: "逗号分隔的允许用户 wxid；与 ALLOW_ALL 二选一语义"
+    prompt: "Allowed user wxids"
+    password: false
+  - name: WECHAT_GOLEM_ALLOW_ALL_USERS
+    description: "true 时白名单会话内全员可聊（危险命令仍走审批）"
+    prompt: "Allow all users (true/false)"
+    password: false

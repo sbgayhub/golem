@@ -18,3 +18,7 @@ data
 ./.claude
 ./.spec-workflow
 .ace-tool/
+
+# python
+__pycache__/
+*.py[cod]

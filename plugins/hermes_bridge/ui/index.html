@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#0a0e13" />
+  <title>hermes_bridge · 本机管理台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b9dff'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='800' text-anchor='middle' fill='white' font-family='system-ui'%3EH%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!-- 登录门禁 -->
+  <div id="login-screen" class="login-screen hidden">
+    <div class="login-card">
+      <div class="login-brand">
+        <div class="logo-mark">H</div>
+        <div>
+          <h1>hermes_bridge</h1>
+          <p>本机管理台 · 仅 127.0.0.1</p>
+        </div>
+      </div>
+      <form id="login-form" class="login-form" autocomplete="off">
+        <label>
+          admin_token
+          <input id="login-token" type="password" placeholder="粘贴管理台 token" required spellcheck="false" autofocus />
+        </label>
+        <p class="login-hint">与业务 token、ops token 不同。保存在本机 localStorage。</p>
+        <div id="login-error" class="login-error hidden"></div>
+        <button type="submit" class="btn-block primary" id="btnLogin">进入管理台</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app-shell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="logo-mark sm">H</div>
+        <div>
+          <div class="name">hermes_bridge</div>
+          <div class="ver" id="ver">—</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button type="button" data-tab="overview" class="active" title="桥运行态与红灯"><span class="nav-ico">◈</span>总览</button>
+        <button type="button" data-tab="targets" title="会话路由 · 不必人在群里"><span class="nav-ico">◎</span>白名单</button>
+        <button type="button" data-tab="gate" title="触发策略 · 热更新"><span class="nav-ico">▤</span>门闩</button>
+        <div class="nav-label">观察</div>
+        <button type="button" data-tab="inbound" title="门闩旁路 · 非业务 SSE"><span class="nav-ico">◉</span>入站</button>
+        <button type="button" data-tab="sessions" title="桥本地会话 · 门闩/去抖"><span class="nav-ico">☰</span>会话</button>
+        <div class="nav-label">Hermes</div>
+        <button type="button" data-tab="hermes" title="只读 ops 反代"><span class="nav-ico">⬡</span>运维</button>
+        <button type="button" data-tab="stickers" title="先选情绪 · 再加载 · 可试发"><span class="nav-ico">☺</span>表情</button>
+        <button type="button" data-tab="profiles" title="群友偏好 · 短词"><span class="nav-ico">👤</span>档案</button>
+        <div class="nav-label">工具</div>
+        <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico">⚡</span>诊断</button>
+      </nav>
+      <div class="sidebar-foot">
+        <button type="button" id="btnLogout" class="ghost btn-block">退出登录</button>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="page-title">总览</h1>
+          <p id="page-sub" class="page-sub">桥运行态</p>
+        </div>
+        <div class="topbar-actions" id="topbar-actions"></div>
+      </header>
+
+      <main id="main">
+        <section id="panel-overview" class="panel active" data-title="总览" data-sub="桥运行态与红灯">
+          <div id="alerts" class="alerts"></div>
+          <div class="cards" id="overview-cards"></div>
+          <p class="gate-line" id="gate-summary"></p>
+        </section>
+
+        <section id="panel-targets" class="panel" data-title="白名单" data-sub="会话路由 · 不必人在群里">
+          <div class="card-block">
+            <div class="toolbar">
+              <input id="target-id" placeholder="wxid 或 xxx@chatroom" spellcheck="false" />
+              <input id="target-name" placeholder="显示名（可空）" />
+              <button type="button" id="btnAddTarget" class="primary">加入</button>
+            </div>
+            <div class="toolbar">
+              <input id="search-q" placeholder="搜索联系人 / 群" />
+              <button type="button" id="btnSearch" class="ghost">搜索</button>
+            </div>
+            <div id="search-results" class="list"></div>
+          </div>
+          <div class="section-head">
+            <h3>当前列表</h3>
+            <span id="target-count" class="muted"></span>
+          </div>
+          <div id="target-list" class="list"></div>
+        </section>
+
+        <section id="panel-gate" class="panel" data-title="门闩" data-sub="触发策略 · 热更新">
+          <p id="gate-preview" class="lead"></p>
+          <form id="gate-form" class="form form-compact">
+            <label>点名 trigger_names（逗号）
+              <input id="f-triggers" spellcheck="false" />
+            </label>
+            <label class="check"><input type="checkbox" id="f-pushall" /> 关闭门闩 group_push_all（群每条都推）</label>
+            <label>去抖秒数<input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
+            <label>冒泡 0~1<input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
+            <label>冒泡冷却分<input type="number" id="f-bubble-cd" min="0" /></label>
+            <label>上下文条数<input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
+            <label>斗图第 N 条<input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
+            <label>斗图窗口秒<input type="number" id="f-burst-win" min="1" /></label>
+            <label>斗图冷却分<input type="number" id="f-burst-cd" min="0" /></label>
+            <label>文本上限字<input type="number" id="f-text" min="1" /></label>
+            <label>出站条/分<input type="number" id="f-rate" min="1" /></label>
+            <div class="form-actions">
+              <button type="submit" class="primary" id="btnGateSave">保存</button>
+            </div>
+          </form>
+        </section>
+
+        <section id="panel-inbound" class="panel" data-title="入站" data-sub="门闩旁路 · 非业务 SSE">
+          <div class="toolbar sticky-tools">
+            <span id="trace-status" class="pill">未连接</span>
+            <button type="button" id="btnTraceLive" class="primary">实时</button>
+            <button type="button" id="btnTraceStop" class="ghost">断开</button>
+            <button type="button" id="btnTraceRefresh" class="ghost">拉取</button>
+            <button type="button" id="btnTraceClear" class="ghost">清空</button>
+          </div>
+          <details class="help-box">
+            <summary>标记说明</summary>
+            <div class="legend-grid">
+              <div><code class="k context_only">context_only</code><span>只记不推</span></div>
+              <div><code class="k scheduled">scheduled</code><span>去抖中</span></div>
+              <div><code class="k pushed">pushed</code><span>已推 SSE</span></div>
+              <div><code class="k dropped">dropped</code><span>丢弃</span></div>
+              <div><code class="k cancelled">cancelled</code><span>打断作废</span></div>
+            </div>
+          </details>
+          <div id="trace-list" class="trace-list"></div>
+        </section>
+
+        <section id="panel-sessions" class="panel" data-title="会话" data-sub="桥本地 · 非 Hermes gateway">
+          <div id="session-list" class="list"></div>
+        </section>
+
+        <section id="panel-hermes" class="panel" data-title="Hermes 运维" data-sub="只读 ops 反代">
+          <div class="toolbar sticky-tools">
+            <span id="hermes-ops-status" class="pill">—</span>
+          </div>
+          <div id="hermes-alerts" class="alerts"></div>
+          <div class="cards" id="hermes-cards"></div>
+          <div class="section-head"><h3>工具注册</h3><span id="hermes-tools-count" class="muted"></span></div>
+          <div id="hermes-tools" class="list"></div>
+          <div class="section-head"><h3>Sessions</h3><span id="hermes-sessions-count" class="muted"></span></div>
+          <div id="hermes-sessions" class="list"></div>
+          <div class="section-head"><h3>日志</h3></div>
+          <div class="toolbar">
+            <select id="hermes-log-file">
+              <option value="agent">agent.log</option>
+              <option value="gateway">gateway.log</option>
+              <option value="errors">errors.log</option>
+            </select>
+            <input id="hermes-log-grep" placeholder="过滤子串" />
+            <button type="button" id="btnHermesLog" class="ghost">拉取</button>
+          </div>
+          <pre id="hermes-log" class="code-block">—</pre>
+        </section>
+
+        <section id="panel-stickers" class="panel" data-title="表情" data-sub="先选情绪 · 再加载 · 可试发">
+          <div class="sticker-layout">
+            <aside class="mood-pane">
+              <div class="mood-pane-head">
+                <span>情绪</span>
+                <span id="sticker-lib-stats" class="muted"></span>
+              </div>
+              <button type="button" class="mood-item active" data-mood="" id="mood-all">全部需搜索</button>
+              <div id="mood-list" class="mood-list"></div>
+              <div class="mood-pane-head" style="margin-top:12px">常用题材</div>
+              <div id="tag-list" class="tag-cloud"></div>
+            </aside>
+            <div class="sticker-main">
+              <div class="send-bar">
+                <div class="send-target">
+                  <label>试发到</label>
+                  <input id="sticker-chat" list="sticker-chats" placeholder="白名单 chat_id（wxid 或 xxx@chatroom）" spellcheck="false" />
+                  <datalist id="sticker-chats"></datalist>
+                </div>
+                <span id="sticker-selected" class="muted" title="">未选</span>
+              </div>
+              <div class="toolbar">
+                <input id="sticker-q" placeholder="在当前筛选下搜索描述/tag…" />
+                <select id="sticker-page-size" style="width:80px">
+                  <option value="20">20/页</option>
+                  <option value="40">40/页</option>
+                  <option value="60">60/页</option>
+                  <option value="100">100/页</option>
+                </select>
+                <button type="button" id="btnStickers" class="primary">加载</button>
+              </div>
+              <div id="sticker-filter-hint" class="filter-hint">先在左侧选择情绪/题材，或在下方输入关键词后加载。</div>
+              <div id="sticker-list" class="sticker-grid"></div>
+              <div id="sticker-pager" class="pager hidden"></div>
+              <div id="sticker-detail" class="sticker-detail-floating hidden"></div>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-profiles" class="panel" data-title="档案" data-sub="群友偏好 · 短词">
+          <div class="toolbar">
+            <input id="profile-q" placeholder="搜索…" />
+            <button type="button" id="btnProfiles" class="primary">刷新</button>
+          </div>
+          <div id="profile-list" class="list"></div>
+          <div class="section-head"><h3>编辑</h3></div>
+          <form id="profile-form" class="form">
+            <label>wxid<input id="pf-wxid" required spellcheck="false" /></label>
+            <label>display_name<input id="pf-name" /></label>
+            <label>personality<input id="pf-personality" /></label>
+            <label>preferences<input id="pf-prefs" placeholder="逗号分隔" /></label>
+            <label>notes<input id="pf-notes" /></label>
+            <label>aliases<input id="pf-aliases" placeholder="逗号分隔" /></label>
+            <div class="form-actions">
+              <button type="submit" class="primary">保存</button>
+              <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+            </div>
+          </form>
+          <pre id="profile-result" class="code-block" style="margin-top:12px">—</pre>
+        </section>
+
+        <section id="panel-diagnose" class="panel" data-title="诊断" data-sub="媒体试发">
+          <form id="diag-form" class="form">
+            <label>kind
+              <select id="diag-kind">
+                <option value="image">image</option>
+                <option value="video">video</option>
+                <option value="emoji">emoji</option>
+              </select>
+            </label>
+            <label>chat_id
+              <input id="diag-chat" list="diag-chats" required spellcheck="false" />
+              <datalist id="diag-chats"></datalist>
+            </label>
+            <label>url<input id="diag-url" placeholder="https://…" spellcheck="false" /></label>
+            <label>emoji md5<input id="diag-md5" spellcheck="false" /></label>
+            <div class="form-actions">
+              <button type="submit" class="primary">试发</button>
+            </div>
+          </form>
+          <pre id="diag-result" class="code-block" style="margin-top:12px">尚未试发</pre>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>

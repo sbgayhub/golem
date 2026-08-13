@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package message.api;
+package api.message;
 
 option go_package = "github.com/sbgayhub/golem/host/api/message;messageapi";
 

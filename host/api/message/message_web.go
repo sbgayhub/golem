@@ -117,12 +117,13 @@ func (w web) SendEmoji(receiver, md5 string, data []byte) (*UploadEmojiResponse,
 }
 
 // SendApp 发送应用消息
-func (w web) SendApp(receiver, xml string, typ int32) (*SendAppMessageResponse, error) {
+func (w web) SendApp(receiver, xml, extendXML string, typ int32) (*SendAppMessageResponse, error) {
 	var resp SendAppMessageResponse
 	if err := api.GetHttp().Post("/api/message/app").Body(map[string]any{
-		"receiver": receiver,
-		"xml":      xml,
-		"type":     typ,
+		"receiver":   receiver,
+		"xml":        xml,
+		"type":       typ,
+		"extend_xml": extendXML,
 	}).DoProto(&resp); err != nil {
 		return nil, err
 	}
@@ -186,7 +187,7 @@ func (w web) ForwardVideo(receiver string, reader io.Reader) (*UploadVideoRespon
 
 // ForwardFile 转发文件
 func (w web) ForwardFile(receiver, xml string) (*SendAppMessageResponse, error) {
-	return w.SendApp(receiver, xml, 0)
+	return w.SendApp(receiver, xml, "", 0)
 }
 
 // Revoke 撤回消息

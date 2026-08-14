@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f4f8f3" />
+  <meta name="theme-color" content="#f5f9f6" />
   <meta name="color-scheme" content="light" />
   <title>hermes_bridge · 本机管理台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233f8f62'/%3E%3Ccircle cx='16' cy='13' r='4.2' fill='%23e8f6ec'/%3E%3Cpath d='M10 22c1.8-3.4 10.2-3.4 12 0' stroke='%23e8f6ec' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b8f60'/%3E%3Ccircle cx='16' cy='13' r='4.2' fill='%23e8f6ec'/%3E%3Cpath d='M10 22c1.8-3.4 10.2-3.4 12 0' stroke='%23e8f6ec' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="login-screen" class="login-screen hidden">
     <div class="login-card">
       <div class="login-brand">
-        <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3f8f62"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
+        <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
         <div>
           <h1>hermes_bridge</h1>
           <p>本机管理台 · 仅 127.0.0.1</p>
@@ -34,7 +34,7 @@
   <div id="app-shell" class="app-shell hidden">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <svg class="logo-mark sm" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3f8f62"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
+        <svg class="logo-mark sm" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
         <div>
           <div class="name">hermes_bridge</div>
           <div class="ver" id="ver">—</div>
@@ -163,16 +163,18 @@
               <summary>Sessions <span id="hermes-sessions-count" class="muted"></span></summary>
               <div id="hermes-sessions" class="list"></div>
             </details>
-            <details class="fold" open>
+            <details class="fold">
               <summary>日志</summary>
-              <div class="toolbar">
+              <div class="log-toolbar">
                 <select id="hermes-log-file">
                   <option value="agent">agent.log</option>
                   <option value="gateway">gateway.log</option>
                   <option value="errors">errors.log</option>
                 </select>
-                <input id="hermes-log-grep" placeholder="过滤子串" />
-                <button type="button" id="btnHermesLog" class="ghost">拉取</button>
+                <input id="hermes-log-grep" placeholder="过滤子串 / 正则" />
+                <button type="button" id="btnHermesLog" class="primary">拉取</button>
+                <label class="log-auto-scroll"><input type="checkbox" id="hermes-log-auto" checked /> 自动滚底</label>
+                <span id="hermes-log-info" class="log-info"></span>
               </div>
               <pre id="hermes-log" class="code-block">—</pre>
             </details>

@@ -6,7 +6,7 @@
   let stickerPageSize = 20;
 
   function toast(msg, opts) {
-    opts = typeof opts === "boolean" ? { err: opts } : (opts || {});
+    opts = typeof opts === "boolean" ? { err: opts } : opts || {};
     const dur = opts.dur || 3000;
     toastEl.textContent = msg;
     toastEl.className = "toast";
@@ -17,9 +17,15 @@
     toastEl._t = setTimeout(() => toastEl.classList.add("hidden"), dur);
   }
 
-  function toastOk(msg) { toast(msg, { dur: 2000 }); }
-  function toastWarn(msg) { toast(msg, { warn: true, dur: 3500 }); }
-  function toastErr(msg) { toast(msg, { err: true, dur: 4000 }); }
+  function toastOk(msg) {
+    toast(msg, { dur: 2000 });
+  }
+  function toastWarn(msg) {
+    toast(msg, { warn: true, dur: 3500 });
+  }
+  function toastErr(msg) {
+    toast(msg, { err: true, dur: 4000 });
+  }
 
   function askConfirm(msg, title) {
     return new Promise((resolve) => {
@@ -58,7 +64,10 @@
     if (!el) return;
     type = type || "item";
     const cls = type === "card" ? "skeleton-card" : "skeleton-item";
-    el.innerHTML = Array.from({ length: count }, () => `<div class="skeleton ${cls}"></div>`).join("");
+    el.innerHTML = Array.from(
+      { length: count },
+      () => `<div class="skeleton ${cls}"></div>`,
+    ).join("");
   }
 
   function showEmpty(el, msg) {
@@ -185,7 +194,9 @@
       // 默认总览已 active
     } catch (e) {
       setToken("");
-      showLogin(e.status === 401 ? "token 无效" : e.message || "无法连接管理台");
+      showLogin(
+        e.status === 401 ? "token 无效" : e.message || "无法连接管理台",
+      );
     }
   }
 
@@ -241,7 +252,9 @@
       if (on) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     });
-    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+    document
+      .querySelectorAll(".panel")
+      .forEach((p) => p.classList.remove("active"));
     const panel = $("panel-" + tab);
     if (!panel) return;
     panel.classList.add("active");
@@ -283,25 +296,53 @@
       const el = $(id);
       if (el) el.innerHTML = html;
     };
-    fill("overview-link", [
-      card("SSE 订阅者", o.subscribers, subsCls),
-      card("Hermes ops", o.hermes_ops_configured ? "已配置" : "未配置", o.hermes_ops_configured ? "ok" : ""),
-      card("业务监听", o.listen || "—"),
-      card("管理监听", o.admin_listen || "—"),
-    ].join(""));
-    fill("overview-capacity", [
-      card("白名单", o.targets),
-      card("本地会话", o.local_sessions),
-      card("去抖 pending", o.pending_debounce, o.pending_debounce ? "ok" : ""),
-      card("未推缓冲", o.buffered_unflushed, o.buffered_unflushed ? "ok" : ""),
-      card("media_ref", o.media_refs),
-      card("限流", `${o.send_rate_per_min}/分`),
-    ].join(""));
-    fill("overview-identity", [
-      card("主人", o.owner_ok ? o.owner_name || "已识别" : "未识别", o.owner_ok ? "ok" : "bad"),
-      card("机器人", o.self_name || o.self_id || "—"),
-      card("业务 token", `<span class="mono">${esc(o.token_masked || "—")}</span>`),
-    ].join(""));
+    fill(
+      "overview-link",
+      [
+        card("SSE 订阅者", o.subscribers, subsCls),
+        card(
+          "Hermes ops",
+          o.hermes_ops_configured ? "已配置" : "未配置",
+          o.hermes_ops_configured ? "ok" : "",
+        ),
+        card("业务监听", o.listen || "—"),
+        card("管理监听", o.admin_listen || "—"),
+      ].join(""),
+    );
+    fill(
+      "overview-capacity",
+      [
+        card("白名单", o.targets),
+        card("本地会话", o.local_sessions),
+        card(
+          "去抖 pending",
+          o.pending_debounce,
+          o.pending_debounce ? "ok" : "",
+        ),
+        card(
+          "未推缓冲",
+          o.buffered_unflushed,
+          o.buffered_unflushed ? "ok" : "",
+        ),
+        card("media_ref", o.media_refs),
+        card("限流", `${o.send_rate_per_min}/分`),
+      ].join(""),
+    );
+    fill(
+      "overview-identity",
+      [
+        card(
+          "主人",
+          o.owner_ok ? o.owner_name || "已识别" : "未识别",
+          o.owner_ok ? "ok" : "bad",
+        ),
+        card("机器人", o.self_name || o.self_id || "—"),
+        card(
+          "业务 token",
+          `<span class="mono">${esc(o.token_masked || "—")}</span>`,
+        ),
+      ].join(""),
+    );
     $("gate-summary").textContent = o.gate_summary || "";
     const alerts = o.alerts || [];
     const alertEl = $("alerts");
@@ -343,23 +384,28 @@
             <span class="tag ${t.kind}">${t.kind === "group" ? "群" : "私聊"}</span>
             <div class="grow"><strong>${esc(t.name || t.id)}</strong><div class="muted">${esc(t.id)}</div></div>
             <button type="button" class="ghost danger btn-del">移除</button>
-          </div>`
+          </div>`,
             )
             .join("")
         : `<div class="empty">白名单为空</div>`;
-      $("target-list").querySelectorAll(".btn-del").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          const id = btn.closest(".item").dataset.id;
-          if (!(await askConfirm("移出白名单？\n" + id, "移出白名单"))) return;
-          try {
-            await api("/admin/targets/" + encodeURIComponent(id), { method: "DELETE" });
-            toastOk("已移除");
-            loadTargets();
-          } catch (e) {
-            toastErr(e.message);
-          }
+      $("target-list")
+        .querySelectorAll(".btn-del")
+        .forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            const id = btn.closest(".item").dataset.id;
+            if (!(await askConfirm("移出白名单？\n" + id, "移出白名单")))
+              return;
+            try {
+              await api("/admin/targets/" + encodeURIComponent(id), {
+                method: "DELETE",
+              });
+              toastOk("已移除");
+              loadTargets();
+            } catch (e) {
+              toastErr(e.message);
+            }
+          });
         });
-      });
     } catch (e) {
       toastErr(e.message);
     }
@@ -370,7 +416,10 @@
     const name = $("target-name").value.trim();
     if (!id) toastErr("请填写 id");
     try {
-      await api("/admin/targets", { method: "POST", body: JSON.stringify({ id, name }) });
+      await api("/admin/targets", {
+        method: "POST",
+        body: JSON.stringify({ id, name }),
+      });
       toastOk("已加入");
       $("target-id").value = "";
       $("target-name").value = "";
@@ -390,7 +439,9 @@
     if (!q) return toastErr("输入关键词");
     showLoading("search-results", "搜索中…");
     try {
-      const data = await api("/admin/contacts/search?q=" + encodeURIComponent(q));
+      const data = await api(
+        "/admin/contacts/search?q=" + encodeURIComponent(q),
+      );
       const results = data.results || [];
       $("search-results").innerHTML = results.length
         ? results
@@ -399,24 +450,29 @@
             <span class="tag ${h.kind}">${h.kind === "group" ? "群" : "私聊"}</span>
             <div class="grow"><strong>${esc(h.name)}</strong><div class="muted">${esc(h.id)}</div></div>
             <button type="button" class="primary btn-add-hit" data-id="${esc(h.id)}" data-name="${esc(h.name)}">加入</button>
-          </div>`
+          </div>`,
             )
             .join("")
         : `<div class="empty">无匹配</div>`;
-      $("search-results").querySelectorAll(".btn-add-hit").forEach((btn) => {
-        btn.addEventListener("click", async () => {
-          try {
-            await api("/admin/targets", {
-              method: "POST",
-              body: JSON.stringify({ id: btn.dataset.id, name: btn.dataset.name }),
-            });
-            toastOk("已加入");
-            loadTargets();
-          } catch (e) {
-            toastErr(e.message);
-          }
+      $("search-results")
+        .querySelectorAll(".btn-add-hit")
+        .forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            try {
+              await api("/admin/targets", {
+                method: "POST",
+                body: JSON.stringify({
+                  id: btn.dataset.id,
+                  name: btn.dataset.name,
+                }),
+              });
+              toastOk("已加入");
+              loadTargets();
+            } catch (e) {
+              toastErr(e.message);
+            }
+          });
         });
-      });
     } catch (e) {
       toastErr(e.message);
     }
@@ -467,7 +523,10 @@
       send_rate_per_min: num($("f-rate").value),
     };
     try {
-      const c = await api("/admin/config", { method: "PATCH", body: JSON.stringify(body) });
+      const c = await api("/admin/config", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
       $("gate-preview").textContent = c.gate_summary || "";
       toastOk("已保存");
     } catch (e) {
@@ -485,7 +544,7 @@
     const today = new Date();
     const sameDay = d.toDateString() === today.toDateString();
     const t = d.toLocaleTimeString();
-    return sameDay ? t : (d.getMonth() + 1) + "-" + d.getDate() + " " + t;
+    return sameDay ? t : d.getMonth() + 1 + "-" + d.getDate() + " " + t;
   }
 
   function renderTrace(ev, prepend) {
@@ -502,19 +561,20 @@
     const bits = [
       ev.chat_name || ev.chat_id,
       ev.user_name,
-      tr ? (TRIGGER_CN[tr] || tr) : null,
-      rs ? (REASON_CN[rs] || rs) : null,
+      tr ? TRIGGER_CN[tr] || tr : null,
+      rs ? REASON_CN[rs] || rs : null,
       ev.text ? truncate(ev.text, 80) : null,
     ]
       .filter(Boolean)
       .join(" · ");
-    const kindTitle = {
-      pushed: "已推 SSE",
-      scheduled: "去抖中",
-      context_only: "只记不推",
-      dropped: "丢弃",
-      cancelled: "打断作废",
-    }[ev.kind] || ev.kind;
+    const kindTitle =
+      {
+        pushed: "已推 SSE",
+        scheduled: "去抖中",
+        context_only: "只记不推",
+        dropped: "丢弃",
+        cancelled: "打断作废",
+      }[ev.kind] || ev.kind;
     el.innerHTML = `<div class="k" title="${esc(kindTitle)}">${esc(ev.kind || "?")}</div>
       <div><span class="muted">${esc(fmtTs(ev.ts))} #${ev.id}</span>
       ${ev.msg_count ? " ×" + ev.msg_count : ""}
@@ -546,7 +606,9 @@
       el.className = "pill err";
       return;
     }
-    es = new EventSource("/admin/inbound/stream?token=" + encodeURIComponent(token));
+    es = new EventSource(
+      "/admin/inbound/stream?token=" + encodeURIComponent(token),
+    );
     el.textContent = "连接中";
     el.className = "pill";
     es.addEventListener("trace", (msg) => {
@@ -576,7 +638,9 @@
     }
   }
 
-  $("btnTraceLive").addEventListener("click", () => loadTraceRecent().then(startTraceLive));
+  $("btnTraceLive").addEventListener("click", () =>
+    loadTraceRecent().then(startTraceLive),
+  );
   $("btnTraceStop").addEventListener("click", stopTraceLive);
   $("btnTraceRefresh").addEventListener("click", loadTraceRecent);
   $("btnTraceClear").addEventListener("click", () => {
@@ -596,10 +660,14 @@
               const flags = [];
               if (s.pending_debounce) flags.push("去抖中");
               if (s.unflushed_count) flags.push("未推 " + s.unflushed_count);
-              if (s.bubble_cool_remain_sec) flags.push("冒泡 " + s.bubble_cool_remain_sec + "s");
-              if (s.burst_cool_remain_sec) flags.push("斗图 " + s.burst_cool_remain_sec + "s");
+              if (s.bubble_cool_remain_sec)
+                flags.push("冒泡 " + s.bubble_cool_remain_sec + "s");
+              if (s.burst_cool_remain_sec)
+                flags.push("斗图 " + s.burst_cool_remain_sec + "s");
               if (!s.in_whitelist) flags.push("非白名单");
-              const trig = s.last_trigger ? " · " + (TRIGGER_CN[s.last_trigger] || esc(s.last_trigger)) : "";
+              const trig = s.last_trigger
+                ? " · " + (TRIGGER_CN[s.last_trigger] || esc(s.last_trigger))
+                : "";
               const who = s.last_user_name ? " · " + esc(s.last_user_name) : "";
               return `<div class="item">
               <span class="tag ${s.chat_type === "group" ? "group" : "private"}">${s.chat_type === "group" ? "群" : "私聊"}</span>
@@ -625,24 +693,34 @@
     count.textContent = regs.length + " 注册 / " + crashes.length + " 崩溃";
     const parts = [];
     if (data.ok) {
-      parts.push('<div class="alerts ok"><ul><li>工具注册看起来正常（日志尾扫描）</li></ul></div>');
+      parts.push(
+        '<div class="alerts ok"><ul><li>工具注册看起来正常（日志尾扫描）</li></ul></div>',
+      );
     } else {
-      parts.push(`<div class="alerts"><ul><li>${esc(data.hint || "工具注册异常")}</li></ul></div>`);
+      parts.push(
+        `<div class="alerts"><ul><li>${esc(data.hint || "工具注册异常")}</li></ul></div>`,
+      );
     }
     if (crashes.length) {
       parts.push('<div class="section-head"><h3>崩溃样本</h3></div>');
       parts.push(
         crashes
-          .map((c) => `<div class="item reg-item" title="${esc(c)}"><span class="tag bad">crash</span><div class="grow mono">${esc(c)}</div></div>`)
-          .join("")
+          .map(
+            (c) =>
+              `<div class="item reg-item" title="${esc(c)}"><span class="tag bad">crash</span><div class="grow mono">${esc(c)}</div></div>`,
+          )
+          .join(""),
       );
     }
     if (regs.length) {
       parts.push('<div class="section-head"><h3>已注册（日志尾）</h3></div>');
       parts.push(
         regs
-          .map((r) => `<div class="item reg-item" title="${esc(r)}"><span class="tag ok">ok</span><div class="grow mono">${esc(r)}</div></div>`)
-          .join("")
+          .map(
+            (r) =>
+              `<div class="item reg-item" title="${esc(r)}"><span class="tag ok">ok</span><div class="grow mono">${esc(r)}</div></div>`,
+          )
+          .join(""),
       );
     }
     box.innerHTML = parts.join("") || '<div class="empty">无工具注册日志</div>';
@@ -656,12 +734,15 @@
     if (!list.length) {
       const note = data.note ? esc(data.note) : "无 Hermes gateway session";
       box.innerHTML =
-        '<div class="empty">' + note + "</div>" +
+        '<div class="empty">' +
+        note +
+        "</div>" +
         (data.raw ? `<pre class="code-block">${esc(data.raw)}</pre>` : "");
       return;
     }
     const KV = (k, v) => {
-      if (v == null || v === "" || v === 0 || (Array.isArray(v) && !v.length)) return "";
+      if (v == null || v === "" || v === 0 || (Array.isArray(v) && !v.length))
+        return "";
       const s = typeof v === "object" ? JSON.stringify(v) : String(v);
       if (s.length > 60) return "";
       return `<span class="kv"><b>${esc(k)}</b>${esc(s)}</span>`;
@@ -693,14 +774,25 @@
         $("hermes-alerts").innerHTML =
           "<ul><li>配置 hermes_ops_url；脚本放 <code>~/.hermes/ops/</code></li></ul>";
         $("hermes-cards").innerHTML = "";
-        renderHermesTools({ ok: false, hint: "未配置 hermes_ops_url", registered_samples: [], crash_samples: [] });
+        renderHermesTools({
+          ok: false,
+          hint: "未配置 hermes_ops_url",
+          registered_samples: [],
+          crash_samples: [],
+        });
         renderHermesSessions({ sessions: [] });
         return;
       }
       let line = meta.ops_url || "ops";
       if (meta.ops_version) line += " · v" + meta.ops_version;
       stEl.textContent = line;
-      stEl.className = "pill" + (meta.ops_reachable === false ? " err" : meta.ops_reachable ? " live" : "");
+      stEl.className =
+        "pill" +
+        (meta.ops_reachable === false
+          ? " err"
+          : meta.ops_reachable
+            ? " live"
+            : "");
       const tips = [];
       if (meta.ops_error) tips.push(meta.ops_error);
       if (meta.ops_warn) tips.push(meta.ops_warn);
@@ -721,7 +813,12 @@
       stEl.textContent = "失败";
       stEl.className = "pill err";
       $("hermes-alerts").innerHTML = `<ul><li>${esc(e.message)}</li></ul>`;
-      renderHermesTools({ ok: false, hint: e.message, registered_samples: [], crash_samples: [] });
+      renderHermesTools({
+        ok: false,
+        hint: e.message,
+        registered_samples: [],
+        crash_samples: [],
+      });
       renderHermesSessions({ sessions: [] });
       toastErr(e.message);
     }
@@ -730,18 +827,64 @@
   $("btnHermesLog").addEventListener("click", async () => {
     const file = $("hermes-log-file").value;
     const grep = $("hermes-log-grep").value.trim();
-    let path = "/admin/hermes/logs?file=" + encodeURIComponent(file) + "&n=100";
+    let path = "/admin/hermes/logs?file=" + encodeURIComponent(file) + "&n=200";
     if (grep) path += "&grep=" + encodeURIComponent(grep);
-    $("hermes-log").textContent = "…";
+    const logEl = $("hermes-log");
+    const infoEl = $("hermes-log-info");
+    logEl.innerHTML =
+      '<span class="log-line"><span class="log-ln">…</span>加载中…</span>';
+    if (infoEl) infoEl.textContent = "";
     try {
       const data = await api(path);
       if (!data.exists) {
-        $("hermes-log").textContent = "不存在: " + (data.path || file);
+        logEl.textContent = "不存在: " + (data.path || file);
         return;
       }
-      $("hermes-log").textContent = (data.path || "") + "\n---\n" + ((data.lines || []).join("\n") || "空");
+      const lines = data.lines || [];
+      const total = lines.length;
+      if (infoEl)
+        infoEl.textContent = (data.path || file) + " · " + total + " 行";
+      if (!total) {
+        logEl.innerHTML =
+          '<span class="log-line"><span class="log-ln">0</span>（空）</span>';
+        return;
+      }
+      // 构建带行号和高亮的 HTML
+      const grepLower = grep ? grep.toLowerCase() : "";
+      const frag = [];
+      for (let i = 0; i < total; i++) {
+        const raw = lines[i];
+        const ln = i + 1;
+        let content = esc(raw);
+        // 高亮匹配词（大小写不敏感）
+        if (grepLower && content) {
+          const idx = content.toLowerCase().indexOf(grepLower);
+          if (idx >= 0) {
+            const before = content.slice(0, idx);
+            const match = content.slice(idx, idx + grep.length);
+            const after = content.slice(idx + grep.length);
+            content =
+              before + '<span class="log-hl">' + match + "</span>" + after;
+          }
+        }
+        frag.push(
+          '<span class="log-line"><span class="log-ln">' +
+            ln +
+            "</span>" +
+            content +
+            "</span>",
+        );
+      }
+      logEl.innerHTML = frag.join("");
+      // 自动滚底
+      const autoScroll = $("hermes-log-auto");
+      if (autoScroll && autoScroll.checked) {
+        requestAnimationFrame(() => {
+          logEl.scrollTop = logEl.scrollHeight;
+        });
+      }
     } catch (e) {
-      $("hermes-log").textContent = e.message;
+      logEl.textContent = e.message;
       toastErr(e.message);
     }
   });
@@ -762,7 +905,9 @@
     try {
       const data = await api("/admin/targets");
       $("sticker-chats").innerHTML = (data.targets || [])
-        .map((t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`)
+        .map(
+          (t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`,
+        )
         .join("");
     } catch (_) {}
   }
@@ -782,7 +927,9 @@
   }
 
   function clearStickerDetail() {
-    document.querySelectorAll(".sticker-card.selected").forEach((c) => c.classList.remove("selected"));
+    document
+      .querySelectorAll(".sticker-card.selected")
+      .forEach((c) => c.classList.remove("selected"));
     selectedStickerMd5 = "";
     const sel = $("sticker-selected");
     if (sel) {
@@ -805,7 +952,8 @@
     $("sticker-pager").innerHTML = "";
     clearStickerDetail();
     $("sticker-filter-hint").classList.remove("hidden");
-    $("sticker-filter-hint").innerHTML = "先在左侧选择情绪/题材，或在上方输入关键词后点「加载」。";
+    $("sticker-filter-hint").innerHTML =
+      "先在左侧选择情绪/题材，或在上方输入关键词后点「加载」。";
     selectedMood = null;
     selectedTag = "";
     selectedStickerMd5 = "";
@@ -817,43 +965,52 @@
       $("mood-list").innerHTML = moods
         .map(
           (m) =>
-            `<button type="button" class="mood-item" data-mood="${esc(m.name)}"><span>${esc(m.name)}</span><span class="cnt">${m.count}</span></button>`
+            `<button type="button" class="mood-item" data-mood="${esc(m.name)}"><span>${esc(m.name)}</span><span class="cnt">${m.count}</span></button>`,
         )
         .join("");
       if (data.no_mood) {
         $("mood-list").insertAdjacentHTML(
           "beforeend",
-          `<button type="button" class="mood-item" data-mood="__none__"><span>无情绪</span><span class="cnt">${data.no_mood}</span></button>`
+          `<button type="button" class="mood-item" data-mood="__none__"><span>无情绪</span><span class="cnt">${data.no_mood}</span></button>`,
         );
       }
       $("mood-all").classList.add("active");
-      $("mood-list").querySelectorAll(".mood-item").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          $("mood-all").classList.remove("active");
-          $("mood-list").querySelectorAll(".mood-item").forEach((b) => b.classList.remove("active"));
-          $("tag-list").querySelectorAll("button").forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          selectedTag = "";
-          if (btn.dataset.mood === "__none__") {
-            // 「无情绪」走专门的查漏模式：后端 no_mood=1 列出所有没有 mood 的表情
-            selectedMood = "__none__";
-          } else {
-            selectedMood = btn.dataset.mood;
-          }
-          $("sticker-q").value = "";
-          stickerPage = 1;
-          loadStickers();
+      $("mood-list")
+        .querySelectorAll(".mood-item")
+        .forEach((btn) => {
+          btn.addEventListener("click", () => {
+            $("mood-all").classList.remove("active");
+            $("mood-list")
+              .querySelectorAll(".mood-item")
+              .forEach((b) => b.classList.remove("active"));
+            $("tag-list")
+              .querySelectorAll("button")
+              .forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            selectedTag = "";
+            if (btn.dataset.mood === "__none__") {
+              // 「无情绪」走专门的查漏模式：后端 no_mood=1 列出所有没有 mood 的表情
+              selectedMood = "__none__";
+            } else {
+              selectedMood = btn.dataset.mood;
+            }
+            $("sticker-q").value = "";
+            stickerPage = 1;
+            loadStickers();
+          });
         });
-      });
       $("mood-all").onclick = () => {
-        $("mood-list").querySelectorAll(".mood-item").forEach((b) => b.classList.remove("active"));
+        $("mood-list")
+          .querySelectorAll(".mood-item")
+          .forEach((b) => b.classList.remove("active"));
         $("mood-all").classList.add("active");
         selectedMood = null;
         selectedTag = "";
         $("sticker-list").innerHTML = "";
         $("sticker-pager").classList.add("hidden");
         $("sticker-filter-hint").classList.remove("hidden");
-        $("sticker-filter-hint").innerHTML = "已取消情绪筛选。输入关键词后点「加载」，或点选情绪。";
+        $("sticker-filter-hint").innerHTML =
+          "已取消情绪筛选。输入关键词后点「加载」，或点选情绪。";
         stickerPage = 1;
         loadStickers();
       };
@@ -861,18 +1018,25 @@
       const tags = data.tags || [];
       $("tag-list").innerHTML = tags
         .slice(0, 24)
-        .map((t) => `<button type="button" data-tag="${esc(t.name)}">${esc(t.name)} ${t.count}</button>`)
+        .map(
+          (t) =>
+            `<button type="button" data-tag="${esc(t.name)}">${esc(t.name)} ${t.count}</button>`,
+        )
         .join("");
-      $("tag-list").querySelectorAll("button").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          $("tag-list").querySelectorAll("button").forEach((b) => b.classList.remove("active"));
-          btn.classList.add("active");
-          selectedTag = btn.dataset.tag;
-          // 题材可与情绪叠加
-          stickerPage = 1;
-          loadStickers();
+      $("tag-list")
+        .querySelectorAll("button")
+        .forEach((btn) => {
+          btn.addEventListener("click", () => {
+            $("tag-list")
+              .querySelectorAll("button")
+              .forEach((b) => b.classList.remove("active"));
+            btn.classList.add("active");
+            selectedTag = btn.dataset.tag;
+            // 题材可与情绪叠加
+            stickerPage = 1;
+            loadStickers();
+          });
         });
-      });
     } catch (e) {
       $("mood-list").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
       toastErr(e.message);
@@ -899,7 +1063,8 @@
         body: JSON.stringify({ kind: "emoji", chat_id: chat, md5 }),
       });
       const data = await res.json();
-      $("sticker-detail").innerHTML = `<pre class="code-block">${esc(JSON.stringify(data, null, 2))}</pre>`;
+      $("sticker-detail").innerHTML =
+        `<pre class="code-block">${esc(JSON.stringify(data, null, 2))}</pre>`;
       if (!res.ok) toastErr(data.error || "失败");
       else toastOk("试发 outcome=" + data.outcome);
     } catch (e) {
@@ -918,11 +1083,12 @@
         `💡 先在左侧选择情绪，或输入关键词后点「加载」，库大避免一次拉全库。` +
         ` <button type="button" class="ghost" id="btnLoadFirstMood">加载第一个情绪</button>`;
       const b = $("btnLoadFirstMood");
-      if (b) b.onclick = () => {
-        const first = document.querySelector("#mood-list .mood-item");
-        if (first) first.click();
-        else $("sticker-q").focus();
-      };
+      if (b)
+        b.onclick = () => {
+          const first = document.querySelector("#mood-list .mood-item");
+          if (first) first.click();
+          else $("sticker-q").focus();
+        };
       $("sticker-list").innerHTML = "";
       pager.classList.add("hidden");
       pager.innerHTML = "";
@@ -931,7 +1097,8 @@
     }
     $("sticker-filter-hint").classList.add("hidden");
     showSkeleton("sticker-list", 6, "card");
-    let path = "/admin/hermes/stickers?n=" + stickerPageSize + "&page=" + stickerPage;
+    let path =
+      "/admin/hermes/stickers?n=" + stickerPageSize + "&page=" + stickerPage;
     if (selectedMood === "__none__") {
       // 查漏：只列没有任何 mood 的表情，后端走专门分支
       path += "&no_mood=1";
@@ -952,8 +1119,15 @@
               const moods = (s.moods || []).join(" ") || "—";
               const use = s.use_count || 0;
               // 没有 file_size（旧 ops 版本）时按 0 处理，不显示大小提示
-              const sizeKB = s.file_size ? Math.round(s.file_size / 1024) : null;
-              const sizeHint = sizeKB && sizeKB > 0 ? (sizeKB >= 1024 ? `${(sizeKB/1024).toFixed(1)}MB` : `${sizeKB}KB`) : "";
+              const sizeKB = s.file_size
+                ? Math.round(s.file_size / 1024)
+                : null;
+              const sizeHint =
+                sizeKB && sizeKB > 0
+                  ? sizeKB >= 1024
+                    ? `${(sizeKB / 1024).toFixed(1)}MB`
+                    : `${sizeKB}KB`
+                  : "";
               const big = s.file_size && s.file_size > 2 * 1024 * 1024;
               return `<div class="sticker-card${big ? " sticker-big" : ""}" data-md5="${esc(s.md5)}" title="${esc(title)} · ${esc(s.md5)}${sizeHint ? " · " + sizeHint : ""}">
                 <div class="thumb-wrap">
@@ -975,25 +1149,35 @@
         : `<div class="empty">无结果（匹配 ${data.total_matched || 0}）</div>`;
 
       // 缩略图加载失败兜底：⚠ 覆盖层
-      $("sticker-list").querySelectorAll(".sticker-thumb").forEach((img) => {
-        img.addEventListener("error", () => {
-          const wrap = img.closest(".thumb-wrap");
-          if (!wrap) return;
-          img.hidden = true;
-          const fb = wrap.querySelector(".thumb-fallback");
-          if (fb) fb.hidden = false;
-          wrap.classList.add("thumb-err");
-        }, { once: true });
-      });
+      $("sticker-list")
+        .querySelectorAll(".sticker-thumb")
+        .forEach((img) => {
+          img.addEventListener(
+            "error",
+            () => {
+              const wrap = img.closest(".thumb-wrap");
+              if (!wrap) return;
+              img.hidden = true;
+              const fb = wrap.querySelector(".thumb-fallback");
+              if (fb) fb.hidden = false;
+              wrap.classList.add("thumb-err");
+            },
+            { once: true },
+          );
+        });
 
       // 点击视觉反馈：键盘 ripple + 长按 lift
-      $("sticker-list").querySelectorAll(".sticker-card").forEach((card) => {
-        card.addEventListener("pointerdown", () => card.classList.add("pressing"));
-        const release = () => card.classList.remove("pressing");
-        card.addEventListener("pointerup", release);
-        card.addEventListener("pointerleave", release);
-        card.addEventListener("pointercancel", release);
-      });
+      $("sticker-list")
+        .querySelectorAll(".sticker-card")
+        .forEach((card) => {
+          card.addEventListener("pointerdown", () =>
+            card.classList.add("pressing"),
+          );
+          const release = () => card.classList.remove("pressing");
+          card.addEventListener("pointerup", release);
+          card.addEventListener("pointerleave", release);
+          card.addEventListener("pointercancel", release);
+        });
 
       // pagination controls
       const pager = $("sticker-pager");
@@ -1018,35 +1202,56 @@
         buildBtn("pgLast", "末页", page < lastPage) +
         `<input type="number" class="pager-jump" min="1" max="${lastPage}" value="${page}" title="回车跳转" />` +
         `</span>`;
-      const on = (id, n) => { const b = $(id); if (b && !b.disabled) b.onclick = () => { stickerPage = n; loadStickers(); }; };
+      const on = (id, n) => {
+        const b = $(id);
+        if (b && !b.disabled)
+          b.onclick = () => {
+            stickerPage = n;
+            loadStickers();
+          };
+      };
       on("pgFirst", 1);
       on("pgPrev", page - 1);
       on("pgNext", page + 1);
       on("pgLast", lastPage);
 
-      $("sticker-list").querySelectorAll(".sticker-card").forEach((card) => {
-        card.addEventListener("click", async (ev) => {
-          if (ev.target.closest("button")) return;
-          const md5 = card.dataset.md5;
-          selectedStickerMd5 = md5;
-          document.querySelectorAll(".sticker-card").forEach((c) => c.classList.toggle("selected", c.dataset.md5 === md5));
-          $("sticker-selected").textContent = "已选: " + md5.slice(0, 8) + "…";
-          $("sticker-selected").title = md5;
-          $("sticker-selected").classList.remove("muted");
-          const detail = $("sticker-detail");
-          openStickerDrawer();
-          detail.classList.remove("muted", "empty");
-          detail.innerHTML = `<div class="detail-loading"><span class="spinner"></span>加载详情…</div>`;
-          try {
-            const d = await api("/admin/hermes/stickers/" + encodeURIComponent(md5));
-            const metaBits = [
-              `<strong>${esc(d.desc || "(无描述)")}</strong>`,
-              d.moods && d.moods.length ? `<span class="muted">情绪: ${esc(d.moods.join(" / "))}</span>` : "",
-              d.tags && d.tags.length ? `<span class="muted">题材: ${esc(d.tags.join(" / "))}</span>` : "",
-              `<span class="muted mono">md5: ${esc(d.md5)}</span>`,
-            ].filter(Boolean).join("<br>");
-            detail.innerHTML =
-              `<div class="detail-head">
+      $("sticker-list")
+        .querySelectorAll(".sticker-card")
+        .forEach((card) => {
+          card.addEventListener("click", async (ev) => {
+            if (ev.target.closest("button")) return;
+            const md5 = card.dataset.md5;
+            selectedStickerMd5 = md5;
+            document
+              .querySelectorAll(".sticker-card")
+              .forEach((c) =>
+                c.classList.toggle("selected", c.dataset.md5 === md5),
+              );
+            $("sticker-selected").textContent =
+              "已选: " + md5.slice(0, 8) + "…";
+            $("sticker-selected").title = md5;
+            $("sticker-selected").classList.remove("muted");
+            const detail = $("sticker-detail");
+            openStickerDrawer();
+            detail.classList.remove("muted", "empty");
+            detail.innerHTML = `<div class="detail-loading"><span class="spinner"></span>加载详情…</div>`;
+            try {
+              const d = await api(
+                "/admin/hermes/stickers/" + encodeURIComponent(md5),
+              );
+              const metaBits = [
+                `<strong>${esc(d.desc || "(无描述)")}</strong>`,
+                d.moods && d.moods.length
+                  ? `<span class="muted">情绪: ${esc(d.moods.join(" / "))}</span>`
+                  : "",
+                d.tags && d.tags.length
+                  ? `<span class="muted">题材: ${esc(d.tags.join(" / "))}</span>`
+                  : "",
+                `<span class="muted mono">md5: ${esc(d.md5)}</span>`,
+              ]
+                .filter(Boolean)
+                .join("<br>");
+              detail.innerHTML = `<div class="detail-head">
                 <div class="preview-frame">
                   <img class="sticker-preview" src="${esc(stickerFileURL(md5))}" alt="" onerror="this.classList.add('preview-err')" />
                 </div>
@@ -1056,38 +1261,42 @@
                   <button type="button" class="ghost" id="dCopy" title="复制 md5">复制 md5</button>
                 </div>
               </div>`;
-            $("dSend").onclick = () => sendStickerMd5(md5);
-            $("dCopy").onclick = async () => {
-              try {
-                await navigator.clipboard.writeText(md5);
-                toastOk("已复制 md5");
-              } catch (_) {
-                toastErr(md5);
-              }
-            };
-          } catch (e) {
-            toastErr(e.message);
-            clearStickerDetail();
-          }
+              $("dSend").onclick = () => sendStickerMd5(md5);
+              $("dCopy").onclick = async () => {
+                try {
+                  await navigator.clipboard.writeText(md5);
+                  toastOk("已复制 md5");
+                } catch (_) {
+                  toastErr(md5);
+                }
+              };
+            } catch (e) {
+              toastErr(e.message);
+              clearStickerDetail();
+            }
+          });
         });
-      });
-      $("sticker-list").querySelectorAll(".btn-send").forEach((b) => {
-        b.addEventListener("click", (ev) => {
-          ev.stopPropagation();
-          sendStickerMd5(b.dataset.md5);
+      $("sticker-list")
+        .querySelectorAll(".btn-send")
+        .forEach((b) => {
+          b.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            sendStickerMd5(b.dataset.md5);
+          });
         });
-      });
-      $("sticker-list").querySelectorAll(".btn-copy").forEach((b) => {
-        b.addEventListener("click", async (ev) => {
-          ev.stopPropagation();
-          try {
-            await navigator.clipboard.writeText(b.dataset.md5);
-            toastOk("已复制");
-          } catch (_) {
-            toastErr(b.dataset.md5);
-          }
+      $("sticker-list")
+        .querySelectorAll(".btn-copy")
+        .forEach((b) => {
+          b.addEventListener("click", async (ev) => {
+            ev.stopPropagation();
+            try {
+              await navigator.clipboard.writeText(b.dataset.md5);
+              toastOk("已复制");
+            } catch (_) {
+              toastErr(b.dataset.md5);
+            }
+          });
         });
-      });
     } catch (e) {
       $("sticker-list").innerHTML = "";
       pager.classList.add("hidden");
@@ -1095,9 +1304,15 @@
     }
   }
 
-  $("btnStickers").addEventListener("click", () => { stickerPage = 1; loadStickers(); });
+  $("btnStickers").addEventListener("click", () => {
+    stickerPage = 1;
+    loadStickers();
+  });
   $("sticker-q").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") { stickerPage = 1; loadStickers(); }
+    if (ev.key === "Enter") {
+      stickerPage = 1;
+      loadStickers();
+    }
   });
   $("sticker-page-size").addEventListener("change", () => {
     stickerPageSize = parseInt($("sticker-page-size").value, 10);
@@ -1143,13 +1358,17 @@
             })
             .join("")
         : `<div class="empty">无档案</div>`;
-      $("profile-list").querySelectorAll(".btn-profile").forEach((el) => {
-        el.addEventListener("click", () => {
-          $("profile-list").querySelectorAll(".btn-profile").forEach((n) => n.classList.remove("selected"));
-          el.classList.add("selected");
-          fillProfile(el.dataset.wxid);
+      $("profile-list")
+        .querySelectorAll(".btn-profile")
+        .forEach((el) => {
+          el.addEventListener("click", () => {
+            $("profile-list")
+              .querySelectorAll(".btn-profile")
+              .forEach((n) => n.classList.remove("selected"));
+            el.classList.add("selected");
+            fillProfile(el.dataset.wxid);
+          });
         });
-      });
     } catch (e) {
       toastErr(e.message);
     }
@@ -1157,7 +1376,9 @@
 
   async function fillProfile(wxid) {
     try {
-      const p = await api("/admin/hermes/member_profiles/" + encodeURIComponent(wxid));
+      const p = await api(
+        "/admin/hermes/member_profiles/" + encodeURIComponent(wxid),
+      );
       $("pf-wxid").value = p.wxid || wxid;
       $("pf-name").value = p.display_name || "";
       $("pf-personality").value = p.personality || "";
@@ -1192,10 +1413,13 @@
         .filter(Boolean),
     };
     try {
-      const res = await api("/admin/hermes/member_profiles/" + encodeURIComponent(wxid), {
-        method: "PUT",
-        body: JSON.stringify(body),
-      });
+      const res = await api(
+        "/admin/hermes/member_profiles/" + encodeURIComponent(wxid),
+        {
+          method: "PUT",
+          body: JSON.stringify(body),
+        },
+      );
       $("profile-result").textContent = JSON.stringify(res, null, 2);
       toastOk("已保存");
       loadProfiles();
@@ -1208,9 +1432,11 @@
     if (!wxid || !(await askConfirm("删除 " + wxid + "？", "删除档案"))) return;
     try {
       $("profile-result").textContent = JSON.stringify(
-        await api("/admin/hermes/member_profiles/" + encodeURIComponent(wxid), { method: "DELETE" }),
+        await api("/admin/hermes/member_profiles/" + encodeURIComponent(wxid), {
+          method: "DELETE",
+        }),
         null,
-        2
+        2,
       );
       toastOk("已删除");
       loadProfiles();
@@ -1224,7 +1450,9 @@
     try {
       const data = await api("/admin/targets");
       $("diag-chats").innerHTML = (data.targets || [])
-        .map((t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`)
+        .map(
+          (t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`,
+        )
         .join("");
     } catch (_) {}
   }
@@ -1279,7 +1507,9 @@
   function filteredPages() {
     const q = (($("cmdk-q") && $("cmdk-q").value) || "").trim().toLowerCase();
     if (!q) return PAGES;
-    return PAGES.filter((p) => (p.title + p.hint + p.tab).toLowerCase().includes(q));
+    return PAGES.filter((p) =>
+      (p.title + p.hint + p.tab).toLowerCase().includes(q),
+    );
   }
 
   function renderCmdk() {
@@ -1294,7 +1524,7 @@
     list.innerHTML = items
       .map(
         (p, i) =>
-          `<button type="button" class="cmdk-item${i === cmdkIndex ? " active" : ""}" data-tab="${esc(p.tab)}"><strong>${esc(p.title)}</strong><span class="muted">${esc(p.hint)}</span></button>`
+          `<button type="button" class="cmdk-item${i === cmdkIndex ? " active" : ""}" data-tab="${esc(p.tab)}"><strong>${esc(p.title)}</strong><span class="muted">${esc(p.hint)}</span></button>`,
       )
       .join("");
     list.querySelectorAll(".cmdk-item").forEach((btn) => {
@@ -1324,10 +1554,11 @@
   }
 
   if ($("btnCommand")) $("btnCommand").addEventListener("click", openCmdk);
-  if ($("cmdk-q")) $("cmdk-q").addEventListener("input", () => {
-    cmdkIndex = 0;
-    renderCmdk();
-  });
+  if ($("cmdk-q"))
+    $("cmdk-q").addEventListener("input", () => {
+      cmdkIndex = 0;
+      renderCmdk();
+    });
   if ($("cmdk")) {
     $("cmdk").addEventListener("click", (ev) => {
       if (ev.target === $("cmdk")) closeCmdk();
@@ -1335,12 +1566,15 @@
   }
   if ($("confirm")) {
     $("confirm").addEventListener("click", (ev) => {
-      if (ev.target === $("confirm") && $("confirm-cancel")) $("confirm-cancel").click();
+      if (ev.target === $("confirm") && $("confirm-cancel"))
+        $("confirm-cancel").click();
     });
   }
 
   document.addEventListener("keydown", (ev) => {
-    const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((ev.target && ev.target.tagName) || "");
+    const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(
+      (ev.target && ev.target.tagName) || "",
+    );
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "k") {
       ev.preventDefault();
       if (cmdkVisible()) closeCmdk();
@@ -1353,12 +1587,19 @@
         closeCmdk();
         return;
       }
-      if ($("sticker-drawer") && !$("sticker-drawer").classList.contains("hidden")) {
+      if (
+        $("sticker-drawer") &&
+        !$("sticker-drawer").classList.contains("hidden")
+      ) {
         ev.preventDefault();
         clearStickerDetail();
         return;
       }
-      if ($("confirm") && !$("confirm").classList.contains("hidden") && $("confirm-cancel")) {
+      if (
+        $("confirm") &&
+        !$("confirm").classList.contains("hidden") &&
+        $("confirm-cancel")
+      ) {
         $("confirm-cancel").click();
       }
       return;
@@ -1371,7 +1612,9 @@
         renderCmdk();
       } else if (ev.key === "ArrowUp") {
         ev.preventDefault();
-        cmdkIndex = (cmdkIndex - 1 + Math.max(items.length, 1)) % Math.max(items.length, 1);
+        cmdkIndex =
+          (cmdkIndex - 1 + Math.max(items.length, 1)) %
+          Math.max(items.length, 1);
         renderCmdk();
       } else if (ev.key === "Enter") {
         ev.preventDefault();
@@ -1384,11 +1627,23 @@
       return;
     }
     if (inField || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    const map = { g: "overview", b: "targets", m: "gate", i: "inbound", s: "sessions", h: "hermes", e: "stickers", p: "profiles", d: "diagnose" };
-    if (map[ev.key] && !$("app-shell").classList.contains("hidden")) setPage(map[ev.key]);
+    const map = {
+      g: "overview",
+      b: "targets",
+      m: "gate",
+      i: "inbound",
+      s: "sessions",
+      h: "hermes",
+      e: "stickers",
+      p: "profiles",
+      d: "diagnose",
+    };
+    if (map[ev.key] && !$("app-shell").classList.contains("hidden"))
+      setPage(map[ev.key]);
   });
 
-  if ($("btnDrawerClose")) $("btnDrawerClose").addEventListener("click", clearStickerDetail);
+  if ($("btnDrawerClose"))
+    $("btnDrawerClose").addEventListener("click", clearStickerDetail);
   if ($("sticker-drawer")) {
     $("sticker-drawer").addEventListener("click", (ev) => {
       if (ev.target === $("sticker-drawer")) clearStickerDetail();

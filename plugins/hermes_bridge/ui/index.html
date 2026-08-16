@@ -104,19 +104,19 @@
         <section id="panel-gate" class="panel" data-title="门闩" data-sub="触发策略 · 热更新">
           <p id="gate-preview" class="lead"></p>
           <form id="gate-form" class="form form-compact">
-            <label>点名 trigger_names（逗号）
-              <input id="f-triggers" spellcheck="false" />
+            <label><span class="field-label">trigger_names <span class="field-hint">点名触发词 · 逗号分隔</span></span>
+              <input id="f-triggers" spellcheck="false" placeholder="如：火, 小助手" />
             </label>
-            <label class="check"><input type="checkbox" id="f-pushall" /> 关闭门闩 group_push_all（群每条都推）</label>
-            <label>去抖秒数<input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
-            <label>冒泡 0~1<input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
-            <label>冒泡冷却分<input type="number" id="f-bubble-cd" min="0" /></label>
-            <label>上下文条数<input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
-            <label>斗图第 N 条<input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
-            <label>斗图窗口秒<input type="number" id="f-burst-win" min="1" /></label>
-            <label>斗图冷却分<input type="number" id="f-burst-cd" min="0" /></label>
-            <label>文本上限字<input type="number" id="f-text" min="1" /></label>
-            <label>出站条/分<input type="number" id="f-rate" min="1" /></label>
+            <label class="check"><input type="checkbox" id="f-pushall" /> group_push_all（关闭门闩 · 群每条都推）</label>
+            <label><span class="field-label">debounce_seconds <span class="field-hint">去抖秒数</span></span><input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
+            <label><span class="field-label">bubble_rate <span class="field-hint">冒泡概率 0~1</span></span><input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
+            <label><span class="field-label">bubble_cooldown <span class="field-hint">冒泡冷却（分钟）</span></span><input type="number" id="f-bubble-cd" min="0" /></label>
+            <label><span class="field-label">max_context <span class="field-hint">上下文条数上限</span></span><input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
+            <label><span class="field-label">emoji_burst_count <span class="field-hint">斗图触发阈值（0=关）</span></span><input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
+            <label><span class="field-label">emoji_burst_window <span class="field-hint">斗图窗口（秒）</span></span><input type="number" id="f-burst-win" min="1" /></label>
+            <label><span class="field-label">emoji_burst_cd <span class="field-hint">斗图冷却（分钟）</span></span><input type="number" id="f-burst-cd" min="0" /></label>
+            <label><span class="field-label">max_text_len <span class="field-hint">文本上限字数</span></span><input type="number" id="f-text" min="1" /></label>
+            <label><span class="field-label">send_rate <span class="field-hint">出站限流（条/分）</span></span><input type="number" id="f-rate" min="1" /></label>
             <div class="form-actions">
               <button type="submit" class="primary" id="btnGateSave">保存</button>
             </div>
@@ -131,8 +131,7 @@
             <button type="button" id="btnTraceRefresh" class="ghost">拉取</button>
             <button type="button" id="btnTraceClear" class="ghost">清空</button>
           </div>
-          <details class="help-box">
-            <summary>标记说明</summary>
+          <div class="help-box legend-always">
             <div class="legend-grid">
               <div><code class="k context_only">context_only</code><span>只记不推</span></div>
               <div><code class="k scheduled">scheduled</code><span>去抖中</span></div>
@@ -140,7 +139,7 @@
               <div><code class="k dropped">dropped</code><span>丢弃</span></div>
               <div><code class="k cancelled">cancelled</code><span>打断作废</span></div>
             </div>
-          </details>
+          </div>
           <div id="trace-list" class="trace-list"></div>
         </section>
 
@@ -154,17 +153,19 @@
           </div>
           <div id="hermes-alerts" class="alerts"></div>
           <div class="cards" id="hermes-cards"></div>
-          <div class="hermes-body">
-            <details class="fold" open>
-              <summary>工具注册 <span id="hermes-tools-count" class="muted"></span></summary>
+          <div class="hermes-tabs" role="tablist">
+            <button type="button" class="hermes-tab active" data-htab="tools" role="tab" aria-selected="true">工具注册 <span id="hermes-tools-count" class="muted"></span></button>
+            <button type="button" class="hermes-tab" data-htab="sessions" role="tab" aria-selected="false">Sessions <span id="hermes-sessions-count" class="muted"></span></button>
+            <button type="button" class="hermes-tab" data-htab="logs" role="tab" aria-selected="false">日志</button>
+          </div>
+          <div class="hermes-tab-body">
+            <div id="htab-tools" class="hermes-pane active" role="tabpanel">
               <div id="hermes-tools" class="list"></div>
-            </details>
-            <details class="fold">
-              <summary>Sessions <span id="hermes-sessions-count" class="muted"></span></summary>
+            </div>
+            <div id="htab-sessions" class="hermes-pane" role="tabpanel">
               <div id="hermes-sessions" class="list"></div>
-            </details>
-            <details class="fold">
-              <summary>日志</summary>
+            </div>
+            <div id="htab-logs" class="hermes-pane" role="tabpanel">
               <div class="log-toolbar">
                 <select id="hermes-log-file">
                   <option value="agent">agent.log</option>
@@ -177,7 +178,7 @@
                 <span id="hermes-log-info" class="log-info"></span>
               </div>
               <pre id="hermes-log" class="code-block">—</pre>
-            </details>
+            </div>
           </div>
         </section>
 
@@ -231,12 +232,12 @@
             <div class="split-detail">
               <div class="section-head"><h3>编辑</h3></div>
               <form id="profile-form" class="form">
-                <label>wxid<input id="pf-wxid" required spellcheck="false" /></label>
-                <label>display_name<input id="pf-name" /></label>
-                <label>personality<input id="pf-personality" /></label>
-                <label>preferences<input id="pf-prefs" placeholder="逗号分隔" /></label>
-                <label>notes<input id="pf-notes" /></label>
-                <label>aliases<input id="pf-aliases" placeholder="逗号分隔" /></label>
+                <label><span class="field-label">wxid <span class="field-hint">微信唯一标识</span></span><input id="pf-wxid" required spellcheck="false" /></label>
+                <label><span class="field-label">display_name <span class="field-hint">群内显示名</span></span><input id="pf-name" /></label>
+                <label><span class="field-label">personality <span class="field-hint">性格特征</span></span><input id="pf-personality" /></label>
+                <label><span class="field-label">preferences <span class="field-hint">偏好 · 逗号分隔</span></span><input id="pf-prefs" placeholder="如：技术, 游戏, 美食" /></label>
+                <label><span class="field-label">notes <span class="field-hint">备注</span></span><input id="pf-notes" /></label>
+                <label><span class="field-label">aliases <span class="field-hint">别名 · 逗号分隔</span></span><input id="pf-aliases" placeholder="其他称呼" /></label>
                 <div class="form-actions">
                   <button type="submit" class="primary">保存</button>
                   <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
@@ -249,19 +250,19 @@
 
         <section id="panel-diagnose" class="panel" data-title="诊断" data-sub="媒体试发">
           <form id="diag-form" class="form">
-            <label>kind
+            <label><span class="field-label">kind <span class="field-hint">媒体类型</span></span>
               <select id="diag-kind">
-                <option value="image">image</option>
-                <option value="video">video</option>
-                <option value="emoji">emoji</option>
+                <option value="image">image 图片</option>
+                <option value="video">video 视频</option>
+                <option value="emoji">emoji 表情</option>
               </select>
             </label>
-            <label>chat_id
-              <input id="diag-chat" list="diag-chats" required spellcheck="false" />
+            <label><span class="field-label">chat_id <span class="field-hint">目标会话</span></span>
+              <input id="diag-chat" list="diag-chats" required spellcheck="false" placeholder="wxid 或 xxx@chatroom" />
               <datalist id="diag-chats"></datalist>
             </label>
-            <label>url<input id="diag-url" placeholder="https://…" spellcheck="false" /></label>
-            <label>emoji md5<input id="diag-md5" spellcheck="false" /></label>
+            <label><span class="field-label">url <span class="field-hint">媒体链接</span></span><input id="diag-url" placeholder="https://…" spellcheck="false" /></label>
+            <label><span class="field-label">emoji md5 <span class="field-hint">表情指纹</span></span><input id="diag-md5" spellcheck="false" placeholder="32 位 hex" /></label>
             <div class="form-actions">
               <button type="submit" class="primary">试发</button>
             </div>

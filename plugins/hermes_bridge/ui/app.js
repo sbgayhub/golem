@@ -285,6 +285,21 @@
     btn.addEventListener("click", () => setPage(btn.dataset.tab));
   });
 
+  // ---- Hermes sub-tabs ----
+  function setHermesTab(htab) {
+    document.querySelectorAll(".hermes-tab").forEach((b) => {
+      const on = b.dataset.htab === htab;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    document.querySelectorAll(".hermes-pane").forEach((p) => p.classList.remove("active"));
+    const pane = $("htab-" + htab);
+    if (pane) pane.classList.add("active");
+  }
+  document.querySelectorAll(".hermes-tab").forEach((btn) => {
+    btn.addEventListener("click", () => setHermesTab(btn.dataset.htab));
+  });
+
   function card(label, value, cls) {
     return `<div class="card ${cls || ""}"><div class="label">${label}</div><div class="value">${value}</div></div>`;
   }
@@ -299,46 +314,46 @@
     fill(
       "overview-link",
       [
-        card("SSE 订阅者", o.subscribers, subsCls),
+        card("SSE 连接数", o.subscribers, subsCls),
         card(
-          "Hermes ops",
+          "运维反代",
           o.hermes_ops_configured ? "已配置" : "未配置",
           o.hermes_ops_configured ? "ok" : "",
         ),
-        card("业务监听", o.listen || "—"),
-        card("管理监听", o.admin_listen || "—"),
+        card("业务端口", o.listen || "—"),
+        card("管理端口", o.admin_listen || "—"),
       ].join(""),
     );
     fill(
       "overview-capacity",
       [
-        card("白名单", o.targets),
-        card("本地会话", o.local_sessions),
+        card("白名单数量", o.targets),
+        card("活跃会话", o.local_sessions),
         card(
-          "去抖 pending",
+          "等待合并",
           o.pending_debounce,
           o.pending_debounce ? "ok" : "",
         ),
         card(
-          "未推缓冲",
+          "待推送",
           o.buffered_unflushed,
           o.buffered_unflushed ? "ok" : "",
         ),
-        card("media_ref", o.media_refs),
-        card("限流", `${o.send_rate_per_min}/分`),
+        card("媒体缓存", o.media_refs),
+        card("出站限流", `${o.send_rate_per_min} 条/分`),
       ].join(""),
     );
     fill(
       "overview-identity",
       [
         card(
-          "主人",
+          "主人身份",
           o.owner_ok ? o.owner_name || "已识别" : "未识别",
           o.owner_ok ? "ok" : "bad",
         ),
-        card("机器人", o.self_name || o.self_id || "—"),
+        card("机器人昵称", o.self_name || o.self_id || "—"),
         card(
-          "业务 token",
+          "Token 掩码",
           `<span class="mono">${esc(o.token_masked || "—")}</span>`,
         ),
       ].join(""),
@@ -803,9 +818,9 @@
         : "";
       const st = ov.systemd || {};
       $("hermes-cards").innerHTML = [
-        card("gateway", st.is_active || "?", st.ok ? "ok" : "bad"),
-        card("tools", ov.tools_ok ? "ok" : "检查", ov.tools_ok ? "ok" : "bad"),
-        card("HOME", ov.hermes_home || "—"),
+        card("网关状态", st.is_active || "?", st.ok ? "ok" : "bad"),
+        card("工具注册", ov.tools_ok ? "正常" : "异常", ov.tools_ok ? "ok" : "bad"),
+        card("运行目录", ov.hermes_home || "—"),
       ].join("");
       renderHermesTools(await api("/admin/hermes/tools/check"));
       renderHermesSessions(await api("/admin/hermes/sessions?n=30"));

@@ -1661,6 +1661,9 @@ class _PendingBatch:
 
     def __init__(self) -> None:
         self.parts: List[str] = []
+        # 每条消息各自的外壳（media_ref / msg_id / quote 等），与 parts 一一对应；
+        # 合并时用于把前面消息的引用信息内嵌回正文，避免只剩最后一条的元数据。
+        self.part_kwargs: List[Dict[str, Any]] = []
         # 以最后一条的外壳为准（session / chat / user 元数据）
         self.last_event_kwargs: Dict[str, Any] = {}
 
@@ -1686,6 +1689,7 @@ class _SessionLane:
         self.debounce_task: Optional[asyncio.Task] = None
         self.worker_task: Optional[asyncio.Task] = None
         self.running = False  # 本轮 agent 尚未 idle（不是 handle_message 返回）
+        self._fail_streak = 0  # 连续投递失败次数，退避重试用
 
     def cancel_debounce(self) -> None:
         t = self.debounce_task
@@ -1697,6 +1701,14 @@ class _SessionLane:
         self.cancel_debounce()
         self.pending = None
 
+    def _requeue_front(self, batch: _PendingBatch) -> None:
+        """投递失败时把整批放回队首（保序，等待重试或与新消息合并）。"""
+        if self.pending is None:
+            self.pending = batch
+            return
+        self.pending.parts = batch.parts + self.pending.parts
+        self.pending.part_kwargs = batch.part_kwargs + self.pending.part_kwargs
+
     def enqueue(
         self, body: str, event_kwargs: Dict[str, Any], debounce_ms: int
     ) -> None:
@@ -1707,6 +1719,7 @@ class _SessionLane:
         if self.pending is None:
             self.pending = _PendingBatch()
         self.pending.parts.append(body)
+        self.pending.part_kwargs.append(event_kwargs)
         self.pending.last_event_kwargs = event_kwargs
 
         self.cancel_debounce()
@@ -1744,9 +1757,19 @@ class _SessionLane:
                 # 取走当前批次；handle 期间新消息进新的 pending（可再开 debounce）
                 self.pending = None
                 self.cancel_debounce()
+                chat_id = str(batch.last_event_kwargs.get("chat_id") or "")
+                # 投递前先确认同会话不忙：session 可能被其他入口占用（cron 投递、
+                # key 漂移出的第二条车道），直接投会撞上 gateway 默认 busy=interrupt。
+                if self.adapter._adapter_any_busy(chat_id):
+                    await self.adapter._wait_adapter_idle(
+                        label=f"pre-flush:{self.key}",
+                        chat_id=chat_id,
+                        require_busy=False,
+                    )
                 event = self.adapter._build_merged_event(batch)
                 n_parts = len(batch.parts)
                 self.running = True
+                delivered = False
                 if n_parts > 1:
                     logger.info(
                         "[wechat_golem] flush merged batch session=%s parts=%s",
@@ -1761,13 +1784,31 @@ class _SessionLane:
                 try:
                     # handle_message 立即 return；必须再等 gateway session 真 idle
                     # （_session_tasks 结束且 _active_sessions 释放）才能 flush 下一批。
-                    await self.adapter._deliver_and_wait_idle(event)
+                    delivered = await self.adapter._deliver_and_wait_idle(event)
                 except Exception:
                     logger.exception(
                         "[wechat_golem] handle_message failed session=%s", self.key
                     )
                 finally:
                     self.running = False
+                if not delivered:
+                    # 投递失败（handle_message 本身抛异常）：整批放回队首、
+                    # 退避后重试，不静默丢消息。
+                    self._requeue_front(batch)
+                    self._fail_streak += 1
+                    delay = min(5.0 * self._fail_streak, 60.0)
+                    logger.warning(
+                        "[wechat_golem] deliver failed, retry in %.0fs session=%s parts=%s",
+                        delay,
+                        self.key,
+                        n_parts,
+                    )
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        return
+                    continue
+                self._fail_streak = 0
                 # 循环：handle 期间 enqueue 的积压（debounce=0 时尤其常见）在此一批再送；
                 # 若仍有 debounce 未到期则 while 顶部 return，等 timer 再 arm
         finally:
@@ -2101,7 +2142,36 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
     def _build_merged_event(self, batch: _PendingBatch) -> MessageEvent:
         kw = dict(batch.last_event_kwargs)
-        parts = [p for p in batch.parts if p]
+        part_kwargs = list(batch.part_kwargs)
+        if len(part_kwargs) != len(batch.parts):
+            part_kwargs = [{} for _ in batch.parts]
+        merged_media_refs: List[str] = []
+        parts: List[str] = []
+        for i, (raw_part, pkw) in enumerate(zip(batch.parts, part_kwargs)):
+            if not raw_part:
+                continue
+            if pkw.get("media_ref"):
+                merged_media_refs.append(str(pkw["media_ref"]))
+            # 合并批次只有最后一条的外壳能进事件字段；私聊多条时把前面消息的
+            # media_ref / msg_id / 引用内嵌进对应正文，否则「先发图再补一句话」
+            # 会丢图、丢引用目标。群批次正文自带桥端逐条信封，无需再标。
+            is_last = i == len(batch.parts) - 1
+            if (
+                not is_last
+                and str(pkw.get("hermes_chat_type") or "") != "group"
+                and (pkw.get("media_ref") or pkw.get("msg_id") or pkw.get("quote"))
+            ):
+                extras = []
+                if pkw.get("media_ref"):
+                    extras.append(f"media_ref={pkw['media_ref']}")
+                if pkw.get("emoji_md5"):
+                    extras.append(f"emoji_md5={pkw['emoji_md5']}")
+                if pkw.get("msg_id"):
+                    extras.append(f"msg_id={pkw['msg_id']}")
+                if pkw.get("quote"):
+                    extras.append(f"quote={pkw['quote']}")
+                raw_part = f"{raw_part}\n[本条附加: {' | '.join(extras)}]"
+            parts.append(raw_part)
         if len(parts) == 1:
             body = parts[0]
             merged = False
@@ -2140,6 +2210,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         meta["raw_text"] = body
         meta["merged"] = merged
         meta["merged_parts"] = len(parts)
+        if merged and len(merged_media_refs) > 1:
+            # 事件字段只能带最后一条的 media_ref；全量列表放 metadata 便于排查
+            meta["merged_media_refs"] = merged_media_refs
         meta["approval_reply"] = False
         meta["chat_id"] = chat_id
         # 登记桥 session_key / chat: / user:，handle 后再补 hermes opaque id
@@ -2208,8 +2281,21 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             ),
         )
 
-    def _blocking_approval_busy(self, session_key: str = "") -> bool:
-        """是否有挂起的危险命令审批（精确 key 或 wechat_golem 会话兜底）。"""
+    @staticmethod
+    def _key_matches_chat(key: Any, chat_id: str) -> bool:
+        """busy 判定的会话归属：chat_id 空 = 整 adapter 级（旧行为兜底）。
+
+        gateway 的 session/agent/approval key 都含 chat_id（如
+        agent:main:wechat_golem:group:xxx@chatroom / ...:dm:wxid_x），
+        子串命中即视为同会话——这样一个群的长任务/审批不会阻塞
+        其他群和私聊的 pending flush（跨会话队头阻塞）。
+        """
+        if not chat_id:
+            return True
+        return chat_id in str(key)
+
+    def _blocking_approval_busy(self, session_key: str = "", chat_id: str = "") -> bool:
+        """是否有挂起的危险命令审批（精确 key / 同会话 / wechat_golem 兜底）。"""
         try:
             from tools import approval as approval_mod
             from tools.approval import has_blocking_approval
@@ -2227,7 +2313,11 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 if session_key and session_key in queues and queues.get(session_key):
                     return True
                 for k, q in queues.items():
-                    if q and _PLATFORM_NAME in str(k):
+                    if (
+                        q
+                        and _PLATFORM_NAME in str(k)
+                        and self._key_matches_chat(k, chat_id)
+                    ):
                         return True
                 return False
 
@@ -2238,7 +2328,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         except Exception:
             return False
 
-    def _running_agents_busy(self) -> bool:
+    def _running_agents_busy(self, chat_id: str = "") -> bool:
         """gateway runner 上是否仍有在跑的 agent（比 adapter task 更贴近真实 busy）。
 
         部分路径下 adapter._session_tasks 已清空，但 runner._running_agents
@@ -2254,34 +2344,38 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             for _k, agent in list(agents.items()):
                 if agent is None:
                     continue
-                # 本平台会话；key 漂移时也认 wechat_golem 子串
-                if _PLATFORM_NAME in str(_k):
+                # 本平台会话；key 漂移时也认 wechat_golem 子串；chat_id 命中才算同会话
+                if _PLATFORM_NAME in str(_k) and self._key_matches_chat(_k, chat_id):
                     return True
             return False
         except Exception:
             return False
 
-    def _adapter_any_busy(self) -> bool:
-        """本适配器实例上是否仍有在途处理（不依赖 session key 是否算对）。
+    def _adapter_any_busy(self, chat_id: str = "") -> bool:
+        """本适配器实例上是否仍有在途处理。
 
-        私聊单用户场景下，用「整 adapter」比「猜 key」更稳：
-        key 漂移时只等 primary 会立刻 idle → 补充各自成轮（实测）。
-        额外看 runner._running_agents 与 blocking approval。
+        chat_id 非空时按子串把判定收窄到同会话（task / guard / running_agents /
+        blocking approval 的 key 均含 chat_id），避免一个群的长任务或待审批
+        阻塞其他会话的 pending flush；chat_id 为空退回整 adapter 级（key 漂移兜底）。
         """
         tasks = getattr(self, "_session_tasks", None) or {}
         for _k, task in tasks.items():
-            if task is not None and not task.done():
+            if task is None or task.done():
+                continue
+            if self._key_matches_chat(_k, chat_id):
                 return True
         active = getattr(self, "_active_sessions", None) or {}
         if active:
             # 守卫存在即视为可能 busy；stale 由 gateway heal，我们宁多等
             for _k, _guard in active.items():
+                if not self._key_matches_chat(_k, chat_id):
+                    continue
                 owner = tasks.get(_k)
                 if owner is None or not owner.done():
                     return True
-        if self._running_agents_busy():
+        if self._running_agents_busy(chat_id):
             return True
-        if self._blocking_approval_busy(""):
+        if self._blocking_approval_busy("", chat_id=chat_id):
             return True
         return False
 
@@ -2329,30 +2423,37 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         poll_s: float = 0.05,
         timeout_s: float = 3600.0,
         label: str = "",
+        chat_id: str = "",
+        require_busy: bool = True,
     ) -> None:
-        """等到本适配器上无在途 task / guard / blocking approval。"""
-        # 给 handle_message 一点时间注册 task
-        deadline_arm = time.monotonic() + 3.0
-        saw_busy = False
-        while time.monotonic() < deadline_arm:
-            if self._adapter_any_busy():
-                saw_busy = True
-                break
-            await asyncio.sleep(0.01)
+        """等到无在途 task / guard / blocking approval（chat_id 非空时仅看同会话）。
 
-        if not saw_busy and not self._adapter_any_busy():
-            # 极短任务或未注册 task；记异常便诊断，不刷屏
-            logger.warning(
-                "[wechat_golem] wait idle: never saw busy after handle (%s) label=%s",
-                self._busy_snapshot(),
-                label or "-",
-            )
-            return
+        require_busy=True：投递后调用，先给 handle_message 最多 3s 注册窗口；
+        require_busy=False：投递前预检查，当前不忙就立刻返回。
+        """
+        if require_busy:
+            # 给 handle_message 一点时间注册 task
+            deadline_arm = time.monotonic() + 3.0
+            saw_busy = False
+            while time.monotonic() < deadline_arm:
+                if self._adapter_any_busy(chat_id):
+                    saw_busy = True
+                    break
+                await asyncio.sleep(0.01)
+
+            if not saw_busy and not self._adapter_any_busy(chat_id):
+                # 极短任务或未注册 task；记异常便诊断，不刷屏
+                logger.warning(
+                    "[wechat_golem] wait idle: never saw busy after handle (%s) label=%s",
+                    self._busy_snapshot(),
+                    label or "-",
+                )
+                return
 
         deadline = time.monotonic() + max(1.0, timeout_s)
         last_log = 0.0
         while time.monotonic() < deadline:
-            if not self._adapter_any_busy():
+            if not self._adapter_any_busy(chat_id):
                 logger.debug(
                     "[wechat_golem] session idle label=%s — ready for pending flush",
                     label or "-",
@@ -2386,66 +2487,75 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         del session_key
         await self._wait_adapter_idle(poll_s=poll_s, timeout_s=timeout_s)
 
-    async def _deliver_and_wait_idle(self, event: MessageEvent) -> None:
-        """投递 MessageEvent，并等到本适配器 session 真 idle 再返回。
+    async def _deliver_and_wait_idle(self, event: MessageEvent) -> bool:
+        """投递 MessageEvent，并等到该会话真 idle 再返回。
 
         项 2 关键：await handle_message 不够（fire-and-forget）。
-        等整 adapter busy（task/guard/approval/running_agents），
-        避免单 key 漂移误判 idle。
+        busy 判定按 chat_id 收窄到同会话（命不中时退回整 adapter 兜底）。
+        返回 False = handle_message 本身失败（调用方可整批重试）。
         """
         try:
             await self.handle_message(event)
         except Exception:
             logger.exception("[wechat_golem] handle_message failed")
-            return
+            return False
 
-        session_key = ""
+        chat_id = ""
         try:
-            session_key = self._hermes_session_key(event)
-        except Exception:
-            logger.exception("[wechat_golem] build session_key failed (post-handle)")
-
-        # 把 Hermes session key / 不透明 id 映射到微信 chat_id，供查询 tool 兜底
-        try:
-            chat_id = ""
             if event.source is not None:
                 chat_id = str(getattr(event.source, "chat_id", "") or "").strip()
             if not chat_id and isinstance(event.metadata, dict):
                 chat_id = str(event.metadata.get("chat_id") or "").strip()
-            if chat_id:
-                meta = event.metadata if isinstance(event.metadata, dict) else {}
-                raw = str(
-                    meta.get("raw_text") or getattr(event, "text", "") or ""
-                ).strip()
-                remember_session_chat_id(
-                    session_key,
-                    meta.get("session_key"),
-                    meta.get("session_id"),
-                    f"chat:{chat_id}",
-                    chat_id,
-                    chat_id=chat_id,
-                    text=raw,
-                )
-                # 再从 adapter 内部 task 字典扫一遍可能的 opaque key
-                for bag_name in ("_session_tasks", "_active_sessions"):
-                    bag = getattr(self, bag_name, None) or {}
-                    for k in list(bag.keys()):
-                        remember_session_chat_id(k, chat_id=chat_id, text=raw)
-                logger.debug(
-                    "[wechat_golem] session map chat_id=%s hermes_key=%s map_size=%s",
-                    chat_id,
-                    session_key or "-",
-                    len(_SESSION_CHAT_MAP),
-                )
         except Exception:
-            logger.exception("[wechat_golem] remember_session_chat_id failed")
+            chat_id = ""
 
-        logger.debug(
-            "[wechat_golem] post-handle primary=%s %s",
-            session_key or "-",
-            self._busy_snapshot(),
-        )
-        await self._wait_adapter_idle(label=session_key or "batch")
+        try:
+            session_key = ""
+            try:
+                session_key = self._hermes_session_key(event)
+            except Exception:
+                logger.exception("[wechat_golem] build session_key failed (post-handle)")
+
+            # 把 Hermes session key / 不透明 id 映射到微信 chat_id，供查询 tool 兜底
+            try:
+                if chat_id:
+                    meta = event.metadata if isinstance(event.metadata, dict) else {}
+                    raw = str(
+                        meta.get("raw_text") or getattr(event, "text", "") or ""
+                    ).strip()
+                    remember_session_chat_id(
+                        session_key,
+                        meta.get("session_key"),
+                        meta.get("session_id"),
+                        f"chat:{chat_id}",
+                        chat_id,
+                        chat_id=chat_id,
+                        text=raw,
+                    )
+                    # 再从 adapter 内部 task 字典扫一遍可能的 opaque key
+                    for bag_name in ("_session_tasks", "_active_sessions"):
+                        bag = getattr(self, bag_name, None) or {}
+                        for k in list(bag.keys()):
+                            remember_session_chat_id(k, chat_id=chat_id, text=raw)
+                    logger.debug(
+                        "[wechat_golem] session map chat_id=%s hermes_key=%s map_size=%s",
+                        chat_id,
+                        session_key or "-",
+                        len(_SESSION_CHAT_MAP),
+                    )
+            except Exception:
+                logger.exception("[wechat_golem] remember_session_chat_id failed")
+
+            logger.debug(
+                "[wechat_golem] post-handle primary=%s %s",
+                session_key or "-",
+                self._busy_snapshot(),
+            )
+            await self._wait_adapter_idle(label=session_key or "batch", chat_id=chat_id)
+        except Exception:
+            # 已成功投递；等待阶段的异常不应让调用方误判为投递失败而重投（防重复）
+            logger.exception("[wechat_golem] post-handle wait failed")
+        return True
 
     async def _dispatch_payload(self, payload: str) -> None:
         try:
@@ -2484,7 +2594,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 chat_id,
                 raw_user_text,
             )
-        approval = _is_approval_reply(text)
+        # 审批捷径仅主人有效：审批本来只有主人能答，非主人的整句 yes/是/同意
+        # 不应享受旁路（设计如此，此前两端都漏了校验，群里闲聊会误唤醒 agent）。
+        approval = is_owner and _is_approval_reply(text)
         interrupt_cmd = (not approval) and _is_interrupt_command(raw_user_text)
 
         base_meta = {
@@ -2511,6 +2623,18 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         # ---- 审批捷径：必须原样立即送达，禁止进排队/去抖 ----
         # gateway 在 has_blocking_approval 时用整句匹配 yes/no；
         # 若排在 busy handle_message 后面会永远等不到审批。
+        if approval and not self._blocking_approval_busy(""):
+            # 没有待审批项：这只是主人恰好整句说了 yes/是/同意。
+            # 群消息本不该过门闩（桥为审批词开了旁路），丢弃防误唤醒；
+            # 私聊则降级为普通消息走车道。
+            if hermes_chat_type == "group":
+                logger.info(
+                    "[wechat_golem] 审批词但无待审批项，忽略群消息 chat=%s text=%r",
+                    chat_id,
+                    text[:40],
+                )
+                return
+            approval = False
         if approval:
             source = self.build_source(
                 chat_id=chat_id,

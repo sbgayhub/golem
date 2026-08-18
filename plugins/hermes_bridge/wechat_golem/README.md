@@ -122,11 +122,15 @@ Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未
 ## 入站交付（单飞，项 2 已验收）
 
 Hermes `handle_message` 是 fire-and-forget。适配器对同会话串行 **整轮 agent**
-（等整 adapter busy 结束：task / guard / blocking approval / running_agents）：
+（busy 判定按 chat_id 收窄到同会话：task / guard / blocking approval /
+running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回整 adapter 兜底，
+一个群的长任务/审批不再阻塞其他会话）：
 
 - **私聊默认不去抖**（`DEBOUNCE_MS=0`）。
-- **单飞 + pending**：busy 时后续只入队；**idle 后**合并一批再送（防 ⚡）。
-- 审批 `yes/no/…` 旁路立即，不进排队。
+- **单飞 + pending**：busy 时后续只入队；**idle 后**合并一批再送（防 ⚡）；投递前也先查同会话 busy（防 cron 等跨入口撞上 busy=interrupt）。
+- 合并批把前面消息的 `media_ref`/`msg_id`/引用内嵌进对应正文（防「先发图再补话」丢图）；`metadata.merged_media_refs` 带全量列表。
+- 审批 `yes/no/…`：**仅主人**且确有待审批项才旁路立即；否则群内忽略、私聊转普通消息。
+- 投递失败（handle_message 抛异常）整批回队、退避重试（5s 起、上限 60s），不丢消息。
 - 出站：字面 `\n` → 真换行。
 - 细节与验收：`t-doc/hermes-bridge-notes.md` §十。
 

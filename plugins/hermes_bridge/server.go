@@ -25,6 +25,8 @@ type sseClient struct {
 type sseHub struct {
 	mu      sync.Mutex
 	clients map[*sseClient]struct{}
+	// dropped 累计因客户端缓冲满而丢弃的事件数，供 /status 排查「偶发没反应」
+	dropped atomic.Int64
 }
 
 func newSSEHub() *sseHub {
@@ -66,10 +68,13 @@ func (h *sseHub) broadcast(data []byte) {
 		select {
 		case c.ch <- data:
 		default:
-			slog.Warn("[hermes_bridge] SSE 客户端缓冲满，丢弃一条事件")
+			h.dropped.Add(1)
+			slog.Warn("[hermes_bridge] SSE 客户端缓冲满，丢弃一条事件", "dropped_total", h.dropped.Load())
 		}
 	}
 }
+
+func (h *sseHub) droppedCount() int64 { return h.dropped.Load() }
 
 // ---- HTTP 生命周期 ----
 
@@ -182,6 +187,7 @@ func (p *BridgePlugin) handleStatusAPI(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":      "ok",
 		"subscribers": p.hub.subscriberCount(),
+		"sse_dropped": p.hub.droppedCount(),
 		"targets":     len(cfg.Targets),
 		"listen":      cfg.Listen,
 	})

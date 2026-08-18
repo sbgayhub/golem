@@ -124,8 +124,9 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		chatName = target.Name
 	}
 
-	// 审批捷径：立刻透传，不进群去抖（否则卡 yes/no）
-	if isApprovalReplyText(in.Text) {
+	// 审批捷径：立刻透传，不进群去抖（否则卡 yes/no）。
+	// 仅主人：审批只有主人能答，否则群里任何人整句 no/是/同意 都会绕过门闩误唤醒 agent。
+	if in.SpeakerIsOwner && isApprovalReplyText(in.Text) {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃审批捷径", "session", in.SessionKey)
 			ct := "private"

@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#0a0e13" />
+  <meta name="theme-color" content="#f5f9f6" />
+  <meta name="color-scheme" content="light" />
   <title>hermes_bridge · 本机管理台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235b9dff'/%3E%3Ctext x='16' y='22' font-size='16' font-weight='800' text-anchor='middle' fill='white' font-family='system-ui'%3EH%3C/text%3E%3C/svg%3E" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b8f60'/%3E%3Ccircle cx='16' cy='13' r='4.2' fill='%23e8f6ec'/%3E%3Cpath d='M10 22c1.8-3.4 10.2-3.4 12 0' stroke='%23e8f6ec' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- 登录门禁 -->
   <div id="login-screen" class="login-screen hidden">
     <div class="login-card">
       <div class="login-brand">
-        <div class="logo-mark">H</div>
+        <svg class="logo-mark" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
         <div>
           <h1>hermes_bridge</h1>
           <p>本机管理台 · 仅 127.0.0.1</p>
@@ -34,27 +34,28 @@
   <div id="app-shell" class="app-shell hidden">
     <aside class="sidebar">
       <div class="sidebar-brand">
-        <div class="logo-mark sm">H</div>
+        <svg class="logo-mark sm" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M15 32V16h5.5l7 9.5V16H33v16h-5.5l-7-9.5V32z" fill="#fff"/></svg>
         <div>
           <div class="name">hermes_bridge</div>
           <div class="ver" id="ver">—</div>
         </div>
       </div>
-      <nav class="nav" id="nav">
-        <button type="button" data-tab="overview" class="active" title="桥运行态与红灯"><span class="nav-ico">◈</span>总览</button>
-        <button type="button" data-tab="targets" title="会话路由 · 不必人在群里"><span class="nav-ico">◎</span>白名单</button>
-        <button type="button" data-tab="gate" title="触发策略 · 热更新"><span class="nav-ico">▤</span>门闩</button>
+      <nav class="nav" id="nav" aria-label="管理台导航">
+        <button type="button" data-tab="overview" class="active" title="桥运行态与红灯"><span class="nav-ico" aria-hidden="true">◈</span>总览</button>
+        <button type="button" data-tab="targets" title="会话路由"><span class="nav-ico" aria-hidden="true">◎</span>白名单</button>
+        <button type="button" data-tab="gate" title="触发策略 · 热更新"><span class="nav-ico" aria-hidden="true">▤</span>门闩</button>
         <div class="nav-label">观察</div>
-        <button type="button" data-tab="inbound" title="门闩旁路 · 非业务 SSE"><span class="nav-ico">◉</span>入站</button>
-        <button type="button" data-tab="sessions" title="桥本地会话 · 门闩/去抖"><span class="nav-ico">☰</span>会话</button>
+        <button type="button" data-tab="inbound" title="门闩旁路 · 非业务 SSE"><span class="nav-ico" aria-hidden="true">◉</span>入站</button>
+        <button type="button" data-tab="sessions" title="桥本地会话 · 门闩/去抖"><span class="nav-ico" aria-hidden="true">☰</span>会话</button>
         <div class="nav-label">Hermes</div>
-        <button type="button" data-tab="hermes" title="只读 ops 反代"><span class="nav-ico">⬡</span>运维</button>
-        <button type="button" data-tab="stickers" title="先选情绪 · 再加载 · 可试发"><span class="nav-ico">☺</span>表情</button>
-        <button type="button" data-tab="profiles" title="群友偏好 · 短词"><span class="nav-ico">👤</span>档案</button>
+        <button type="button" data-tab="hermes" title="只读 ops 反代"><span class="nav-ico" aria-hidden="true">⬡</span>运维</button>
+        <button type="button" data-tab="stickers" title="先选情绪 · 再加载 · 可试发"><span class="nav-ico" aria-hidden="true">☺</span>表情</button>
+        <button type="button" data-tab="profiles" title="群友偏好 · 短词"><span class="nav-ico" aria-hidden="true">👤</span>档案</button>
         <div class="nav-label">工具</div>
-        <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico">⚡</span>诊断</button>
+        <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico" aria-hidden="true">⚡</span>诊断</button>
       </nav>
       <div class="sidebar-foot">
+        <button type="button" id="btnCommand" class="ghost btn-block" title="命令面板 · Ctrl/⌘ K">命令面板</button>
         <button type="button" id="btnLogout" class="ghost btn-block">退出登录</button>
       </div>
     </aside>
@@ -71,11 +72,16 @@
       <main id="main">
         <section id="panel-overview" class="panel active" data-title="总览" data-sub="桥运行态与红灯">
           <div id="alerts" class="alerts"></div>
-          <div class="cards" id="overview-cards"></div>
+          <div class="section-head"><h3>链路</h3></div>
+          <div class="cards" id="overview-link"></div>
+          <div class="section-head"><h3>容量</h3></div>
+          <div class="cards" id="overview-capacity"></div>
+          <div class="section-head"><h3>身份</h3></div>
+          <div class="cards" id="overview-identity"></div>
           <p class="gate-line" id="gate-summary"></p>
         </section>
 
-        <section id="panel-targets" class="panel" data-title="白名单" data-sub="会话路由 · 不必人在群里">
+        <section id="panel-targets" class="panel" data-title="白名单" data-sub="会话路由">
           <div class="card-block">
             <div class="toolbar">
               <input id="target-id" placeholder="wxid 或 xxx@chatroom" spellcheck="false" />
@@ -98,35 +104,34 @@
         <section id="panel-gate" class="panel" data-title="门闩" data-sub="触发策略 · 热更新">
           <p id="gate-preview" class="lead"></p>
           <form id="gate-form" class="form form-compact">
-            <label>点名 trigger_names（逗号）
-              <input id="f-triggers" spellcheck="false" />
+            <label><span class="field-label">trigger_names <span class="field-hint">点名触发词 · 逗号分隔</span></span>
+              <input id="f-triggers" spellcheck="false" placeholder="如：火, 小助手" />
             </label>
-            <label class="check"><input type="checkbox" id="f-pushall" /> 关闭门闩 group_push_all（群每条都推）</label>
-            <label>去抖秒数<input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
-            <label>冒泡 0~1<input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
-            <label>冒泡冷却分<input type="number" id="f-bubble-cd" min="0" /></label>
-            <label>上下文条数<input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
-            <label>斗图第 N 条<input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
-            <label>斗图窗口秒<input type="number" id="f-burst-win" min="1" /></label>
-            <label>斗图冷却分<input type="number" id="f-burst-cd" min="0" /></label>
-            <label>文本上限字<input type="number" id="f-text" min="1" /></label>
-            <label>出站条/分<input type="number" id="f-rate" min="1" /></label>
+            <label class="check"><input type="checkbox" id="f-pushall" /> group_push_all（关闭门闩 · 群每条都推）</label>
+            <label><span class="field-label">debounce_seconds <span class="field-hint">去抖秒数</span></span><input type="number" id="f-debounce" min="0" title="同一会话触发后 N 秒内的后续消息合并" /></label>
+            <label><span class="field-label">bubble_rate <span class="field-hint">冒泡概率 0~1</span></span><input type="number" id="f-bubble" min="0" max="1" step="0.01" title="未被 @ 时按概率冒泡" /></label>
+            <label><span class="field-label">bubble_cooldown <span class="field-hint">冒泡冷却（分钟）</span></span><input type="number" id="f-bubble-cd" min="0" /></label>
+            <label><span class="field-label">max_context <span class="field-hint">上下文条数上限</span></span><input type="number" id="f-ctx" min="1" title="推给 Hermes 时携带的上下文消息上限" /></label>
+            <label><span class="field-label">emoji_burst_count <span class="field-hint">斗图触发阈值（0=关）</span></span><input type="number" id="f-burst" min="0" title="窗口内第 N 条触发斗图（0=关闭）" /></label>
+            <label><span class="field-label">emoji_burst_window <span class="field-hint">斗图窗口（秒）</span></span><input type="number" id="f-burst-win" min="1" /></label>
+            <label><span class="field-label">emoji_burst_cd <span class="field-hint">斗图冷却（分钟）</span></span><input type="number" id="f-burst-cd" min="0" /></label>
+            <label><span class="field-label">max_text_len <span class="field-hint">文本上限字数</span></span><input type="number" id="f-text" min="1" /></label>
+            <label><span class="field-label">send_rate <span class="field-hint">出站限流（条/分）</span></span><input type="number" id="f-rate" min="1" /></label>
             <div class="form-actions">
               <button type="submit" class="primary" id="btnGateSave">保存</button>
             </div>
           </form>
         </section>
 
-        <section id="panel-inbound" class="panel" data-title="入站" data-sub="门闩旁路 · 非业务 SSE">
-          <div class="toolbar sticky-tools">
+        <section id="panel-inbound" class="panel panel-fill" data-title="入站" data-sub="门闩旁路 · 非业务 SSE">
+          <div class="toolbar">
             <span id="trace-status" class="pill">未连接</span>
             <button type="button" id="btnTraceLive" class="primary">实时</button>
             <button type="button" id="btnTraceStop" class="ghost">断开</button>
             <button type="button" id="btnTraceRefresh" class="ghost">拉取</button>
             <button type="button" id="btnTraceClear" class="ghost">清空</button>
           </div>
-          <details class="help-box">
-            <summary>标记说明</summary>
+          <div class="help-box legend-always">
             <div class="legend-grid">
               <div><code class="k context_only">context_only</code><span>只记不推</span></div>
               <div><code class="k scheduled">scheduled</code><span>去抖中</span></div>
@@ -134,7 +139,7 @@
               <div><code class="k dropped">dropped</code><span>丢弃</span></div>
               <div><code class="k cancelled">cancelled</code><span>打断作废</span></div>
             </div>
-          </details>
+          </div>
           <div id="trace-list" class="trace-list"></div>
         </section>
 
@@ -142,30 +147,42 @@
           <div id="session-list" class="list"></div>
         </section>
 
-        <section id="panel-hermes" class="panel" data-title="Hermes 运维" data-sub="只读 ops 反代">
-          <div class="toolbar sticky-tools">
+        <section id="panel-hermes" class="panel panel-fill" data-title="Hermes 运维" data-sub="只读 ops 反代">
+          <div class="toolbar">
             <span id="hermes-ops-status" class="pill">—</span>
           </div>
           <div id="hermes-alerts" class="alerts"></div>
           <div class="cards" id="hermes-cards"></div>
-          <div class="section-head"><h3>工具注册</h3><span id="hermes-tools-count" class="muted"></span></div>
-          <div id="hermes-tools" class="list"></div>
-          <div class="section-head"><h3>Sessions</h3><span id="hermes-sessions-count" class="muted"></span></div>
-          <div id="hermes-sessions" class="list"></div>
-          <div class="section-head"><h3>日志</h3></div>
-          <div class="toolbar">
-            <select id="hermes-log-file">
-              <option value="agent">agent.log</option>
-              <option value="gateway">gateway.log</option>
-              <option value="errors">errors.log</option>
-            </select>
-            <input id="hermes-log-grep" placeholder="过滤子串" />
-            <button type="button" id="btnHermesLog" class="ghost">拉取</button>
+          <div class="hermes-tabs" role="tablist">
+            <button type="button" class="hermes-tab active" data-htab="tools" role="tab" aria-selected="true">工具注册 <span id="hermes-tools-count" class="muted"></span></button>
+            <button type="button" class="hermes-tab" data-htab="sessions" role="tab" aria-selected="false">Sessions <span id="hermes-sessions-count" class="muted"></span></button>
+            <button type="button" class="hermes-tab" data-htab="logs" role="tab" aria-selected="false">日志</button>
           </div>
-          <pre id="hermes-log" class="code-block">—</pre>
+          <div class="hermes-tab-body">
+            <div id="htab-tools" class="hermes-pane active" role="tabpanel">
+              <div id="hermes-tools" class="list"></div>
+            </div>
+            <div id="htab-sessions" class="hermes-pane" role="tabpanel">
+              <div id="hermes-sessions" class="list"></div>
+            </div>
+            <div id="htab-logs" class="hermes-pane" role="tabpanel">
+              <div class="log-toolbar">
+                <select id="hermes-log-file">
+                  <option value="agent">agent.log</option>
+                  <option value="gateway">gateway.log</option>
+                  <option value="errors">errors.log</option>
+                </select>
+                <input id="hermes-log-grep" placeholder="过滤子串 / 正则" />
+                <button type="button" id="btnHermesLog" class="primary">拉取</button>
+                <label class="log-auto-scroll"><input type="checkbox" id="hermes-log-auto" checked /> 自动滚底</label>
+                <span id="hermes-log-info" class="log-info"></span>
+              </div>
+              <pre id="hermes-log" class="code-block">—</pre>
+            </div>
+          </div>
         </section>
 
-        <section id="panel-stickers" class="panel" data-title="表情" data-sub="先选情绪 · 再加载 · 可试发">
+        <section id="panel-stickers" class="panel panel-fill" data-title="表情" data-sub="先选情绪 · 再加载 · 可试发">
           <div class="sticker-layout">
             <aside class="mood-pane">
               <div class="mood-pane-head">
@@ -188,7 +205,7 @@
               </div>
               <div class="toolbar">
                 <input id="sticker-q" placeholder="在当前筛选下搜索描述/tag…" />
-                <select id="sticker-page-size" style="width:80px">
+                <select id="sticker-page-size">
                   <option value="20">20/页</option>
                   <option value="40">40/页</option>
                   <option value="60">60/页</option>
@@ -199,48 +216,53 @@
               <div id="sticker-filter-hint" class="filter-hint">先在左侧选择情绪/题材，或在下方输入关键词后加载。</div>
               <div id="sticker-list" class="sticker-grid"></div>
               <div id="sticker-pager" class="pager hidden"></div>
-              <div id="sticker-detail" class="sticker-detail-floating hidden"></div>
             </div>
           </div>
         </section>
 
-        <section id="panel-profiles" class="panel" data-title="档案" data-sub="群友偏好 · 短词">
-          <div class="toolbar">
-            <input id="profile-q" placeholder="搜索…" />
-            <button type="button" id="btnProfiles" class="primary">刷新</button>
-          </div>
-          <div id="profile-list" class="list"></div>
-          <div class="section-head"><h3>编辑</h3></div>
-          <form id="profile-form" class="form">
-            <label>wxid<input id="pf-wxid" required spellcheck="false" /></label>
-            <label>display_name<input id="pf-name" /></label>
-            <label>personality<input id="pf-personality" /></label>
-            <label>preferences<input id="pf-prefs" placeholder="逗号分隔" /></label>
-            <label>notes<input id="pf-notes" /></label>
-            <label>aliases<input id="pf-aliases" placeholder="逗号分隔" /></label>
-            <div class="form-actions">
-              <button type="submit" class="primary">保存</button>
-              <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+        <section id="panel-profiles" class="panel panel-fill" data-title="档案" data-sub="群友偏好 · 短词">
+          <div class="split-layout">
+            <div class="split-list">
+              <div class="toolbar">
+                <input id="profile-q" placeholder="搜索…" />
+                <button type="button" id="btnProfiles" class="primary">刷新</button>
+              </div>
+              <div id="profile-list" class="list"></div>
             </div>
-          </form>
-          <pre id="profile-result" class="code-block" style="margin-top:12px">—</pre>
+            <div class="split-detail">
+              <div class="section-head"><h3>编辑</h3></div>
+              <form id="profile-form" class="form">
+                <label><span class="field-label">wxid <span class="field-hint">微信唯一标识</span></span><input id="pf-wxid" required spellcheck="false" /></label>
+                <label><span class="field-label">display_name <span class="field-hint">群内显示名</span></span><input id="pf-name" /></label>
+                <label><span class="field-label">personality <span class="field-hint">性格特征</span></span><input id="pf-personality" /></label>
+                <label><span class="field-label">preferences <span class="field-hint">偏好 · 逗号分隔</span></span><input id="pf-prefs" placeholder="如：技术, 游戏, 美食" /></label>
+                <label><span class="field-label">notes <span class="field-hint">备注</span></span><input id="pf-notes" /></label>
+                <label><span class="field-label">aliases <span class="field-hint">别名 · 逗号分隔</span></span><input id="pf-aliases" placeholder="其他称呼" /></label>
+                <div class="form-actions">
+                  <button type="submit" class="primary">保存</button>
+                  <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+                </div>
+              </form>
+              <pre id="profile-result" class="code-block" style="margin-top:12px">—</pre>
+            </div>
+          </div>
         </section>
 
         <section id="panel-diagnose" class="panel" data-title="诊断" data-sub="媒体试发">
           <form id="diag-form" class="form">
-            <label>kind
+            <label><span class="field-label">kind <span class="field-hint">媒体类型</span></span>
               <select id="diag-kind">
-                <option value="image">image</option>
-                <option value="video">video</option>
-                <option value="emoji">emoji</option>
+                <option value="image">image 图片</option>
+                <option value="video">video 视频</option>
+                <option value="emoji">emoji 表情</option>
               </select>
             </label>
-            <label>chat_id
-              <input id="diag-chat" list="diag-chats" required spellcheck="false" />
+            <label><span class="field-label">chat_id <span class="field-hint">目标会话</span></span>
+              <input id="diag-chat" list="diag-chats" required spellcheck="false" placeholder="wxid 或 xxx@chatroom" />
               <datalist id="diag-chats"></datalist>
             </label>
-            <label>url<input id="diag-url" placeholder="https://…" spellcheck="false" /></label>
-            <label>emoji md5<input id="diag-md5" spellcheck="false" /></label>
+            <label><span class="field-label">url <span class="field-hint">媒体链接</span></span><input id="diag-url" placeholder="https://…" spellcheck="false" /></label>
+            <label><span class="field-label">emoji md5 <span class="field-hint">表情指纹</span></span><input id="diag-md5" spellcheck="false" placeholder="32 位 hex" /></label>
             <div class="form-actions">
               <button type="submit" class="primary">试发</button>
             </div>
@@ -250,6 +272,38 @@
       </main>
     </div>
   </div>
+
+  <div id="cmdk" class="cmdk hidden" hidden>
+    <div class="cmdk-card" role="dialog" aria-modal="true" aria-labelledby="cmdk-title">
+      <div class="cmdk-head">
+        <h2 id="cmdk-title">命令面板</h2>
+        <span class="muted">Ctrl / ⌘ K · Esc 关闭</span>
+      </div>
+      <input id="cmdk-q" placeholder="跳转到页面…" spellcheck="false" />
+      <div id="cmdk-list" class="cmdk-list"></div>
+    </div>
+  </div>
+
+  <div id="confirm" class="confirm hidden" hidden>
+    <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">确认</h2>
+      <p id="confirm-msg"></p>
+      <div class="form-actions">
+        <button type="button" id="confirm-cancel" class="ghost">取消</button>
+        <button type="button" id="confirm-ok" class="primary">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <aside id="sticker-drawer" class="drawer hidden" hidden>
+    <div class="drawer-card">
+      <div class="drawer-head">
+        <h2>表情详情</h2>
+        <button type="button" id="btnDrawerClose" class="close-x" title="关闭详情" aria-label="关闭">关闭</button>
+      </div>
+      <div id="sticker-detail" class="drawer-body"></div>
+    </div>
+  </aside>
 
   <div id="toast" class="toast hidden" role="status"></div>
   <script src="app.js"></script>

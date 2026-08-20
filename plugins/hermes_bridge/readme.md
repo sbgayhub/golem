@@ -28,7 +28,7 @@ Ubuntu VM: Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 - **群门闩**：闲聊只记本地滚动上下文；`@` / 引用机器人 / `trigger_names` / 冒泡 才去抖合并后一批推送；已推送消息标水位，不重复推。去抖为 trailing：同会话只一个 timer，再次触发会重置满额倒计时（无最长窗口封顶）。
 - **斗图门闩**（v0.3.2+）：滑动窗口内第 N 条群表情（默认 30s 内第 3 条）也触发一批推送，`trigger_reason=emoji_burst`、addressing 保持 none（同冒泡语义，只解释送达原因）；同会话默认 5 分钟最多一次，`emoji_burst_count = 0` 关闭。这是 agent 参与斗图与自动收藏的主要入口。
 - **群聊身份信封**：每条批次消息都附桥生成的 `verified`、发送者、`sender_role`、`addressing`、`trigger_reason`；`trigger_names` 命中时为 `addressing=self` / `trigger_reason=trigger_name`。真 @/引用别人保持 `other_participants`，即使因冒泡送达也不得被当成发给本机器人；详见部署笔记 §五。
-- **控制捷径**（立即 SSE、不去抖、不包群上下文）：审批 `yes/no/...`；整句 **`打断`**（不限主人）。打断时还**作废**该会话当前未推送的去抖批次（停 timer + 标水位），避免 ⚡ 后又被尸体批次叫醒。整句 **`新开会话`/`新对话`**（仅主人，v0.3.3+）：同样作废未推批后透传 `trigger_reason=session_reset`，适配器进程内 `reset_session` 清空该会话 gateway 历史并回执——聊天里就地重置，**长期记忆与群成员档案不受影响**。整句 **`归档`/`归档群友`/`记群友`**（仅主人）：旁路门闩透传 `member_archive`，适配器扩成批量 `wechat_member_profile_upsert` 指令（**不清 session**；见下方「群成员偏好档案」）。
+- **控制捷径**（立即 SSE、不去抖、不包群上下文）：审批 `yes/no/...`（**仅主人**；适配器还会核对确有待审批项，群内无待审批则忽略、私聊转普通消息，防止闲聊「同意/no」误唤醒 agent）；整句 **`打断`**（不限主人）。打断时还**作废**该会话当前未推送的去抖批次（停 timer + 标水位），避免 ⚡ 后又被尸体批次叫醒。整句 **`新开会话`/`新对话`**（仅主人，v0.3.3+）：同样作废未推批后透传 `trigger_reason=session_reset`，适配器进程内 `reset_session` 清空该会话 gateway 历史并回执——聊天里就地重置，**长期记忆与群成员档案不受影响**。整句 **`归档`/`归档群友`/`记群友`**（仅主人）：旁路门闩透传 `member_archive`，适配器扩成批量 `wechat_member_profile_upsert` 指令（**不清 session**；见下方「群成员偏好档案」）。
 - **私聊**：桥逐条 SSE；**适配器**侧同会话单飞 + pending（防 ⚡ Interrupt，见 `t-doc/wechat_golem`）。
 - **出站 AppMsg 卡片**（音乐等）：适配器拼好 `<appmsg>` XML + `sub_type` 后 POST `/send_app`，桥走 `message.Send`(TypeAppMusic) 经 host `SendApp` 发送；复用媒体防叠发策略（超时不重开 Send）。业务（搜歌、选 AppID 来源显示）全在 Hermes 侧，桥只补数据通道。
 - **出站聊天记录卡片**（对齐 `meme list` / `/pm list`，可嵌图）：POST `/send_record` 传 `items`（文本 `{name,content}` 与图片 `{type:image,url|media_ref}` 可混排；或 `lines`/`records` 纯文本），桥拼 AppMsg `type=19`（图片 datatype=2，真机字段见 `t-doc/wechat-msg-formats.md`）后 `sendAppMessage`；tool `wechat_send_record`。图片勿传 data_b64。
@@ -78,7 +78,7 @@ emoji_burst_cooldown_minutes = 5
 - 登录：页面填 `admin_token`（存浏览器 localStorage；请求头 `Authorization: Bearer …` 或 `X-Admin-Token`）
 - 能力：
   - 总览（SSE 订阅数/红灯项）
-  - 白名单启停（可搜联系人，**不必人在群里**）
+  - 白名单启停（可搜联系人）
   - 门闩热更新（即时生效并 `saveConfig`）
   - **入站旁路**（`/admin/inbound/recent` + SSE stream：pushed/dropped/context_only/scheduled/cancelled）
   - **本地 session 态**（`/admin/sessions`：去抖 pending、未推缓冲、冒泡/斗图冷却；非 Hermes gateway session）
@@ -89,6 +89,7 @@ emoji_burst_cooldown_minutes = 5
   `cd plugins && task build:hermes_bridge` 再重载 host（浏览器里是 exe 内嵌版，不是磁盘源码）。验证用真实 `admin_token`
   （运行目录 `config.toml`）：浏览器开 `http://127.0.0.1:8644/ui/`，或 `curl -H "Authorization: Bearer $TOKEN" …/admin/overview`。
   改前端前先读 `admin*.go` 与 `hermes_ops/hermes_ops.py` 确认 API 契约；dev mock `_mock.py` 已废弃删除。
+  v0.12 视觉为绿色小清新（浅底、鼠尾草绿强调）；总览按链路/容量/身份分组；`Ctrl/⌘ K` 打开命令面板，字母键可跳页（输入框内不触发）。
 - **不要**把 `admin_listen` 暴露到与业务口相同的 `0.0.0.0`；远程请用 Tailscale 等，且 token 与 bot token 分离
 
 > 已有 `plugins/config.toml` 时：host `SetConfig` 用 `toml.Unmarshal` 注入，**缺字段会保留** `main()` 默认值  

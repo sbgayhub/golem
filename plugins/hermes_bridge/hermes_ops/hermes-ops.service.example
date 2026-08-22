@@ -1,5 +1,5 @@
 # hermes_ops 用户级 systemd 单元示例
-# 安装（VM）：
+# 安装（Hermes 所在主机）：
 #   mkdir -p ~/.config/systemd/user
 #   cp hermes-ops.service.example ~/.config/systemd/user/hermes-ops.service
 #   注意：.py 脚本放 ~/.hermes/ops/，不要放进 ~/.config/systemd/user/
@@ -7,18 +7,34 @@
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now hermes-ops.service
 #   curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/health
+#
+# 非 systemd 环境（容器 / macOS / WSL1 / supervisor）：本文件用不上。
+# 直接跑 python3 hermes_ops.py 即可；ops 会自动探测到没有 systemd 并跳过服务状态检查
+# （也可显式设 HERMES_OPS_SERVICE_MANAGER=none 关掉探测）。
 
 [Unit]
-Description=Hermes ops read-only API (wechat profile)
+Description=Hermes ops read-only API
 After=network.target
 
 [Service]
 Type=simple
 WorkingDirectory=%h/.hermes/ops
-Environment=HERMES_HOME=%h/.hermes/profiles/wechat
-Environment=HERMES_OPS_LISTEN=0.0.0.0:8650
+# profile 名一处定，派生 HERMES_HOME 默认值、gateway 单元名与 CLI -p 参数
+Environment=HERMES_PROFILE=wechat
+# 必填：与桥 config.toml 的 hermes_ops_token 一致。
+# 留空且监听地址非回环时，ops 会拒绝启动（避免 LAN 内无鉴权读写）。
 Environment=HERMES_OPS_TOKEN=请改成与桥 hermes_ops_token 一致
-Environment=HERMES_GATEWAY_UNIT=hermes-gateway-wechat.service
+# 默认 127.0.0.1:8650。桥在另一台机器时才放开，且必须同时设上面的 token。
+# 更稳妥的做法是保持回环 + SSH 隧道：ssh -L 8650:127.0.0.1:8650 <host>
+Environment=HERMES_OPS_LISTEN=127.0.0.1:8650
+# 下面几项一般不用设，默认都从 HERMES_PROFILE / HERMES_HOME 派生：
+#Environment=HERMES_HOME=%h/.hermes/profiles/wechat
+#Environment=HERMES_GATEWAY_UNIT=hermes-gateway-wechat.service
+#Environment=HERMES_OPS_SERVICE_MANAGER=systemd-user
+#Environment=HERMES_OPS_LOG_DIR=%h/.hermes/profiles/wechat/logs
+#Environment=HERMES_OPS_STATE_DB=%h/.hermes/profiles/wechat/state.db
+#Environment=WECHAT_GOLEM_STICKER_DIR=%h/.hermes/profiles/wechat/wechat_stickers
+#Environment=WECHAT_GOLEM_MEMBER_PROFILE_DIR=%h/.hermes/profiles/wechat/wechat_member_profiles
 ExecStart=/usr/bin/python3 %h/.hermes/ops/hermes_ops.py
 Restart=on-failure
 RestartSec=3

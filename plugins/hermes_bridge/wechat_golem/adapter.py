@@ -24,7 +24,7 @@ WECHAT_GOLEM_ALLOW_ALL_USERS / WECHAT_GOLEM_ALLOWED_USERS。
   - 发表情：tool wechat_send_emoji → 桥 POST /send_emoji（TypeEmoji；网图自动压 ~500KB，收藏重发用 path+raw 保动图；勿用 send_image 冒充表情）
   - 聊天记录卡片：tool wechat_send_record → 桥 POST /send_record（AppMsg type=19；文本+可选图片 url/media_ref，勿 data_b64；对齐 meme list / /pm list）
   - 引用回复：tool wechat_send_quote → 桥 POST /send_quote（AppMsg type=57；一期文本；svrid=入站 msg_id）
-  - 表情收藏库：wechat_sticker_save / list / send / delete（moods=情绪 与 tags=题材标记分离；目录 $WECHAT_GOLEM_STICKER_DIR）
+  - 表情收藏库：wechat_sticker_save / list / send / delete（moods=情绪 与 tags=题材标记分离；目录 $WECHAT_GOLEM_STICKER_DIR，默认 $HERMES_HOME/wechat_stickers）
   - 群成员偏好档案：wechat_member_profile_{get,upsert,list,delete}
     （$HERMES_HOME/wechat_member_profiles/<wxid>.json；跨 session 持久；
     入站自动注入发言人已知喜好/性格。官方 USER.md 只适合主人一人，装不下群成员）
@@ -50,6 +50,7 @@ import logging
 import os
 import random
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -112,11 +113,52 @@ _MENTION_SPACER = "\u2005"
 _MEDIA_MARKER_RE = re.compile(r"(?i)\bMEDIA:\s*(https?://[^\s<>\"']+)")
 _VIDEO_MARKER_RE = re.compile(r"(?i)\bVIDEO:\s*(https?://[^\s<>\"']+)")
 
+# ---- 部署路径解析 ----
+# 所有落盘目录都从 $HERMES_HOME 派生，这样多 profile 部署天然隔离，
+# 迁移/备份只需搬 profile 目录。各目录仍可用自己的 env 单独覆盖。
+
+
+def _hermes_home() -> str:
+    """profile 根目录：hermes_constants > HERMES_HOME > ~/.hermes。取不到返回空串。"""
+    try:
+        from hermes_constants import get_hermes_home  # type: ignore
+
+        home = str(get_hermes_home() or "").strip()
+        if home:
+            return os.path.expanduser(home)
+    except Exception:
+        pass
+    env_home = (os.environ.get("HERMES_HOME") or "").strip()
+    if env_home:
+        return os.path.expanduser(env_home)
+    return os.path.expanduser("~/.hermes")
+
+
 # 入站媒体（桥 SSE 的 media_data_b64）落盘目录与保留时长。
 # base64 不能整段塞进事件正文（几万字符会撑爆上下文），落盘后正文只给路径，
 # agent 用 vision / 文件工具按路径取图。
-_INBOUND_MEDIA_DIR = "/tmp/wechat_golem_media"
+#
+# 目录来源：WECHAT_GOLEM_MEDIA_DIR > $HERMES_HOME/wechat_inbound_media > 系统临时目录。
+# 之前写死 "/tmp/wechat_golem_media"：Windows 上会落到当前盘根（且 CWD 变了还会漂），
+# systemd 的 PrivateTmp=yes 下 ops 与 gateway 看到的还是两个不同 /tmp。
+_INBOUND_MEDIA_DIR_ENV = "WECHAT_GOLEM_MEDIA_DIR"
 _INBOUND_MEDIA_TTL_S = 24 * 3600.0
+
+# media_ref 形态：桥 v0.13+ 为 media_<运行前缀>_<序号>，旧桥为 media_<序号>。
+# 运行前缀让桥重启后不再重号——否则适配器这侧按 ref 名做的磁盘缓存会命中上一轮
+# 的旧文件，agent 拿到上次会话里的另一张图且无任何报错。两种形态都要能解析。
+_MEDIA_REF_PAT = r"media_(?:[0-9a-f]{4,}_)?\d+"
+
+
+def _inbound_media_dir() -> str:
+    """入站媒体落盘目录：env 优先，其次 profile 内，最后系统临时目录。"""
+    override = _env(_INBOUND_MEDIA_DIR_ENV)
+    if override:
+        return os.path.expanduser(override)
+    home = _hermes_home()
+    if home:
+        return os.path.join(home, "wechat_inbound_media")
+    return os.path.join(tempfile.gettempdir(), "wechat_golem_media")
 
 
 def _sniff_media_ext(raw: bytes) -> tuple:
@@ -137,7 +179,7 @@ def _sniff_media_ext(raw: bytes) -> tuple:
 
 
 def _save_inbound_media(b64: str) -> str:
-    """（老桥兼容）入站媒体 base64 落盘为 VM 本地临时文件，返回给事件正文的说明行。
+    """（老桥兼容）入站媒体 base64 落盘为本机临时文件，返回给事件正文的说明行。
 
     新桥只推 media_ref，走 fetch_media 按需取；此函数保留给仍推 media_data_b64 的旧桥。
     """
@@ -151,7 +193,7 @@ def _save_inbound_media(b64: str) -> str:
     try:
         _prune_inbound_media_dir()
         path = os.path.join(
-            _INBOUND_MEDIA_DIR, f"{int(time.time() * 1000)}_{len(raw)}{ext}"
+            _inbound_media_dir(), f"{int(time.time() * 1000)}_{len(raw)}{ext}"
         )
         with open(path, "wb") as f:
             f.write(raw)
@@ -165,10 +207,11 @@ def _save_inbound_media(b64: str) -> str:
 
 def _prune_inbound_media_dir() -> None:
     """建目录并清理超过 TTL 的旧媒体文件，防临时目录膨胀。"""
-    os.makedirs(_INBOUND_MEDIA_DIR, exist_ok=True)
+    d = _inbound_media_dir()
+    os.makedirs(d, exist_ok=True)
     now = time.time()
     try:
-        for p in Path(_INBOUND_MEDIA_DIR).iterdir():
+        for p in Path(d).iterdir():
             if p.is_file() and now - p.stat().st_mtime > _INBOUND_MEDIA_TTL_S:
                 p.unlink()
     except Exception:
@@ -183,12 +226,28 @@ def _prune_inbound_media_dir() -> None:
 #   tags   = 题材/角色/自定义标记（猫、甄嬛传、吊带…），与情绪无关，要「发某个标记」用 tag=
 #   desc   = 画面一句话，供 query 模糊
 # 读旧库：若尚无 moods 字段，会把原 tags 里的情绪核词拆进 moods（兼容，不强制写回）。
-_STICKER_DIR = os.path.expanduser(
-    os.environ.get("WECHAT_GOLEM_STICKER_DIR", "~/.hermes/wechat_stickers")
-)
+#
+# 目录来源：WECHAT_GOLEM_STICKER_DIR > $HERMES_HOME/wechat_stickers。
+# 默认放 profile 内而非 ~/.hermes：同机跑两个 profile 时共写一个 index.json，
+# 而 _sticker_lock 只是 threading.Lock（跨不了进程），read-modify-write 会丢更新，
+# 且 _STICKER_MAX 额度也被两边共享。要跨 profile 共享表情库请显式设 env 指到公共路径。
+# 用函数而非模块级常量：Hermes 常在插件 import 之后才加载 profile 的 .env，
+# import 时求值会让这个 env「设了不生效」，而同文件的成员档案目录却生效。
+_STICKER_DIR_ENV = "WECHAT_GOLEM_STICKER_DIR"
 _STICKER_INDEX_NAME = "index.json"
 _STICKER_MAX = 500
 _sticker_lock = threading.Lock()
+
+
+def _sticker_root() -> str:
+    """表情库根目录：env 优先，否则 $HERMES_HOME/wechat_stickers。"""
+    override = _env(_STICKER_DIR_ENV)
+    if override:
+        return os.path.expanduser(override)
+    home = _hermes_home()
+    if home:
+        return os.path.join(home, "wechat_stickers")
+    return os.path.expanduser("~/.hermes/wechat_stickers")
 
 _STICKER_MOOD_TAGS: tuple = (
     "开心",
@@ -278,12 +337,12 @@ _STICKER_MOOD_ALIASES: Dict[str, str] = {
 
 
 def _sticker_index_path() -> str:
-    return os.path.join(_STICKER_DIR, _STICKER_INDEX_NAME)
+    return os.path.join(_sticker_root(), _STICKER_INDEX_NAME)
 
 
 def _sticker_load_index() -> Dict[str, Dict[str, Any]]:
     """读 index.json；损坏时把原文件挪到 .corrupt-<ts> 后从空库开始。"""
-    os.makedirs(_STICKER_DIR, exist_ok=True)
+    os.makedirs(_sticker_root(), exist_ok=True)
     path = _sticker_index_path()
     if not os.path.isfile(path):
         return {}
@@ -305,7 +364,7 @@ def _sticker_load_index() -> Dict[str, Dict[str, Any]]:
 
 def _sticker_save_index(idx: Dict[str, Dict[str, Any]]) -> None:
     """原子写 index（tmp + replace）。"""
-    os.makedirs(_STICKER_DIR, exist_ok=True)
+    os.makedirs(_sticker_root(), exist_ok=True)
     path = _sticker_index_path()
     tmp = f"{path}.tmp-{os.getpid()}"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -417,7 +476,7 @@ def _sticker_entry_brief(md5: str, e: Dict[str, Any]) -> Dict[str, Any]:
         "source": e.get("source") or "",
         "use_count": int(e.get("use_count") or 0),
         "added_at": e.get("added_at") or "",
-        "path": os.path.join(_STICKER_DIR, e.get("file") or ""),
+        "path": os.path.join(_sticker_root(), e.get("file") or ""),
     }
 
 
@@ -455,7 +514,7 @@ def _sticker_upsert(
                 f"再 wechat_sticker_delete(md5=…) 腾位",
             }
         fname = f"{md5}{ext}"
-        fpath = os.path.join(_STICKER_DIR, fname)
+        fpath = os.path.join(_sticker_root(), fname)
         if not os.path.isfile(fpath):
             with open(fpath, "wb") as f:
                 f.write(raw)
@@ -580,7 +639,7 @@ def _sticker_query(
         "moods_summary": dict(sorted(mood_counts.items(), key=lambda kv: -kv[1])),
         "mood_tags": list(_STICKER_MOOD_TAGS),
         "no_mood": no_mood,
-        "lib_dir": _STICKER_DIR,
+        "lib_dir": _sticker_root(),
     }
 
 
@@ -779,7 +838,7 @@ def _sticker_delete(md5s: List[str]) -> Dict[str, Any]:
                 missing.append(md5)
                 # 仍尝试清掉可能残留的同名文件（index 与磁盘不同步时）
                 for ext in (".gif", ".png", ".jpg", ".jpeg", ".webp", ""):
-                    orphan = os.path.join(_STICKER_DIR, f"{md5}{ext}")
+                    orphan = os.path.join(_sticker_root(), f"{md5}{ext}")
                     if os.path.isfile(orphan):
                         try:
                             os.remove(orphan)
@@ -787,7 +846,7 @@ def _sticker_delete(md5s: List[str]) -> Dict[str, Any]:
                             file_errors.append(f"{md5}: {e}")
                 continue
             fname = str(entry.get("file") or f"{md5}")
-            fpath = os.path.join(_STICKER_DIR, fname)
+            fpath = os.path.join(_sticker_root(), fname)
             if os.path.isfile(fpath):
                 try:
                     os.remove(fpath)
@@ -1052,13 +1111,7 @@ def _member_profile_root() -> str:
     override = _env(_MEMBER_PROFILE_DIR_ENV)
     if override:
         return os.path.expanduser(override)
-    try:
-        from hermes_constants import get_hermes_home  # type: ignore
-
-        home = str(get_hermes_home())
-    except Exception:
-        home = os.path.expanduser(os.environ.get("HERMES_HOME") or "~/.hermes")
-    return os.path.join(home, "wechat_member_profiles")
+    return os.path.join(_hermes_home(), "wechat_member_profiles")
 
 
 def _member_profile_safe_wxid(wxid: str) -> str:
@@ -1824,7 +1877,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
     MAX_MESSAGE_LENGTH = 2000
     splits_long_messages = True
     # 声明此属性，gateway 创建适配器后才会注入 runner 反向引用
-    # （run.py:8696 `if hasattr(adapter, "gateway_runner"): adapter.gateway_runner = self`）。
+    # （run.py 里 `if hasattr(adapter, "gateway_runner"): adapter.gateway_runner = self`）。
     # _reset_chat_sessions 靠它调 _evict_cached_agent 逐出旧 agent，修私聊「新对话」消息串号。
     gateway_runner = None
 
@@ -1913,10 +1966,16 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                         retryable=True,
                     )
                     return False
+                try:
+                    health = await resp.json(content_type=None)
+                except Exception:
+                    health = None
         except Exception as e:
             await self.disconnect()
             self._set_fatal_error("connect_failed", str(e), retryable=True)
             return False
+
+        self._warn_token_drift(health)
 
         self._running = True
         self._sse_task = asyncio.create_task(self._sse_loop())
@@ -1928,6 +1987,47 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             self._group_debounce_ms,
         )
         return True
+
+    def _warn_token_drift(self, health: Optional[Dict[str, Any]]) -> None:
+        """比对桥与本侧的控制捷径词表，不一致就告警。
+
+        桥承担群门闩：桥不认的词会被门闩吞掉，适配器根本收不到，
+        于是「改了 WECHAT_GOLEM_INTERRUPT_TOKENS 完全没反应」。桥 v0.13+ 的
+        /health 报生效词表，这里比一遍把静默分叉变成日志里看得见的告警。
+        老桥没有 tokens 字段，跳过。
+        """
+        if not isinstance(health, dict):
+            return
+        bridge = health.get("tokens")
+        if not isinstance(bridge, dict):
+            return  # 老桥：无从比对
+        mine = {
+            "interrupt": _interrupt_tokens(),
+            "session_reset": _reset_tokens(),
+            "archive": _archive_tokens(),
+            "approval": _APPROVAL_REPLY_TOKENS,
+        }
+        env_hint = {
+            "interrupt": "WECHAT_GOLEM_INTERRUPT_TOKENS / 桥 interrupt_tokens",
+            "session_reset": "WECHAT_GOLEM_RESET_TOKENS / 桥 session_reset_tokens",
+            "archive": "WECHAT_GOLEM_ARCHIVE_TOKENS / 桥 archive_tokens",
+            "approval": "桥 approval_tokens（适配器侧无 env）",
+        }
+        for key, local in mine.items():
+            raw = bridge.get(key)
+            if not isinstance(raw, list):
+                continue
+            remote = frozenset(str(t).strip().lower() for t in raw if str(t).strip())
+            if remote == frozenset(local):
+                continue
+            logger.warning(
+                "[wechat_golem] 捷径词表与桥不一致 kind=%s 桥=%s 适配器=%s"
+                "（桥的群门闩会先吞掉桥不认的词；请对齐 %s）",
+                key,
+                sorted(remote),
+                sorted(local),
+                env_hint[key],
+            )
 
     async def disconnect(self) -> None:
         self._running = False
@@ -3720,7 +3820,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             media_ref = str(
                 it.get("media_ref") or it.get("ref") or ""
             ).strip()
-            m = re.search(r"media_\d+", media_ref)
+            m = re.search(_MEDIA_REF_PAT, media_ref)
             media_ref = m.group(0) if m else ""
             img_url = str(
                 it.get("url")
@@ -3939,13 +4039,16 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         """GET 桥 /media?ref=：按需取回入站媒体，落盘返回本地路径（懒下载）。
 
         同一 ref 已落盘则直接复用缓存文件；桥侧也有字节缓存，重复调用无害。
+        缓存按 ref 命名，而桥 v0.13+ 的 ref 含运行前缀，跨桥重启不会重号——
+        旧桥（纯 media_<序号>）重启后有极小概率命中上一轮同号的旧文件。
         """
         ref = re.sub(r"[^A-Za-z0-9_.-]", "", str(media_ref or "").strip())
         if not ref:
             return {"success": False, "error": "media_ref 必填（入站消息里的 media_N）"}
+        media_dir = _inbound_media_dir()
         try:
             _prune_inbound_media_dir()
-            for cached in Path(_INBOUND_MEDIA_DIR).glob(f"{ref}.*"):
+            for cached in Path(media_dir).glob(f"{ref}.*"):
                 if cached.is_file():
                     return {
                         "success": True,
@@ -3978,7 +4081,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 "error": f"桥 /media {status}: {(err_text or 'empty')[:200]}",
             }
         kind, ext = _sniff_media_ext(raw)
-        path = os.path.join(_INBOUND_MEDIA_DIR, f"{ref}{ext}")
+        path = os.path.join(media_dir, f"{ref}{ext}")
         try:
             with open(path, "wb") as f:
                 f.write(raw)
@@ -4132,9 +4235,15 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
         # 让 gateway 自己处理 session 重置：扫描 _entries → reset_session → 保存
         # gateway 负责结束旧 session、创建新 session、更新 _entries 和路由表
+        #
+        # 这段依赖 SessionStore 的私有成员（_lock / _ensure_loaded_locked / _entries /
+        # reset_session）。Hermes 升级改名时曾出现「扫描抛异常 → keys 空 → reset_n=0，
+        # 但仍 return success:True」，用户看到「已重置」而 session 根本没动。
+        # 现在把「扫描失败」和「确实没有会话」分开：前者必须报错。
         try:
             # 从 _entries 取真实 key，保证与 gateway 路由用的 key 一致
             keys: List[str] = []
+            scan_error = ""
             try:
                 with store._lock:
                     store._ensure_loaded_locked()
@@ -4146,25 +4255,46 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                             and str(getattr(origin, "chat_type", "") or "") in ("dm", "private", "group")
                         ):
                             keys.append(ek)
-            except Exception:
+            except Exception as e:
+                scan_error = f"{type(e).__name__}: {e}"
                 logger.exception("[wechat_golem] 扫描 _entries 失败")
 
+            if scan_error:
+                # 私有成员契约破了：不能谎报成功，否则「新开会话」静默失效
+                return {
+                    "success": False,
+                    "error": (
+                        "无法读取 gateway SessionStore（Hermes 版本可能已改内部结构）"
+                        f"：{scan_error}；会话未重置"
+                    ),
+                }
+
             reset_n = 0
+            reset_errors: List[str] = []
             for k in keys:
-                reset = store.reset_session(k)
+                try:
+                    reset = store.reset_session(k)
+                except Exception as e:
+                    reset_errors.append(f"{k}: {type(e).__name__}: {e}")
+                    continue
                 if reset is not None:
                     reset_n += 1
 
             if keys:
-                store._save_entries()
+                try:
+                    store._save_entries()
+                except Exception as e:
+                    reset_errors.append(f"_save_entries: {type(e).__name__}: {e}")
 
             # 逐出按 session_key 缓存的 agent（gateway `_agent_cache`）——否则它仍钉在旧
             # session_id 上继续写，reset 只换了路由不换写入方 → 消息全堆进已结束的老
             # session、新 session 全空（私聊“新对话”消息串号，之前只能靠重启 gateway 兜）。
-            # gateway 自带 /reset 路径就是 reset_session + _evict_cached_agent 两步
-            # （run.py ~11945）。runner 由基类注入：run.py `adapter.gateway_runner = self`。
+            # gateway 自带 /reset 路径就是 reset_session + _evict_cached_agent 两步。
+            # runner 由基类注入：run.py `adapter.gateway_runner = self`。
             evict = getattr(getattr(self, "gateway_runner", None), "_evict_cached_agent", None)
+            evicted = False
             if callable(evict):
+                evicted = True
                 for _k in keys:
                     try:
                         evict(_k)
@@ -4174,10 +4304,30 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 logger.warning("[wechat_golem] 无 gateway_runner._evict_cached_agent，私聊 reset 后消息可能仍串老 session")
 
             logger.info(
-                "[wechat_golem] in-process 会话重置 chat=%s 命中 key=%s 成功=%s",
-                cid, len(keys), reset_n,
+                "[wechat_golem] in-process 会话重置 chat=%s 命中 key=%s 成功=%s 逐出=%s",
+                cid, len(keys), reset_n, evicted,
             )
-            return {"success": True, "output": "已重置"}
+
+            if keys and reset_n == 0:
+                # 有会话却一个都没重置成功：同样不能报成功
+                return {
+                    "success": False,
+                    "error": (
+                        f"命中 {len(keys)} 个会话但重置全部失败；会话未重置"
+                        + ("：" + "; ".join(reset_errors[:3]) if reset_errors else "")
+                    ),
+                }
+            if not keys:
+                # 没有活跃 session 本身是正常的（如刚重启 gateway），说清楚即可
+                return {
+                    "success": True,
+                    "output": "该会话当前没有活跃 session，无需重置",
+                    "reset": 0,
+                }
+            out = f"已重置 {reset_n} 个 session"
+            if not evicted:
+                out += "（未逐出缓存 agent，私聊可能仍串老 session）"
+            return {"success": True, "output": out, "reset": reset_n}
         except Exception as e:
             logger.exception("[wechat_golem] 会话重置失败")
             return {"success": False, "error": str(e)}
@@ -4200,10 +4350,74 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 # ---------------------------------------------------------------------------
 
 
+def probe_hermes_contract() -> Dict[str, Any]:
+    """自检本适配器依赖的 Hermes 内部结构是否还在。
+
+    本适配器为了「新开会话」、busy 判定等功能，用到若干 gateway 私有成员。
+    这些在 Hermes 升级改名后会静默降级（功能失效但不报错），历史上极难定位。
+    这里逐项探测，把结果暴露给 check_requirements / 诊断输出。
+
+    返回 {"ok": bool, "missing": [...], "checked": [...]}。
+    ok=False 不阻止启动：核心收发不依赖这些，只是部分功能会退化。
+    """
+    checked: List[str] = []
+    missing: List[str] = []
+
+    def _check(name: str, probe) -> None:
+        checked.append(name)
+        try:
+            if not probe():
+                missing.append(name)
+        except Exception:
+            missing.append(name)
+
+    # 平台适配器契约（缺了本插件根本没意义，顶层 import 已经会炸，这里只作记录）
+    _check("gateway.platforms.base.BasePlatformAdapter", lambda: BasePlatformAdapter is not None)
+
+    # session 重置依赖的 SessionStore 私有成员
+    def _probe_session_store() -> bool:
+        from gateway.session import SessionStore  # type: ignore
+
+        return all(
+            hasattr(SessionStore, a)
+            for a in ("_lock", "_ensure_loaded_locked", "_entries", "reset_session", "_save_entries")
+        )
+
+    _check("gateway.session.SessionStore 私有成员(_entries/reset_session/…)", _probe_session_store)
+
+    # busy 判定依赖的审批模块
+    def _probe_approval() -> bool:
+        import tools.approval as approval_mod  # type: ignore
+
+        return hasattr(approval_mod, "has_blocking_approval")
+
+    _check("tools.approval.has_blocking_approval", _probe_approval)
+
+    # 会话键构造
+    def _probe_session_key() -> bool:
+        from gateway.session import build_session_key  # type: ignore
+
+        return callable(build_session_key)
+
+    _check("gateway.session.build_session_key", _probe_session_key)
+
+    ok = not missing
+    if missing:
+        logger.warning(
+            "[wechat_golem] Hermes 内部结构自检未通过（相关功能会降级）: %s",
+            "; ".join(missing),
+        )
+    return {"ok": ok, "missing": missing, "checked": checked}
+
+
 def check_requirements() -> bool:
-    return aiohttp is not None and bool(
-        _env("WECHAT_GOLEM_TOKEN") and _env("WECHAT_GOLEM_BASE_URL")
-    )
+    if aiohttp is None:
+        return False
+    if not (_env("WECHAT_GOLEM_TOKEN") and _env("WECHAT_GOLEM_BASE_URL")):
+        return False
+    # 契约自检只告警不拦启动：核心收发不依赖那些私有成员
+    probe_hermes_contract()
+    return True
 
 
 def validate_config(config) -> bool:
@@ -5090,7 +5304,7 @@ def _register_wechat_query_tools(ctx) -> None:
         top_type = _pick("type", "kind").lower()
         top_url = _pick("url", "image_url", "img_url", "src")
         top_ref = _pick("media_ref", "ref")
-        mref = re.search(r"media_\d+", top_ref or "")
+        mref = re.search(_MEDIA_REF_PAT, top_ref or "")
         top_ref = mref.group(0) if mref else ""
         top_name = _pick("item_name", "from_name")  # 避免与 tool name 字段冲突
         if not top_name:
@@ -5104,7 +5318,7 @@ def _register_wechat_query_tools(ctx) -> None:
             u = str(it.get("url") or it.get("image_url") or "").strip()
             r = str(it.get("media_ref") or it.get("ref") or "").strip()
             return u.startswith("http://") or u.startswith("https://") or bool(
-                re.search(r"media_\d+", r)
+                re.search(_MEDIA_REF_PAT, r)
             )
 
         if top_type in ("image", "img", "picture", "photo") or top_url.startswith(
@@ -5325,12 +5539,12 @@ def _register_wechat_query_tools(ctx) -> None:
         for k in ("media_ref", "ref", "media", "id"):
             v = args.get(k)
             if isinstance(v, str) and v.strip():
-                m = re.search(r"media_\d+", v)
+                m = re.search(_MEDIA_REF_PAT, v)
                 if m:
                     return m.group(0)
         for v in args.values():
             if isinstance(v, str):
-                m = re.search(r"media_\d+", v)
+                m = re.search(_MEDIA_REF_PAT, v)
                 if m:
                     return m.group(0)
         return ""
@@ -5364,7 +5578,7 @@ def _register_wechat_query_tools(ctx) -> None:
             for k in ("media_ref", "ref"):
                 v = (merged or {}).get(k)
                 if isinstance(v, str):
-                    m = re.search(r"media_\d+", v)
+                    m = re.search(_MEDIA_REF_PAT, v)
                     if m:
                         ref = m.group(0)
                         break

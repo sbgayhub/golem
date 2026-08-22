@@ -99,4 +99,5 @@ message AppData {
   string desc = 3;     // 描述
   string url = 4;      // 链接 URL
   string xml = 5;      // 原始 XML
+  string extend_xml = 6; // 扩展 XML
 }

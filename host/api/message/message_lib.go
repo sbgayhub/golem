@@ -105,8 +105,8 @@ func (l lib) SendEmoji(receiver, md5 string, data []byte) (*UploadEmojiResponse,
 }
 
 // SendApp 发送应用消息
-func (l lib) SendApp(receiver, xml string, typ int32) (*SendAppMessageResponse, error) {
-	resp, err := message.SendApp(receiver, xml, typ)
+func (l lib) SendApp(receiver, xml, extendXML string, typ int32) (*SendAppMessageResponse, error) {
+	resp, err := message.SendApp(receiver, xml, extendXML, typ)
 	if resp == nil || err != nil {
 		return nil, err
 	}

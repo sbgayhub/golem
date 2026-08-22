@@ -772,11 +772,12 @@ func (x *LocationData) GetLabel() string {
 // AppData 应用消息数据（链接、文件、小程序等）
 type AppData struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	SubType       uint32                 `protobuf:"varint,1,opt,name=sub_type,json=subType,proto3" json:"sub_type,omitempty"` // 子类型（5=链接, 6=文件, 33=小程序, 51=视频号, 57=引用...）
-	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`                     // 标题
-	Desc          string                 `protobuf:"bytes,3,opt,name=desc,proto3" json:"desc,omitempty"`                       // 描述
-	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`                         // 链接 URL
-	Xml           string                 `protobuf:"bytes,5,opt,name=xml,proto3" json:"xml,omitempty"`                         // 原始 XML
+	SubType       uint32                 `protobuf:"varint,1,opt,name=sub_type,json=subType,proto3" json:"sub_type,omitempty"`      // 子类型（5=链接, 6=文件, 33=小程序, 51=视频号, 57=引用...）
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`                          // 标题
+	Desc          string                 `protobuf:"bytes,3,opt,name=desc,proto3" json:"desc,omitempty"`                            // 描述
+	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`                              // 链接 URL
+	Xml           string                 `protobuf:"bytes,5,opt,name=xml,proto3" json:"xml,omitempty"`                              // 原始 XML
+	ExtendXml     string                 `protobuf:"bytes,6,opt,name=extend_xml,json=extendXml,proto3" json:"extend_xml,omitempty"` // 扩展 XML
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -846,6 +847,13 @@ func (x *AppData) GetXml() string {
 	return ""
 }
 
+func (x *AppData) GetExtendXml() string {
+	if x != nil {
+		return x.ExtendXml
+	}
+	return ""
+}
+
 var File_message_types_proto protoreflect.FileDescriptor
 
 const file_message_types_proto_rawDesc = "" +
@@ -904,13 +912,15 @@ const file_message_types_proto_rawDesc = "" +
 	"\tlongitude\x18\x02 \x01(\x01R\tlongitude\x12\x14\n" +
 	"\x05scale\x18\x03 \x01(\x05R\x05scale\x12\x19\n" +
 	"\bpoi_name\x18\x04 \x01(\tR\apoiName\x12\x14\n" +
-	"\x05label\x18\x05 \x01(\tR\x05label\"r\n" +
+	"\x05label\x18\x05 \x01(\tR\x05label\"\x91\x01\n" +
 	"\aAppData\x12\x19\n" +
 	"\bsub_type\x18\x01 \x01(\rR\asubType\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
 	"\x04desc\x18\x03 \x01(\tR\x04desc\x12\x10\n" +
 	"\x03url\x18\x04 \x01(\tR\x03url\x12\x10\n" +
-	"\x03xml\x18\x05 \x01(\tR\x03xmlB|\n" +
+	"\x03xml\x18\x05 \x01(\tR\x03xml\x12\x1d\n" +
+	"\n" +
+	"extend_xml\x18\x06 \x01(\tR\textendXmlB|\n" +
 	"\vcom.messageB\n" +
 	"TypesProtoP\x01Z%github.com/sbgayhub/golem/sdk/message\xa2\x02\x03MXX\xaa\x02\aMessage\xca\x02\aMessage\xe2\x02\x13Message\\GPBMetadata\xea\x02\aMessageb\x06proto3"
 

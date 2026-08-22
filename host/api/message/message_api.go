@@ -20,7 +20,7 @@ type MessageService interface {
 	// SendEmoji 发送表情消息
 	SendEmoji(receiver, md5 string, data []byte) (*UploadEmojiResponse, error)
 	// SendApp 发送应用消息
-	SendApp(receiver, xml string, typ int32) (*SendAppMessageResponse, error)
+	SendApp(receiver, xml, extendXML string, typ int32) (*SendAppMessageResponse, error)
 	// SendLink 发送链接消息
 	SendLink(receiver, title, desc, url, thumbUrl string) (*SendAppMessageResponse, error)
 	// SendCard 发送名片消息

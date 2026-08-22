@@ -2,7 +2,7 @@ version: '3'
 
 vars:
   APP_NAME: golem
-  VERSION: 0.1.0
+  VERSION: 0.1.1
   BUILD_DIR: build
   LDFLAGS: -s -w
   TAGS: web # 编译模式

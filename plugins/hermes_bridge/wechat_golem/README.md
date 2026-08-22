@@ -3,13 +3,12 @@
 把微信（经 Golem `hermes_bridge`）接到 Hermes 官方 Gateway 平台适配器范式。
 
 - 产品级桥说明：`plugins/hermes_bridge/readme.md`
-- **部署与踩坑（现行）**：`t-doc/hermes-bridge-notes.md`
-- 旧 MCP 方案历史：`t-doc/hermes-plugin-notes.md`（已弃用，勿按该文部署）
+- **部署与排障**：`../DEPLOY.md`
 
 ## 架构
 
 ```
-微信 ↔ Golem host (Windows)
+微信 ↔ Golem host
          └ hermes_bridge 插件
               ├ GET  /events   SSE 入站
               ├ POST /send     出站文本（mentions=wxid 真 @）
@@ -17,9 +16,9 @@
               ├ POST /send_app | /send_record | /send_quote
               ├ GET  /self | /group_info | /group_members
               ├ POST /group_member_detail
-              └ GET  /health
-                    ↕ LAN
-Ubuntu VM: Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
+              └ GET  /health   探活 + 生效捷径词表 + 外部工具状态
+                    ↕ 同机 loopback 或跨机 LAN
+Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
 
 **真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice`（named schema + session-map 兜底 `chat_id`）。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`）。agent 验收勿 curl 桥。
@@ -60,26 +59,31 @@ profile `wechat` 时 `HERMES_HOME=~/.hermes/profiles/wechat`：
 
 ```bash
 # ✅ 正确（唯一应保留的副本）
-mkdir -p ~/.hermes/profiles/wechat/plugins/platforms/wechat_golem
-cp PLUGIN.yaml adapter.py \
-  ~/.hermes/profiles/wechat/plugins/platforms/wechat_golem/
-# 若 loader 要包名，可再：cp adapter.py .../__init__.py
+mkdir -p "$HERMES_HOME/plugins/platforms/wechat_golem"
+cp PLUGIN.yaml adapter.py "$HERMES_HOME/plugins/platforms/wechat_golem/"
+# loader 要包名：__init__.py 必须与 adapter.py 同内容
+cp "$HERMES_HOME/plugins/platforms/wechat_golem/adapter.py" \
+   "$HERMES_HOME/plugins/platforms/wechat_golem/__init__.py"
 
 # ❌ 不要装这些（会与正确路径并存，改错文件导致「修了不生效」）
 # ~/.hermes/plugins/wechat_golem/
-# ~/.hermes/profiles/wechat/plugins/wechat_golem/
+# $HERMES_HOME/plugins/wechat_golem/          # 少了 platforms/
 # ~/.hermes/plugins/platforms/wechat_golem/   # 全局第二份，易重复
 ```
 
 ```bash
-# ~/.hermes/profiles/wechat/.env
+# $HERMES_HOME/.env
 WECHAT_GOLEM_TOKEN=与桥一致
-WECHAT_GOLEM_BASE_URL=http://192.168.47.1:8643
+WECHAT_GOLEM_BASE_URL=http://127.0.0.1:8643   # 分机部署填桥所在机器地址
 WECHAT_GOLEM_HOME_CHANNEL=主人wxid   # 或群 chatroom
 WECHAT_GOLEM_ALLOW_ALL_USERS=true
 WECHAT_GOLEM_ALLOWED_USERS=主人wxid
 HERMES_EXEC_ASK=1
 ```
+
+持久数据目录（默认都在 profile 内，迁移/备份要一并搬；完整清单见 `PLUGIN.yaml`）：
+`WECHAT_GOLEM_STICKER_DIR`（表情库）、`WECHAT_GOLEM_MEMBER_PROFILE_DIR`（群友档案）、
+`WECHAT_GOLEM_MEDIA_DIR`（入站媒体缓存）。
 
 `config.yaml` 要点：
 
@@ -87,6 +91,9 @@ HERMES_EXEC_ASK=1
 plugins:
   enabled:
     - platforms/wechat_golem
+group_sessions_per_user: false   # 顶层；否则群里每成员一条 session、上下文串台
+session_reset:
+  mode: none
 approvals:
   mode: manual   # smart 会静默放行危险命令，测审批时用 manual
 ```
@@ -132,7 +139,7 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 - 审批 `yes/no/…`：**仅主人**且确有待审批项才旁路立即；否则群内忽略、私聊转普通消息。
 - 投递失败（handle_message 抛异常）整批回队、退避重试（5s 起、上限 60s），不丢消息。
 - 出站：字面 `\n` → 真换行。
-- 细节与验收：`t-doc/hermes-bridge-notes.md` §十。
+- 细节与验收：`../DEPLOY.md`。
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
@@ -143,7 +150,7 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 | `WECHAT_GOLEM_STICKER_DIR` | `~/.hermes/wechat_stickers` | 表情收藏库目录（`<md5>.<ext>` + `index.json`：`moods` 情绪 / `tags` 题材标记 / desc…） |
 | `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群成员偏好档案目录（每成员一个 `<wxid>.json`） |
 
-**表情库约定**（实现见 `adapter.py`，踩坑与工具表见 `t-doc/hermes-bridge-notes.md`）：
+**表情库约定**（实现见 `adapter.py`）：
 
 - 工具：`wechat_sticker_save` / `list` / `send` / `delete`
 - **自主应景** → `send(mood=…)` 对齐 `moods`；**主人点名标签** → `send(tag=…)` 对齐 `tags`

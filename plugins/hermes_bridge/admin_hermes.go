@@ -12,7 +12,7 @@ import (
 
 var errOpsNotConfigured = fmt.Errorf("未配置 hermes_ops_url")
 
-// hermesOpsDo 桥 → VM hermes_ops；method 支持 GET/PUT/DELETE。
+// hermesOpsDo 桥 → hermes_ops（Hermes 侧只读运维服务）；method 支持 GET/PUT/DELETE。
 func (p *BridgePlugin) hermesOpsDo(method, path string, query url.Values, body io.Reader, contentType string) (int, []byte, string, error) {
 	cfg := p.configSnapshot()
 	base := strings.TrimSpace(cfg.HermesOpsURL)
@@ -65,8 +65,8 @@ func (p *BridgePlugin) writeOpsError(w http.ResponseWriter, err error) bool {
 	if err == errOpsNotConfigured {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"error":   err.Error(),
-			"hint":    "在 config.toml 设置 hermes_ops_url（VM 上 hermes_ops 监听地址）",
-			"example": "hermes_ops_url = \"http://192.168.47.128:8650\"",
+			"hint":    "在 config.toml 设置 hermes_ops_url（Hermes 侧 hermes_ops 的监听地址）",
+			"example": "hermes_ops_url = \"http://<hermes-host>:8650\"",
 		})
 		return true
 	}
@@ -85,9 +85,9 @@ func writeOpsResponse(w http.ResponseWriter, code int, body []byte, ct string) {
 			ops = strings.TrimSpace(string(body))
 		}
 		writeJSON(w, code, map[string]any{
-			"error": "ops 返回 404（请确认 VM hermes_ops.py 已更新到含 stickers 的版本并 restart）",
+			"error": "ops 返回 404（请确认 Hermes 侧 hermes_ops.py 已更新到含 stickers 的版本并 restart）",
 			"ops":   ops,
-			"fix":   "cp 仓库 hermes_ops.py → ~/.hermes/ops/（不要拷到 systemd 目录）&& systemctl --user restart hermes-ops.service",
+			"fix":   "cp 仓库 hermes_ops.py → $HERMES_OPS_DIR（默认 ~/.hermes/ops/，不要拷到 systemd 目录）后重启 ops 服务",
 			"check": "curl …/health 应含 version≥0.3；…/stickers 与 …/stickers/<md5>/file 可用",
 		})
 		return
@@ -245,7 +245,7 @@ func (p *BridgePlugin) adminHermesMeta(w http.ResponseWriter, r *http.Request) {
 				if ver != "" {
 					out["ops_version"] = ver
 					if ver < "0.4" {
-						out["ops_warn"] = "ops version < 0.4：缺 stickers/facets；请更新 hermes_ops.py → ~/.hermes/ops/ 后 restart"
+						out["ops_warn"] = "ops version < 0.4：缺 stickers/facets；请更新 hermes_ops.py 后重启 ops 服务"
 					}
 				} else if code >= 200 && code < 300 {
 					out["ops_warn"] = "ops /health 无 version 字段：多半是旧脚本，表情/档案接口会 404"

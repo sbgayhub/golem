@@ -1,51 +1,58 @@
 # hermes_ops
 
-Ubuntu VM 上的 **只读为主** 运维 HTTP 小服务，给 Golem `hermes_bridge` 管理台「Hermes」页用。
+跑在 **Hermes gateway 所在机器**的 **只读为主** 运维 HTTP 小服务，给 Golem
+`hermes_bridge` 管理台「Hermes」页用。
 
-桥（Windows）通过 `hermes_ops_url` 反代，浏览器只打本机 `http://127.0.0.1:8644/ui/`，不直连 VM。
+桥通过 `hermes_ops_url` 反代，浏览器只打桥的本机管理台，不直连 ops。
 
-源码目录：`plugins/hermes_bridge/hermes_ops/`（随仓库；部署时拷到 VM `~/.hermes/ops/`）。
+源码目录：`plugins/hermes_bridge/hermes_ops/`（随仓库；部署时拷到 `~/.hermes/ops/`）。
 
 ---
 
 ## 一、架构与 token
 
 ```text
-浏览器 ──admin_token──► Windows :8644 管理台
+浏览器 ──admin_token──► 桥 :8644 管理台（默认仅本机）
                             │
                             │ hermes_ops_token
                             ▼
-                       VM :8650 hermes_ops  ──只读──►  journal / 日志文件 / state.db
+                     ops :8650（默认仅回环）──只读──► 日志文件 / state.db / 服务状态
 ```
 
 | Token | 用途 | 配置位置 |
 |-------|------|----------|
-| 业务 `token` / `WECHAT_GOLEM_TOKEN` | 适配器 ↔ 桥 `:8643` | 桥 toml + VM `.env` |
+| 业务 `token` / `WECHAT_GOLEM_TOKEN` | 适配器 ↔ 桥 `:8643` | 桥 toml + Hermes `.env` |
 | `admin_token` | 浏览器 ↔ 管理台 `:8644` | 桥 toml + UI 登录框 |
-| `HERMES_OPS_TOKEN` / `hermes_ops_token` | 桥 ↔ ops `:8650` | VM 环境变量 + 桥 toml |
+| `HERMES_OPS_TOKEN` / `hermes_ops_token` | 桥 ↔ ops `:8650` | ops 环境变量 + 桥 toml |
 
 **三者分开。** 不要和业务 token 共用。
 
 | 端口 | 默认绑定 | 谁连 |
 |------|----------|------|
-| 8643 | Windows `0.0.0.0` | VM → 宿主机（业务 SSE/发送） |
-| 8644 | Windows `127.0.0.1` | 仅本机浏览器（管理台） |
-| 8650 | VM `0.0.0.0`（可改） | 宿主机 → VM（ops） |
+| 8643 | 桥 `0.0.0.0`（同机可收紧回环） | Hermes 适配器 → 桥（业务 SSE/发送） |
+| 8644 | 桥 `127.0.0.1` | 仅本机浏览器（管理台） |
+| 8650 | ops `127.0.0.1` | 桥 → ops |
 
-常用拓扑（VMware）：VM 访问桥用宿主机网关 `http://192.168.47.1:8643`；桥访问 ops 用 **VM 自己的 IP** `http://<VM_IP>:8650`（不是 47.1）。
+**同机部署**：三个口都走 loopback，`hermes_ops_url = "http://127.0.0.1:8650"`，无需放开任何监听。
+
+**分机部署**：桥要访问另一台机器上的 ops，两个选择——
+① 推荐保持 ops 绑回环 + SSH 隧道 `ssh -L 8650:127.0.0.1:8650 <hermes-host>`，桥仍填 `127.0.0.1:8650`；
+② 或设好 `HERMES_OPS_TOKEN` 后放开 `HERMES_OPS_LISTEN=0.0.0.0:8650`，桥填 ops 所在机器的 IP。
+**无 token 时 ops 只接受本机请求，且非回环监听会直接拒绝启动**（详见第三节）。
 
 ---
 
 ## 二、HTTP 接口
 
-均需 `Authorization: Bearer <HERMES_OPS_TOKEN>`（未设 token 时不鉴权，仅建议本机调试）。
+均需 `Authorization: Bearer <HERMES_OPS_TOKEN>`。未设 token 时**只接受来自本机的请求**
+（`127.0.0.1` / `::1`），其余来源一律 401。
 
 | 路径 | 说明 |
 |------|------|
-| `GET /health` | 探活 |
-| `GET /overview` | systemd 单元 + 工具注册粗检 + 红灯 `alerts` |
+| `GET /health` | 探活；报 profile、各目录、`service_manager`、`auth` 模式 |
+| `GET /overview` | 服务状态 + 工具注册粗检 + 红灯 `alerts`（非 systemd 环境不计入红灯） |
 | `GET /tools/check` | 扫 `agent.log`/`errors.log` 尾：`tool registered` / `registration crashed` |
-| `GET /sessions?n=40` | 只读 `state.db`（若有）或回落 `hermes -p wechat sessions list` |
+| `GET /sessions?n=40` | 只读 `state.db`（若有）或回落 `hermes -p <profile> sessions list` |
 | `GET /logs?file=agent\|gateway\|errors&n=80&grep=` | 日志尾；`grep` 为简单子串（大小写不敏感） |
 | `GET /stickers/facets` | 情绪/题材计数（UI 先选再加载） |
 | `GET /stickers?n=100&mood=&tag=&q=` | 表情库列表（建议带 mood/tag/q，勿一次全库） |
@@ -62,14 +69,32 @@ Ubuntu VM 上的 **只读为主** 运维 HTTP 小服务，给 Golem `hermes_brid
 
 ## 三、环境变量
 
+一般只需设 `HERMES_PROFILE` 与 `HERMES_OPS_TOKEN`，其余都能派生出来。
+
 | 变量 | 默认 | 说明 |
 |------|------|------|
-| `HERMES_HOME` | `~/.hermes/profiles/wechat` | profile 根 |
-| `HERMES_OPS_LISTEN` | `0.0.0.0:8650` | 监听；更紧可 `127.0.0.1:8650` + SSH `-L` |
-| `HERMES_OPS_TOKEN` | 空 | Bearer；**生产必填** |
-| `HERMES_GATEWAY_UNIT` | `hermes-gateway-wechat.service` | `systemctl --user` 单元名 |
-| `WECHAT_GOLEM_STICKER_DIR` | `~/.hermes/wechat_stickers` | 与适配器表情库一致 |
-| `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群友档案目录 |
+| `HERMES_PROFILE` | `wechat` | profile 名；派生下面 `HERMES_HOME` 与单元名的默认值，以及 CLI `-p` 参数 |
+| `HERMES_OPS_TOKEN` | 空 | Bearer。空则只接受本机请求；**非回环监听且为空时拒绝启动** |
+| `HERMES_OPS_LISTEN` | `127.0.0.1:8650` | 监听地址。放开前务必先设 token |
+| `HERMES_HOME` | `~/.hermes/profiles/$HERMES_PROFILE` | profile 根 |
+| `HERMES_GATEWAY_UNIT` | `hermes-gateway-$HERMES_PROFILE.service` | systemd 单元名 |
+| `HERMES_OPS_SERVICE_MANAGER` | `auto` | `auto`\|`systemd-user`\|`systemd-system`\|`none`；`auto` 探测 `systemctl` + `/run/systemd/system` |
+| `HERMES_OPS_LOG_DIR` | `$HERMES_HOME/logs` | 日志目录（容器把日志重定向到 stdout 时可指到别处） |
+| `HERMES_OPS_STATE_DB` | 自动探测三个候选 | 显式指定 `state.db` 路径 |
+| `WECHAT_GOLEM_STICKER_DIR` | `$HERMES_HOME/wechat_stickers` | 须与适配器一致 |
+| `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 须与适配器一致 |
+
+两个目录变量与适配器共用，**两侧必须设成同一路径**，否则 ops 看到的是空库。
+`GET /health` 会回显 `sticker_dir` / `member_dir`，可据此自查。
+
+### 非 systemd 环境
+
+容器、macOS、WSL1、supervisor、pm2、以及用**系统级**（非 `--user`）systemd 的场合：
+`auto` 探测不到 user-level systemd 时会退成 `none`，此时 `/overview` 跳过服务状态检查、
+**不因此报红灯**，其余接口（日志、sessions、表情、档案）照常工作。
+
+如确实在用 systemd 但被误判，显式设 `HERMES_OPS_SERVICE_MANAGER=systemd-user`
+或 `systemd-system`。启动日志会打印探测结果（`service_manager=...`）。
 
 ---
 
@@ -79,7 +104,7 @@ Ubuntu VM 上的 **只读为主** 运维 HTTP 小服务，给 Golem `hermes_brid
 
 ```bash
 mkdir -p ~/.hermes/ops
-# 从 Windows 仓库 plugins/hermes_bridge/hermes_ops/ 拷入：
+# 从仓库 plugins/hermes_bridge/hermes_ops/ 拷入：
 #   hermes_ops.py
 #   hermes-ops.service.example（可选）
 cp /path/to/hermes_ops.py ~/.hermes/ops/
@@ -94,15 +119,23 @@ cp /path/to/hermes_ops.py ~/.hermes/ops/
 ### 4.2 先手动跑通（必做一次）
 
 ```bash
-export HERMES_HOME=$HOME/.hermes/profiles/wechat
+export HERMES_PROFILE=wechat        # 派生 HERMES_HOME 与 gateway 单元名
 export HERMES_OPS_TOKEN='与桥 hermes_ops_token 相同的长随机串'
-export HERMES_OPS_LISTEN=0.0.0.0:8650
-export HERMES_GATEWAY_UNIT=hermes-gateway-wechat.service
+# 监听默认 127.0.0.1:8650。桥在另一台机器且不走 SSH 隧道时才放开：
+# export HERMES_OPS_LISTEN=0.0.0.0:8650
 
 python3 ~/.hermes/ops/hermes_ops.py
 ```
 
-另开 SSH 窗口：
+启动日志会打印生效配置，先核一遍再继续：
+
+```text
+[hermes_ops] listen=127.0.0.1:8650 profile=wechat HERMES_HOME=/home/u/.hermes/profiles/wechat
+             unit=hermes-gateway-wechat.service service_manager=systemd-user
+             stickers=… members=…
+```
+
+另开一个窗口验：
 
 ```bash
 curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/health
@@ -110,29 +143,37 @@ curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/over
 curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/tools/check
 ```
 
-查 VM IP（给 Windows 桥填，**不是** 192.168.47.1）：
+### 4.3 让桥能访问到 ops
+
+**同机**：桥填 `hermes_ops_url = "http://127.0.0.1:8650"`，到这步就完了。
+
+**分机**，二选一：
+
+① SSH 隧道（推荐，ops 保持只绑回环）——在桥所在机器上：
 
 ```bash
-hostname -I
-# 或: ip -4 addr
+ssh -N -L 8650:127.0.0.1:8650 <user>@<hermes-host>
+# 桥仍填 http://127.0.0.1:8650
 ```
 
-Windows 上测：
-
-```powershell
-curl.exe -sS -H "Authorization: Bearer <OPS_TOKEN>" http://<VM_IP>:8650/health
-```
-
-### 4.3 防火墙（若启用 ufw）
+② 放开监听（务必先设好 `HERMES_OPS_TOKEN`，否则 ops 拒绝启动）：
 
 ```bash
-sudo ufw allow 8650/tcp comment hermes_ops
-sudo ufw status
+# Hermes 侧
+export HERMES_OPS_LISTEN=0.0.0.0:8650
+hostname -I          # 取本机 IP，填进桥的 hermes_ops_url
+sudo ufw allow 8650/tcp comment hermes_ops   # 若启用了 ufw
 ```
 
-### 4.4 Windows 桥配置
+从桥所在机器验通：
 
-`plugins/config.toml`（运行目录那份）：
+```bash
+curl -sS -H "Authorization: Bearer <OPS_TOKEN>" http://<hermes-host>:8650/health
+```
+
+### 4.4 桥侧配置
+
+`plugins/config.toml`（host 运行目录那份）：
 
 ```toml
 [hermes_bridge.config]
@@ -261,39 +302,43 @@ loginctl show-user $USER | grep Linger
 ### 6.1 健康检查顺序
 
 ```bash
-# VM 本机
-systemctl --user is-active hermes-ops.service
+# Hermes 侧本机
+systemctl --user is-active hermes-ops.service    # 用 systemd 时
 curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/health
 curl -sS -H "Authorization: Bearer $HERMES_OPS_TOKEN" http://127.0.0.1:8650/overview
 
-# Windows → VM
-curl.exe -sS -H "Authorization: Bearer <OPS>" http://<VM_IP>:8650/health
+# 桥所在机器 → ops（分机且放开了监听时）
+curl -sS -H "Authorization: Bearer <OPS>" http://<hermes-host>:8650/health
 
-# 桥反代（本机管理台已登录等价）
-# UI Hermes 页刷新；或：
-curl.exe -sS -H "Authorization: Bearer <ADMIN>" http://127.0.0.1:8644/admin/hermes/meta
-curl.exe -sS -H "Authorization: Bearer <ADMIN>" http://127.0.0.1:8644/admin/hermes/health
+# 桥反代（等价于本机管理台已登录）
+curl -sS -H "Authorization: Bearer <ADMIN>" http://127.0.0.1:8644/admin/hermes/meta
+curl -sS -H "Authorization: Bearer <ADMIN>" http://127.0.0.1:8644/admin/hermes/health
 ```
 
 ### 6.2 overview 红灯含义
 
 | alerts / 字段 | 含义 | 下一步 |
 |---------------|------|--------|
-| gateway 未 active | 单元挂了或没起 | `systemctl --user status hermes-gateway-wechat.service` |
+| gateway 未 active | 单元挂了或没起 | `systemctl --user status hermes-gateway-<profile>.service` |
 | 未见 tool registered | 日志尾还没有注册成功行 | 冷启 gateway；`grep -a 'tool registered' …/logs/agent.log` |
 | registration crash 样本 | 工具注册异常被吞 | `errors.log` / `agent.log` 找 traceback（**不要**只看 gateway.log） |
-| 日志目录不存在 | `HERMES_HOME` 错 | 检查 profile 路径 |
+| 日志目录不存在 | `HERMES_HOME` 或 `HERMES_OPS_LOG_DIR` 错 | 核 `/health` 回显的路径 |
+
+`systemd.supported=false` 不是红灯：表示本机没用 systemd，服务状态检查已跳过。
 
 ### 6.3 常见失败
 
 | 现象 | 处理 |
 |------|------|
+| 启动即退出、报「拒绝启动」 | 非回环监听但 `HERMES_OPS_TOKEN` 为空；设 token 或改回 `127.0.0.1:8650` |
 | `address already in use` | 手动 python 仍占 8650；先停再 start 单元 |
 | `status=203/EXEC` | `ExecStart` 的 python 路径不对 |
-| 401 | ops token 与桥 `hermes_ops_token` 不一致 |
-| Windows connection refused | IP 错、ufw、ops 没 listen `0.0.0.0`、单元 dead |
+| 401（带了 token） | ops token 与桥 `hermes_ops_token` 不一致 |
+| 401（没带 token） | ops 无 token 时只接受本机请求；跨机访问必须设 token 或走 SSH 隧道 |
+| 跨机 connection refused | IP 错、防火墙、ops 仍绑 `127.0.0.1`、或服务没起 |
 | UI「未配置 hermes_ops_url」 | 桥 toml 未写或未重载插件 |
 | `systemctl`/`journalctl` 空白 | 漏了 `--user` |
+| 表情库空但档案正常 | 两侧 `WECHAT_GOLEM_STICKER_DIR` 不一致（或 ops 与 gateway 跑在不同用户下）；比对 `/health` 回显 |
 | sessions 空 / 无 db | 见返回 `note`；CLI 回落或确认 `HERMES_HOME` |
 | stickers 空 | 检查 `WECHAT_GOLEM_STICKER_DIR` / 默认 `~/.hermes/wechat_stickers/index.json` |
 
@@ -317,11 +362,12 @@ ops 的 `/logs` 与 `/tools/check` 读的就是上述文件尾，避免每次 SS
 
 ## 七、安全
 
-- 路径白名单；无自由 shell argv  
-- Token 与业务、admin 分离  
-- 默认 LAN 可扫到 8650：靠 token；更紧则 `127.0.0.1` +  
-  `ssh -L 8650:127.0.0.1:8650 user@VM`，桥填 `http://127.0.0.1:8650`  
-- `PUT/DELETE member_profiles` 为有意轻写；表情字节与 gateway 控制面仍不开放  
+- 路径白名单；无自由 shell argv
+- Token 与业务、admin 分离
+- **默认只绑 `127.0.0.1`**；无 token 时只接受本机请求，非回环监听且无 token 直接拒绝启动
+- 跨机访问优先 SSH 隧道 `ssh -L 8650:127.0.0.1:8650 <user>@<hermes-host>`，桥填
+  `http://127.0.0.1:8650`；要直连则先设 `HERMES_OPS_TOKEN` 再放开 `HERMES_OPS_LISTEN`
+- `PUT/DELETE member_profiles` 为有意轻写；表情字节与 gateway 控制面仍不开放
 
 ---
 
@@ -340,4 +386,4 @@ ops 的 `/logs` 与 `/tools/check` 读的就是上述文件尾，避免每次 SS
 | `GET /admin/hermes/stickers…` | `/stickers…` |
 | `GET|PUT|DELETE /admin/hermes/member_profiles…` | 同名 |
 
-产品说明：`plugins/hermes_bridge/readme.md`；部署总册：`t-doc/hermes-bridge-notes.md`。
+产品说明：`plugins/hermes_bridge/readme.md`；部署总册：`plugins/hermes_bridge/DEPLOY.md`。

@@ -160,11 +160,30 @@
   }
 
   // ---- auth gate ----
+  // 登录页副标题写实际监听地址：写死「仅 127.0.0.1」在改了 admin_listen
+  // （Tailscale 等场景）之后就是假话。/admin/meta 无鉴权，登录前即可取。
+  async function fillLoginListen() {
+    const el = $("login-listen");
+    if (!el) return;
+    try {
+      const res = await fetch("/admin/meta");
+      if (!res.ok) return;
+      const meta = await res.json();
+      const addr = (meta && meta.admin_listen) || "";
+      if (!addr) return;
+      const local = /^(127\.0\.0\.1|localhost|\[::1\]):/.test(addr);
+      el.textContent = local ? "本机管理台 · " + addr : "管理台 · " + addr;
+    } catch (_) {
+      // 取不到就保留 HTML 里的中性文案
+    }
+  }
+
   function showLogin(errMsg) {
     stopTraceLive();
     $("app-shell").classList.add("hidden");
     $("login-screen").classList.remove("hidden");
     $("login-token").value = "";
+    fillLoginListen();
     const err = $("login-error");
     if (errMsg) {
       err.textContent = errMsg;

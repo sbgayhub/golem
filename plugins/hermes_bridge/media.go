@@ -820,8 +820,15 @@ func (p *BridgePlugin) sendVoiceBytes(targetID string, srcData []byte) error {
 	)
 
 	// 转码前从源文件取时长（silk 文件 ffprobe 取不到，必须提前取）
-	durationMs, err := mediaDurationMs(srcPath)
+	//
+	// 缺 ffprobe 时曾静默填 5000ms：源音频本身已是 SILK/AMR 时不走转码，于是
+	// 语音能发出去但全部显示 5 秒，没有任何错误信号。现在区分两种情况：
+	// 工具缺失 → 直接失败（配置问题，必须让人看见）；工具在但探测失败 → 才兜底。
+	durationMs, err := p.mediaDurationMs(srcPath)
 	if err != nil {
+		if _, probeErr := p.ffprobePath(); probeErr != nil {
+			return fmt.Errorf("发送语音需要 ffprobe 取时长: %w", probeErr)
+		}
 		slog.Warn("[hermes_bridge] 获取源文件时长失败，使用默认值", "err", err)
 		durationMs = 5000
 	}
@@ -834,10 +841,10 @@ func (p *BridgePlugin) sendVoiceBytes(targetID string, srcData []byte) error {
 		voicePath, silkMs, err = p.tryConvertToSILK(srcPath, durationMs)
 		if err != nil {
 			slog.Warn("[hermes_bridge] silk 编码失败，降级到 amr", "err", err)
-			voicePath, err = tryConvertToAMRFile(srcPath)
+			voicePath, err = p.tryConvertToAMRFile(srcPath)
 			if err != nil {
 				slog.Error("[hermes_bridge] 语音转码全部失败", "err", err)
-				return fmt.Errorf("音频转码失败（宿主机需安装 ffmpeg / silk_v3_encoder）: %w", err)
+				return fmt.Errorf("音频转码失败: %w", err)
 			}
 		} else {
 			durationMs = silkMs
@@ -912,13 +919,23 @@ func (p *BridgePlugin) sendVideoMessage(targetID string, videoData []byte) (uplo
 	}
 	defer func() { _ = os.Remove(videoPath) }()
 
-	durationSec, err := mediaDurationSec(videoPath)
+	// 视频必须带 Thumb + Duration：host 的 SendVideo 缺 Thumb 会失败。
+	// 曾经缺 ffmpeg 时只 Warn 并填 duration=10 / thumb=nil，表现为「视频发送失败」
+	// 而错误里根本不提 ffmpeg，查起来极费时间。现在缺工具直接报清楚。
+	if _, err := p.ffmpegPath(); err != nil {
+		return uploadFailed, fmt.Errorf("发送视频需要 ffmpeg 抽封面: %w", err)
+	}
+
+	durationSec, err := p.mediaDurationSec(videoPath)
 	if err != nil {
+		if _, probeErr := p.ffprobePath(); probeErr != nil {
+			return uploadFailed, fmt.Errorf("发送视频需要 ffprobe 取时长: %w", probeErr)
+		}
 		slog.Warn("[hermes_bridge] 获取视频时长失败，使用默认值", "err", err)
 		durationSec = 10
 	}
 
-	thumbData, err := extractVideoThumbnail(videoPath)
+	thumbData, err := p.extractVideoThumbnail(videoPath)
 	if err != nil {
 		slog.Warn("[hermes_bridge] 提取视频缩略图失败，使用空缩略图", "err", err)
 		thumbData = nil
@@ -1030,8 +1047,8 @@ func detectAudioFormatCode(data []byte) int {
 	return -1
 }
 
-func convertToAMR(inputPath, outputPath string) error {
-	cmd := exec.Command("ffmpeg",
+func convertToAMR(ffmpeg, inputPath, outputPath string) error {
+	cmd := exec.Command(ffmpeg,
 		"-i", inputPath,
 		"-acodec", "amr_nb",
 		"-ar", "8000",
@@ -1064,7 +1081,11 @@ func ensureTencentSilk(data []byte) []byte {
 }
 
 // tryConvertToAMRFile 将音频转为 AMR-NB；返回临时文件路径。
-func tryConvertToAMRFile(srcPath string) (string, error) {
+func (p *BridgePlugin) tryConvertToAMRFile(srcPath string) (string, error) {
+	ffmpeg, err := p.ffmpegPath()
+	if err != nil {
+		return "", err
+	}
 	outFile, err := os.CreateTemp("", "hermes-bridge-audio-*.amr")
 	if err != nil {
 		return "", err
@@ -1072,7 +1093,7 @@ func tryConvertToAMRFile(srcPath string) (string, error) {
 	outPath := outFile.Name()
 	_ = outFile.Close()
 
-	if err := convertToAMR(srcPath, outPath); err != nil {
+	if err := convertToAMR(ffmpeg, srcPath, outPath); err != nil {
 		_ = os.Remove(outPath)
 		return "", err
 	}
@@ -1090,15 +1111,19 @@ func tryConvertToAMRFile(srcPath string) (string, error) {
 	return outPath, nil
 }
 
-// tryConvertToSILK 用 ffmpeg + silk_v3_encoder.exe 把音频转为微信可用的腾讯变体 SILK。
+// tryConvertToSILK 用 ffmpeg + silk_v3_encoder 把音频转为微信可用的腾讯变体 SILK。
 // durationMs 为源音频时长；上传通道对单条语音有大小上限（见 SilkMaxBytes），
 // 超预算时先降码率（下限 8000bps），仍不够则裁剪时长。返回 silk 路径与实际编码时长(毫秒)。
 // 若编码器路径未配置或执行失败返回 error，调用方应降级到 AMR。
 func (p *BridgePlugin) tryConvertToSILK(srcPath string, durationMs int) (string, int, error) {
 	cfg := p.configSnapshot()
-	enc := strings.TrimSpace(cfg.SilkEncoderPath)
-	if enc == "" {
-		return "", 0, fmt.Errorf("silk_encoder_path 未配置")
+	enc, err := p.silkEncoderPath()
+	if err != nil {
+		return "", 0, err
+	}
+	ffmpeg, err := p.ffmpegPath()
+	if err != nil {
+		return "", 0, err
 	}
 
 	sampleRate := cfg.SilkSampleRate
@@ -1138,7 +1163,7 @@ func (p *BridgePlugin) tryConvertToSILK(srcPath string, durationMs int) (string,
 		ffArgs = append(ffArgs, "-t", fmt.Sprintf("%.3f", float64(actualMs)/1000))
 	}
 	ffArgs = append(ffArgs, "-y", pcmPath)
-	out, err := exec.Command("ffmpeg", ffArgs...).CombinedOutput()
+	out, err := exec.Command(ffmpeg, ffArgs...).CombinedOutput()
 	if err != nil {
 		return "", 0, fmt.Errorf("ffmpeg 转 PCM 失败: %w, output: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -1205,24 +1230,28 @@ func hexHeader(data []byte, n int) string {
 	return s
 }
 
-func mediaDurationMs(path string) (int, error) {
-	d, err := probeDurationSeconds(path)
+func (p *BridgePlugin) mediaDurationMs(path string) (int, error) {
+	d, err := p.probeDurationSeconds(path)
 	if err != nil {
 		return 0, err
 	}
 	return int(d * 1000), nil
 }
 
-func mediaDurationSec(path string) (int, error) {
-	d, err := probeDurationSeconds(path)
+func (p *BridgePlugin) mediaDurationSec(path string) (int, error) {
+	d, err := p.probeDurationSeconds(path)
 	if err != nil {
 		return 0, err
 	}
 	return int(d), nil
 }
 
-func probeDurationSeconds(path string) (float64, error) {
-	cmd := exec.Command("ffprobe",
+func (p *BridgePlugin) probeDurationSeconds(path string) (float64, error) {
+	ffprobe, err := p.ffprobePath()
+	if err != nil {
+		return 0, err
+	}
+	cmd := exec.Command(ffprobe,
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
@@ -1230,14 +1259,18 @@ func probeDurationSeconds(path string) (float64, error) {
 	)
 	output, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("ffprobe 执行失败（宿主机需安装 ffmpeg/ffprobe）: %w", err)
+		return 0, fmt.Errorf("ffprobe 执行失败: %w", err)
 	}
 	return strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
 }
 
 // extractVideoThumbnail 用 ffmpeg 抽一帧 JPEG 作视频封面。
 // host message.Send → SendVideo(receiver, thumb, video, duration) 需要 Thumb。
-func extractVideoThumbnail(videoPath string) ([]byte, error) {
+func (p *BridgePlugin) extractVideoThumbnail(videoPath string) ([]byte, error) {
+	ffmpeg, err := p.ffmpegPath()
+	if err != nil {
+		return nil, err
+	}
 	tmp, err := os.CreateTemp("", "hermes-bridge-thumb-*.jpg")
 	if err != nil {
 		return nil, err
@@ -1248,7 +1281,7 @@ func extractVideoThumbnail(videoPath string) ([]byte, error) {
 
 	// 先尝试 1s 处；短视频可能不够长，再试 0s
 	for _, ss := range []string{"00:00:01", "00:00:00"} {
-		cmd := exec.Command("ffmpeg",
+		cmd := exec.Command(ffmpeg,
 			"-i", videoPath,
 			"-ss", ss,
 			"-vframes", "1",
@@ -1270,5 +1303,5 @@ func extractVideoThumbnail(videoPath string) ([]byte, error) {
 		}
 		return data, nil
 	}
-	return nil, errors.New("ffmpeg 抽帧失败（宿主机需安装 ffmpeg）")
+	return nil, errors.New("ffmpeg 抽帧失败（视频可能损坏或格式不支持）")
 }

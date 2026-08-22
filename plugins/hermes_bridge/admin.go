@@ -423,6 +423,11 @@ type adminConfigView struct {
 	MaxTextLen            int      `json:"max_text_len"`
 	SendRatePerMin        int      `json:"send_rate_per_min"`
 	GateSummary           string   `json:"gate_summary"`
+	// 捷径词表：报生效值（配置留空时是内置默认集），改动须同步适配器侧 env
+	InterruptTokens    []string `json:"interrupt_tokens"`
+	SessionResetTokens []string `json:"session_reset_tokens"`
+	ArchiveTokens      []string `json:"archive_tokens"`
+	ApprovalTokens     []string `json:"approval_tokens"`
 }
 
 func (p *BridgePlugin) adminConfigView() adminConfigView {
@@ -441,6 +446,10 @@ func (p *BridgePlugin) adminConfigView() adminConfigView {
 		MaxTextLen:            cfg.MaxTextLen,
 		SendRatePerMin:        cfg.SendRatePerMin,
 		GateSummary:           gateSummary(cfg),
+		InterruptTokens:       p.interruptTokens(),
+		SessionResetTokens:    p.sessionResetTokens(),
+		ArchiveTokens:         p.archiveTokens(),
+		ApprovalTokens:        p.approvalTokens(),
 	}
 }
 
@@ -582,6 +591,43 @@ func (p *BridgePlugin) adminPatchConfig(w http.ResponseWriter, r *http.Request) 
 			clean = append(clean, n)
 		}
 		p.Config.TriggerNames = clean
+	}
+	// 捷径词表：传空数组 = 回退内置默认集。改这些必须同步适配器侧 env，
+	// 否则桥的群门闩会先把消息吞掉（见 session.go 顶部注释）。
+	tokenFields := []struct {
+		key string
+		dst *[]string
+	}{
+		{"interrupt_tokens", &p.Config.InterruptTokens},
+		{"session_reset_tokens", &p.Config.SessionResetTokens},
+		{"archive_tokens", &p.Config.ArchiveTokens},
+		{"approval_tokens", &p.Config.ApprovalTokens},
+	}
+	for _, f := range tokenFields {
+		v, ok := raw[f.key]
+		if !ok {
+			continue
+		}
+		var toks []string
+		if err := json.Unmarshal(v, &toks); err != nil {
+			p.cfgMu.Unlock()
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": f.key + ": " + err.Error()})
+			return
+		}
+		clean := make([]string, 0, len(toks))
+		seen := map[string]struct{}{}
+		for _, t := range toks {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, dup := seen[t]; dup {
+				continue
+			}
+			seen[t] = struct{}{}
+			clean = append(clean, t)
+		}
+		*f.dst = clean
 	}
 	p.cfgMu.Unlock()
 

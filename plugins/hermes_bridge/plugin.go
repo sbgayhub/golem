@@ -16,8 +16,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.12.0",
-		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；管理台（绿色小清新、命令面板、分组总览）。",
+		Version:     "0.13.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；管理台；可迁移配置（外部程序路径、捷径词表）。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,
@@ -26,7 +26,7 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 
 // GetSubscriptions 订阅文本、引用及媒体入站消息。
 // 图片/表情/语音/视频等媒体消息会转成 [图片]/[表情] 等文本标记再推送。
-// 聊天记录（type=19）已可入站（见 t-doc/wechat-msg-formats.md）；业务暂不订阅，避免刷 SSE。
+// 聊天记录（type=19）已可入站；业务暂不订阅，避免刷 SSE。
 func (p *BridgePlugin) GetSubscriptions() []string {
 	return []string{
 		message.TypeText.Topic,
@@ -126,7 +126,7 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 
 	// 审批捷径：立刻透传，不进群去抖（否则卡 yes/no）。
 	// 仅主人：审批只有主人能答，否则群里任何人整句 no/是/同意 都会绕过门闩误唤醒 agent。
-	if in.SpeakerIsOwner && isApprovalReplyText(in.Text) {
+	if in.SpeakerIsOwner && p.isApprovalReplyText(in.Text) {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃审批捷径", "session", in.SessionKey)
 			ct := "private"
@@ -165,7 +165,7 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 
 	// 打断捷径：整句「打断」立刻透传（不限主人）；
 	// 同时作废该会话当前去抖 pending（停 timer +未推批标 Flushed），避免 ⚡ 后尸体批次再唤醒 agent。
-	if isInterruptReplyText(in.Text) {
+	if p.isInterruptReplyText(in.Text) {
 		cancelled, dropped := p.cancelGroupPending(in.SessionKey)
 		if cancelled || dropped > 0 {
 			slog.Info("[hermes_bridge] 打断捷径已取消去抖 pending",
@@ -219,7 +219,7 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	// 新开会话捷径：仅主人整句触发，立即透传（trigger_reason=session_reset），
 	// 真正清 gateway session 由适配器执行（CLI prune --chat-id）。
 	// 同时作废该会话未推送的去抖批次——旧上下文不该再灌进新 session。
-	if in.SpeakerIsOwner && isSessionResetText(in.Text) {
+	if in.SpeakerIsOwner && p.isSessionResetText(in.Text) {
 		cancelled, dropped := p.cancelGroupPending(in.SessionKey)
 		if cancelled || dropped > 0 {
 			slog.Info("[hermes_bridge] 新开会话已取消去抖 pending",
@@ -265,7 +265,7 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 	// 归档群友捷径：仅主人整句「归档/归档群友/…」立即透传。
 	// 群门闩会吞无 @ 短词；必须旁路。适配器把短词扩成完整 member_profile upsert 指令。
 	// 不作废去抖 pending：未推批与本次归档无关，保留给后续触发。
-	if in.SpeakerIsOwner && isMemberArchiveText(in.Text) {
+	if in.SpeakerIsOwner && p.isMemberArchiveText(in.Text) {
 		if p.hub.subscriberCount() == 0 {
 			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃归档捷径", "session", in.SessionKey)
 			ct := "private"
@@ -582,6 +582,10 @@ func (p *BridgePlugin) statusText() string {
 		fmt.Sprintf("斗图门闩: 窗口%ds内第%d条表情触发 / 冷却 %dmin（0=关）",
 			cfg.EmojiBurstWindowSec, cfg.EmojiBurstCount, cfg.EmojiBurstCooldownMin),
 		"点名: " + triggers,
+		"捷径词: 打断=" + strings.Join(p.interruptTokens(), "/") +
+			" | 新开会话=" + strings.Join(p.sessionResetTokens(), "/") +
+			" | 归档=" + strings.Join(p.archiveTokens(), "/"),
+		"媒体工具: " + p.mediaToolSummary(),
 		fmt.Sprintf("本地会话 %d | pending 去抖 %d | 未推送缓冲 %d 条", sessN, pendN, bufN),
 		"主人: " + ownerOK,
 		// 白名单只报数量：status 常在群里回，避免摊开 wxid / @chatroom
@@ -589,6 +593,27 @@ func (p *BridgePlugin) statusText() string {
 		adminLine,
 	}
 	return strings.Join(lines, "\n")
+}
+
+// mediaToolSummary 一行报 ffmpeg / ffprobe / silk 编码器可用性，供 /hermes status。
+// 缺失是最常见的部署故障，放进状态里省得去翻日志。
+func (p *BridgePlugin) mediaToolSummary() string {
+	parts := make([]string, 0, 3)
+	for _, it := range []struct {
+		name    string
+		resolve func() (string, error)
+	}{
+		{"ffmpeg", p.ffmpegPath},
+		{"ffprobe", p.ffprobePath},
+		{"silk", p.silkEncoderPath},
+	} {
+		if _, err := it.resolve(); err != nil {
+			parts = append(parts, it.name+"✗")
+		} else {
+			parts = append(parts, it.name+"✓")
+		}
+	}
+	return strings.Join(parts, " ")
 }
 
 func maskToken(t string) string {

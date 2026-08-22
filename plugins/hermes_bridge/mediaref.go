@@ -5,6 +5,8 @@ package main
 // 好处：闲聊里刷图不再白耗 CDN 下载与 SSE 大包，OnEvent 也不被下载阻塞。
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +18,28 @@ import (
 )
 
 const (
-	mediaRefTTL        = 2 * time.Hour       // 引用有效期；微信 CDN 链接本身也会过期，不必久留
-	mediaRefMax        = 128                 // 引用上限，超出淘汰最旧
-	fetchMediaMaxBytes = 20 << 20            // 单个媒体 20MB 上限（HTTP 直传，不受 SSE JSON 限制）
-	fetchMediaTimeout  = 15 * time.Second    // 按需下载超时（在 HTTP handler 里，可比 OnEvent 宽）
+	mediaRefTTL        = 2 * time.Hour    // 引用有效期；微信 CDN 链接本身也会过期，不必久留
+	mediaRefMax        = 128              // 引用上限，超出淘汰最旧
+	fetchMediaMaxBytes = 20 << 20         // 单个媒体 20MB 上限（HTTP 直传，不受 SSE JSON 限制）
+	fetchMediaTimeout  = 15 * time.Second // 按需下载超时（在 HTTP handler 里，可比 OnEvent 宽）
 )
+
+// mediaRunID 本次插件运行的随机前缀，拼进 media_ref。
+//
+// 为什么必须有：适配器把取回的媒体按 ref 名缓存在磁盘上（TTL 24h），命中即直接返回。
+// 而 ref 曾是纯进程内自增计数，桥重启后又从 1 开始——于是重启后 24h 内的 media_1
+// 会命中上一轮遗留的旧文件，agent 拿到的是上次会话里的另一张图，且没有任何报错。
+// 加运行前缀后跨重启不可能重号。
+var mediaRunID = newMediaRunID()
+
+func newMediaRunID() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// 熵不可用时退回时间戳；只要不同运行间不同即可，不需要密码学强度
+		return fmt.Sprintf("%x", time.Now().UnixNano()&0xffffffff)
+	}
+	return hex.EncodeToString(b[:])
+}
 
 var errMediaRefNotFound = errors.New("media_ref 不存在或已过期")
 
@@ -80,7 +99,7 @@ func (p *BridgePlugin) registerInboundMedia(msg *message.Message) string {
 		return ""
 	}
 
-	ref := fmt.Sprintf("media_%d", p.mediaSeq.Add(1))
+	ref := fmt.Sprintf("media_%s_%d", mediaRunID, p.mediaSeq.Add(1))
 	p.mediaMu.Lock()
 	if p.mediaRefs == nil {
 		p.mediaRefs = map[string]*inboundMedia{}

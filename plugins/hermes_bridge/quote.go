@@ -25,7 +25,7 @@ const (
 )
 
 // buildQuoteXML 构造 AppMsg type=57 引用卡片 XML（顶层仅 <appmsg>）。
-// 字段与转义对齐 t-doc/wechat-msg-formats.md §三；省略真机噪音块。
+// 字段与转义对齐真机 dump；省略真机噪音块。
 func buildQuoteXML(q quoteOutbound) (string, error) {
 	reply := truncateRunes(strings.TrimSpace(q.Reply), maxQuoteReplyRunes)
 	svrid := strings.TrimSpace(q.SvrID)

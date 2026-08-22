@@ -4349,6 +4349,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 # plugin registration helpers
 # ---------------------------------------------------------------------------
 
+# 契约自检的告警去重标记（check_requirements 会被反复调用）
+_CONTRACT_WARNED = False
+
 
 def probe_hermes_contract() -> Dict[str, Any]:
     """自检本适配器依赖的 Hermes 内部结构是否还在。
@@ -4374,16 +4377,19 @@ def probe_hermes_contract() -> Dict[str, Any]:
     # 平台适配器契约（缺了本插件根本没意义，顶层 import 已经会炸，这里只作记录）
     _check("gateway.platforms.base.BasePlatformAdapter", lambda: BasePlatformAdapter is not None)
 
-    # session 重置依赖的 SessionStore 私有成员
+    # session 重置依赖的 SessionStore 成员。
+    # 只查类上必然存在的方法：_lock / _entries 是 __init__ 里赋的实例属性，
+    # 在类对象上永远 hasattr=False，拿它们判定会恒报「自检未通过」（曾误报）。
+    # 实例属性缺失由 _reset_chat_sessions 在运行时捕获并如实报错，不必在此预判。
     def _probe_session_store() -> bool:
         from gateway.session import SessionStore  # type: ignore
 
         return all(
             hasattr(SessionStore, a)
-            for a in ("_lock", "_ensure_loaded_locked", "_entries", "reset_session", "_save_entries")
+            for a in ("_ensure_loaded_locked", "reset_session", "_save_entries")
         )
 
-    _check("gateway.session.SessionStore 私有成员(_entries/reset_session/…)", _probe_session_store)
+    _check("gateway.session.SessionStore 方法(reset_session/_save_entries/…)", _probe_session_store)
 
     # busy 判定依赖的审批模块
     def _probe_approval() -> bool:
@@ -4403,10 +4409,15 @@ def probe_hermes_contract() -> Dict[str, Any]:
 
     ok = not missing
     if missing:
-        logger.warning(
-            "[wechat_golem] Hermes 内部结构自检未通过（相关功能会降级）: %s",
-            "; ".join(missing),
-        )
+        # 只告警一次：check_requirements 会被 Hermes 反复调用（实测一次启动里 3 次），
+        # 每次都打会把同一条刷进日志，看着像出了三个问题。
+        global _CONTRACT_WARNED
+        if not _CONTRACT_WARNED:
+            _CONTRACT_WARNED = True
+            logger.warning(
+                "[wechat_golem] Hermes 内部结构自检未通过（相关功能会降级）: %s",
+                "; ".join(missing),
+            )
     return {"ok": ok, "missing": missing, "checked": checked}
 
 

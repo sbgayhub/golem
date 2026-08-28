@@ -362,14 +362,34 @@ ops 的 `/logs` 与 `/tools/check` 读的就是上述文件尾，避免每次 SS
 
 ### 6.5 日志体积与轮转
 
-**Hermes 自带轮转，不要再配 logrotate。** 实测 `agent.log` / `gateway.log` 单文件
-上限 5MB、`errors.log` 2MB，滚为 `.1` / `.2` / `.3` 并按 backupCount 顶掉最旧的，
-典型总占用几十 MB。给同一批文件再加 logrotate 会和 Python 的
+**Hermes 自带轮转，不要再配 logrotate。** 给同一批文件再加 logrotate 会和 Python 的
 `RotatingFileHandler` 打架：`copytruncate` 清零后 handler 里缓存的写入位置仍是旧值，
 会在错误时机触发滚动，两套 backup 命名也会互相覆盖。
 
+> **轮转在生效是确定的**（`.1` / `.2` / `.3` 备份文件即证据）。但下面的**具体数值是从
+> 备份文件大小与份数反推的，未核 Hermes 源码** —— 写日志的是 Hermes 本体，源码不在
+> 本仓库，ops 只读不写。依据：`agent.log.N` 均为 524xxxx 字节（紧贴 5 MiB=5242880 但
+> 从不越线），`errors.log.N` 均为 209xxxx（紧贴 2 MiB）；「逼近某阈值而从不超过」是
+> `maxBytes` 写入前判断的行为特征。要坐实请查 Hermes 本体的 logging 配置。
+
+| 文件 | 单文件上限（反推） | 已见备份 | 占用封顶 |
+|------|------|------|------|
+| `agent.log` | 5 MB | `.1` `.2` `.3` | ~20 MB |
+| `gateway.log` | 5 MB | 仅 `.1`（写得慢，还没滚够，份数未知） | ≥10 MB |
+| `errors.log` | 2 MB | `.1` `.2` | ~6 MB |
+
+封顶 = 上限 × (`backupCount` + 1)。实测全目录总占用几十 MB，日常不必清理。
+
+**`grep` 记得带 `*`**：默认只搜当前文件，滚动之前的历史在备份里。
+
+```bash
+grep -a '关键词' ~/.hermes/profiles/wechat/logs/gateway.log*
+```
+
+ops 的 `/logs` 同样只读当前文件，查滚动前的内容仍需 SSH 上去带 `*`。
+
 例外是 `gateway-exit-diag.log` / `gateway-shutdown-diag.log`：每次退出/关停追加、
-**没有轮转**。平时几百 KB 无妨，重启频繁时会持续增长，可按需清零：
+**没有轮转**（无 `.1` 备份即证据）。平时几百 KB 无妨，重启频繁时会持续增长，可按需清零：
 
 ```bash
 cd ~/.hermes/profiles/wechat/logs

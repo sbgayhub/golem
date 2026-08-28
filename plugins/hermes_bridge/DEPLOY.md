@@ -324,11 +324,14 @@ grep -a 'registration crashed' "$HERMES_HOME/logs/errors.log" "$HERMES_HOME/logs
 
 **日志占地方 / 要不要清**
 
-Hermes 自带轮转（`agent.log`、`gateway.log` 5MB，`errors.log` 2MB，滚 `.1`/`.2`/`.3`），
-典型总占用几十 MB，**不必清、也不要再配 logrotate**——两套轮转管同一批文件会打架。
-例外是 `gateway-exit-diag.log` / `gateway-shutdown-diag.log`，无轮转、只追加，
-要清就 `truncate -s 0`（**别用 `rm`**：进程持着 fd，删了空间不释放且读不到新日志）。
-详见 `hermes_ops/README.md` §6.5。
+Hermes 自带轮转（滚为 `.1`/`.2`/`.3`），实测全目录总占用几十 MB，**不必清、也不要再配
+logrotate**——两套轮转管同一批文件会打架。单文件上限约 `agent.log`/`gateway.log` 5MB、
+`errors.log` 2MB，但**这两个数值是从备份文件大小反推的、未核 Hermes 源码**（轮转在生效
+是确定的，备份文件即证据）。例外是 `gateway-exit-diag.log` / `gateway-shutdown-diag.log`，
+无轮转、只追加，要清就 `truncate -s 0`（**别用 `rm`**：进程持着 fd，删了空间不释放且
+读不到新日志）。详见 `hermes_ops/README.md` §6.5。
+
+`grep` 查历史记得带 `*`（`gateway.log*`），否则只搜到最后一次滚动至今的内容。
 
 **排查日志里的告警时先看时间戳**
 

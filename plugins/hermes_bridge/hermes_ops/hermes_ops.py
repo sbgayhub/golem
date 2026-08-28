@@ -202,9 +202,10 @@ def tail_file(path: Path, n: int = 80, grep: str | None = None) -> dict:
     if not path.is_file():
         return {"path": str(path), "exists": False, "lines": []}
     n = max(1, min(n, 500))
-    # seek 到尾部只读窗口内的字节，不把整个文件读进内存：
-    # Hermes 的 RotatingFileHandler 把单个日志压在 5MB 上限内，但 read_bytes()
-    # 仍会按文件实际大小分配一次，管理台每点一次日志页就来一发。
+    # seek 到尾部只读窗口内的字节，不把整个文件读进内存：read_bytes() 会按文件实际
+    # 大小分配一次，管理台每点一次日志页就来一发。Hermes 侧有日志轮转（观测到 .1/.2/.3
+    # 备份，单文件上限约 5MB——该数值由备份大小反推，未核其源码），所以常规日志收益有限；
+    # 但 gateway-*-diag.log 这类只追加、无轮转的文件没有上限，那才是这里要防的。
     # 二进制安全：按字节读尾再按行拆（日志可能非严格 UTF-8）。
     try:
         size = path.stat().st_size

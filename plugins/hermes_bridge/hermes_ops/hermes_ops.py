@@ -195,20 +195,31 @@ def systemd_status() -> dict:
     }
 
 
+TAIL_WINDOW_BYTES = 2 << 20  # 单次最多回看 2MB 尾部
+
+
 def tail_file(path: Path, n: int = 80, grep: str | None = None) -> dict:
     if not path.is_file():
         return {"path": str(path), "exists": False, "lines": []}
     n = max(1, min(n, 500))
-    # 二进制安全：按字节读尾再按行拆（日志可能非严格 UTF-8）
+    # seek 到尾部只读窗口内的字节，不把整个文件读进内存：
+    # Hermes 的 RotatingFileHandler 把单个日志压在 5MB 上限内，但 read_bytes()
+    # 仍会按文件实际大小分配一次，管理台每点一次日志页就来一发。
+    # 二进制安全：按字节读尾再按行拆（日志可能非严格 UTF-8）。
     try:
-        data = path.read_bytes()
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > TAIL_WINDOW_BYTES:
+                f.seek(-TAIL_WINDOW_BYTES, os.SEEK_END)
+            data = f.read()
     except OSError as e:
         return {"path": str(path), "exists": True, "error": str(e), "lines": []}
-    # 最多扫最后 2MB
-    if len(data) > 2 << 20:
-        data = data[-(2 << 20) :]
+    truncated = size > TAIL_WINDOW_BYTES
     text = data.decode("utf-8", errors="replace")
     lines = text.splitlines()
+    # 窗口起点多半落在某行中间，丢掉这半行，避免返回残缺日志
+    if truncated and lines:
+        lines = lines[1:]
     if grep:
         g = grep.lower()
         lines = [ln for ln in lines if g in ln.lower()]
@@ -219,6 +230,8 @@ def tail_file(path: Path, n: int = 80, grep: str | None = None) -> dict:
         "lines": lines,
         "grep": grep or "",
         "returned": len(lines),
+        "file_bytes": size,
+        "window_truncated": truncated,
     }
 
 

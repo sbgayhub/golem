@@ -322,11 +322,26 @@ grep -a 'registration crashed' "$HERMES_HOME/logs/errors.log" "$HERMES_HOME/logs
 插件启动期的 `print(...)` 走 stdout → journald，用 systemd 跑时：
 `journalctl --user -u hermes-gateway-<profile>.service -n 150 --no-pager`（漏了 `--user` 会恒空）。
 
+**日志占地方 / 要不要清**
+
+Hermes 自带轮转（`agent.log`、`gateway.log` 5MB，`errors.log` 2MB，滚 `.1`/`.2`/`.3`），
+典型总占用几十 MB，**不必清、也不要再配 logrotate**——两套轮转管同一批文件会打架。
+例外是 `gateway-exit-diag.log` / `gateway-shutdown-diag.log`，无轮转、只追加，
+要清就 `truncate -s 0`（**别用 `rm`**：进程持着 fd，删了空间不释放且读不到新日志）。
+详见 `hermes_ops/README.md` §6.5。
+
+**排查日志里的告警时先看时间戳**
+
+日志是追加的，历史告警会一直留在文件里。`grep` 出旧行不代表问题还在——先确认时间戳
+是不是本次重启之后的，再看措辞是否与当前代码一致。换了适配器代码后，`adapter.py` 与
+`__init__.py` **必须同时更新**：loader 加载的是 `__init__.py`，只换前者会继续跑旧代码，
+表现为「文件明明是新的，日志还在报老问题」。
+
 **「新开会话」报成功但没生效**
 
 适配器依赖 gateway 的 `SessionStore` 私有成员，Hermes 升级改名后会失效。现在这种情况会
-明确返回失败并说明原因，不再谎报「已重置」。启动时也会自检并在日志里报
-`Hermes 内部结构自检未通过`。
+明确返回失败并说明原因，不再谎报「已重置」；成功时回执带上重置了几个 session。
+启动时也会自检并在日志里报 `Hermes 内部结构自检未通过`（同一次启动只报一条）。
 
 **群里上下文串台 / 一个群一堆 session**
 

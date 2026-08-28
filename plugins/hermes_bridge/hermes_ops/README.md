@@ -357,6 +357,28 @@ journalctl --user -u hermes-gateway-wechat.service -n 100 --no-pager
 ```
 
 ops 的 `/logs` 与 `/tools/check` 读的就是上述文件尾，避免每次 SSH 手敲。
+单次最多回看尾部 2MB（`TAIL_WINDOW_BYTES`），响应里的 `file_bytes` 与
+`window_truncated` 说明文件实际多大、有没有被窗口截断。
+
+### 6.5 日志体积与轮转
+
+**Hermes 自带轮转，不要再配 logrotate。** 实测 `agent.log` / `gateway.log` 单文件
+上限 5MB、`errors.log` 2MB，滚为 `.1` / `.2` / `.3` 并按 backupCount 顶掉最旧的，
+典型总占用几十 MB。给同一批文件再加 logrotate 会和 Python 的
+`RotatingFileHandler` 打架：`copytruncate` 清零后 handler 里缓存的写入位置仍是旧值，
+会在错误时机触发滚动，两套 backup 命名也会互相覆盖。
+
+例外是 `gateway-exit-diag.log` / `gateway-shutdown-diag.log`：每次退出/关停追加、
+**没有轮转**。平时几百 KB 无妨，重启频繁时会持续增长，可按需清零：
+
+```bash
+cd ~/.hermes/profiles/wechat/logs
+truncate -s 0 gateway-exit-diag.log gateway-shutdown-diag.log
+```
+
+清日志一律用 `truncate -s 0`，**不要 `rm` 或 `mv`**：写入进程持着 fd，删除或换掉
+inode 后它会继续往已删除的文件写——磁盘空间不释放（`du` 变小而 `df` 不变），
+而且新日志再也读不到，只能重启才恢复。
 
 ---
 

@@ -174,12 +174,25 @@ func (p *BridgePlugin) limitBody(max int64, next http.Handler) http.Handler {
 
 // ---- handlers ----
 
+// handleHealth 探活；同时暴露桥的生效捷径词表与外部工具状态。
+//
+// 词表：适配器侧有同名 env，两边不一致时桥会先把消息吞在群门闩里，
+// 适配器根本收不到（症状是「改了 env 没反应」）。适配器 connect 后拉一次做比对，
+// 不一致就告警——让这类静默分叉可见。无鉴权路径，故只报词表不报 token / 白名单。
 func (p *BridgePlugin) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(fmt.Sprintf(
-		`{"status":"ok","service":"golem-hermes-bridge","subscribers":%d}`,
-		p.hub.subscriberCount(),
-	)))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"service":     "golem-hermes-bridge",
+		"version":     p.GetMetadata().GetVersion(),
+		"subscribers": p.hub.subscriberCount(),
+		"tokens": map[string]any{
+			"interrupt":     p.interruptTokens(),
+			"session_reset": p.sessionResetTokens(),
+			"archive":       p.archiveTokens(),
+			"approval":      p.approvalTokens(),
+		},
+		"media_tools": p.mediaToolStatus(),
+	})
 }
 
 func (p *BridgePlugin) handleStatusAPI(w http.ResponseWriter, _ *http.Request) {
@@ -323,7 +336,7 @@ type sendRecordReq struct {
 
 // sendQuoteReq 出站「引用回复」卡片（AppMsg type=57，一期仅文本 refer type=1）。
 // XML 由桥拼装；svrid 用字符串防 JSON 大整数精度丢失。
-// 见 t-doc/wechat-msg-formats.md §三。
+// 字段形态对齐真机 dump。
 type sendQuoteReq struct {
 	ChatID      string `json:"chat_id"`
 	Reply       string `json:"reply"`                 // 自己的回复 → appmsg/title
@@ -595,11 +608,11 @@ func (p *BridgePlugin) handleSendRecord(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	xml := buildChatRecordXML(title, desc, items, defaultAvatar)
-	// 诊断：落盘出站 XML（仅含图时），对照手机「过期」与真机 dump
+	// 诊断：落盘出站 XML（仅含图且配了 record_xml_dump_dir 时），对照手机「过期」与真机 dump
 	if imgN > 0 {
-		if path, err := dumpOutboundRecordXML(xml); err != nil {
+		if path, err := dumpOutboundRecordXML(p.configSnapshot().RecordXMLDumpDir, xml); err != nil {
 			slog.Warn("[hermes_bridge] 出站 record XML 落盘失败", "err", err)
-		} else {
+		} else if path != "" {
 			slog.Info("[hermes_bridge] 出站 record XML 已落盘", "path", path, "xml_len", len(xml))
 		}
 	}

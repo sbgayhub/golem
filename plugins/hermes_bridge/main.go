@@ -70,9 +70,33 @@ type Config struct {
 	// EmojiBurstCooldownMin 同会话两次表情连发触发最小间隔（分钟）
 	EmojiBurstCooldownMin int `toml:"emoji_burst_cooldown_minutes" comment:"同会话两次表情连发触发最小间隔分钟数"`
 
-	// SilkEncoderPath silk_v3_encoder.exe 路径，用于语音转腾讯变体 SILK（优先）。
-	// 若未配置或执行失败则降级为纯 ffmpeg AMR。
-	SilkEncoderPath string `toml:"silk_encoder_path" comment:"silk_v3_encoder.exe 路径（语音优先 SILK）"`
+	// ---- 控制捷径词表 ----
+	// 这四组词由桥判定后旁路群门闩立即透传；适配器侧有同名 env
+	// （WECHAT_GOLEM_INTERRUPT_TOKENS / _RESET_TOKENS / _ARCHIVE_TOKENS）。
+	// 两侧必须一致：桥不认的词会被群门闩吞掉，适配器根本收不到，
+	// 症状是「改了 env 完全没反应」。桥的生效词表由 GET /health 暴露，
+	// 适配器连上后会比对并告警。留空 = 用内置默认集（见 session.go）。
+	//
+	// InterruptTokens 打断捷径整句词（不限主人）
+	InterruptTokens []string `toml:"interrupt_tokens" comment:"打断捷径整句词；空=默认[\"打断\"]；须与适配器 WECHAT_GOLEM_INTERRUPT_TOKENS 一致"`
+	// SessionResetTokens 新开会话捷径整句词（仅主人）
+	SessionResetTokens []string `toml:"session_reset_tokens" comment:"新开会话整句词；空=默认[\"新开会话\",\"新对话\"]；须与适配器 WECHAT_GOLEM_RESET_TOKENS 一致"`
+	// ArchiveTokens 归档群友捷径整句词（仅主人）
+	ArchiveTokens []string `toml:"archive_tokens" comment:"归档捷径整句词；空=默认5词；须与适配器 WECHAT_GOLEM_ARCHIVE_TOKENS 一致"`
+	// ApprovalTokens 审批捷径整句词（仅主人）；两词组合 all/approve/deny + session/always/once/all 始终生效
+	ApprovalTokens []string `toml:"approval_tokens" comment:"审批捷径整句词；空=默认16词（yes/no/是/否/同意…）"`
+
+	// SilkEncoderPath silk_v3_encoder 可执行文件路径，用于语音转腾讯变体 SILK（优先）。
+	// 若未配置或执行失败则降级为纯 ffmpeg AMR。Windows 填 …\silk_v3_encoder.exe，
+	// Linux/macOS 填自行编译出的可执行文件路径。
+	SilkEncoderPath string `toml:"silk_encoder_path" comment:"silk_v3_encoder 可执行文件路径（语音优先 SILK；Windows 为 .exe）"`
+
+	// FFmpegPath ffmpeg 可执行文件路径；留空则在 PATH 中查找。
+	// 语音转码、表情/视频处理、视频抽封面都要它；装了但没进 PATH 是最常见的部署故障。
+	FFmpegPath string `toml:"ffmpeg_path" comment:"ffmpeg 可执行文件路径；留空=在 PATH 中查找"`
+	// FFprobePath ffprobe 可执行文件路径；留空则在 PATH 中查找。
+	// 取音频/视频时长用；与 ffmpeg 可能不在同一目录，故单独配置。
+	FFprobePath string `toml:"ffprobe_path" comment:"ffprobe 可执行文件路径；留空=在 PATH 中查找"`
 
 	// SilkMaxBytes 单条语音 SILK 编码后最大字节数，超预算先降码率再裁时长。
 	// 微信语音通道约 1MB 上限，但小预算有利于稳定编码；0 不限制。
@@ -89,15 +113,19 @@ type Config struct {
 	RecordImageVia    string `toml:"record_image_via" comment:"url嵌记录实验：空=关（仅media_ref）；send=会话Send；cdn=filehelper Upload"`
 	RecordImageRevoke *bool  `toml:"record_image_revoke" comment:"via=send 时是否撤回临时图；默认 false"`
 
+	// RecordXMLDumpDir 诊断用：把出站聊天记录卡片 XML 落盘到该目录，便于与真机 dump 对比。
+	// 空 = 不落盘（默认）。勿填相对路径：host 的工作目录随启动方式变化。
+	RecordXMLDumpDir string `toml:"record_xml_dump_dir" comment:"诊断：出站记录卡片 XML 落盘目录（绝对路径）；空=不落盘"`
+
 	// AdminListen 管理台 HTTP 监听；默认仅本机，与业务桥 Listen 分离。
 	// 空字符串 = 不启管理台。远程管理请走 Tailscale 等，勿轻易改成 0.0.0.0。
 	AdminListen string `toml:"admin_listen" comment:"管理台监听，默认 127.0.0.1:8644；空=关闭；勿与业务口混用 0.0.0.0"`
 	// AdminToken 管理 API / UI 登录用 Bearer；须与业务 Token 不同。空则管理 API 拒绝读写。
 	AdminToken string `toml:"admin_token" comment:"管理台 Bearer token，勿与业务 token 相同"`
 
-	// HermesOpsURL VM 上 hermes_ops 基址（只读运维代理）。空=管理台 Hermes 页不可用。
-	// 例：http://192.168.47.128:8650  （Ubuntu VM IP，勿与业务桥 8643 混淆）
-	HermesOpsURL string `toml:"hermes_ops_url" comment:"VM hermes_ops 基址，空=关闭 Hermes 只读页"`
+	// HermesOpsURL Hermes 所在主机上 hermes_ops 的基址（只读运维代理）。空=管理台 Hermes 页不可用。
+	// 例：http://<hermes-host>:8650 （与业务桥 8643 不同口；填 Hermes 侧地址，不是桥自己的地址）
+	HermesOpsURL string `toml:"hermes_ops_url" comment:"hermes_ops 基址，如 http://<hermes-host>:8650；空=关闭 Hermes 只读页"`
 	// HermesOpsToken 调用 ops 时的 Bearer；可与 admin_token 不同；空则代理不带鉴权头
 	HermesOpsToken string `toml:"hermes_ops_token" comment:"调用 hermes_ops 的 Bearer，建议与 ops 侧一致"`
 }
@@ -177,6 +205,15 @@ func main() {
 				EmojiBurstCount:       3,
 				EmojiBurstWindowSec:   30,
 				EmojiBurstCooldownMin: 5,
+				// 捷径词表留空 = 用 session.go 的内置默认集；显式配置后须与适配器 env 同步
+				InterruptTokens:    []string{},
+				SessionResetTokens: []string{},
+				ArchiveTokens:      []string{},
+				ApprovalTokens:     []string{},
+				// 外部程序留空 = 在 PATH 中查找
+				FFmpegPath:       "",
+				FFprobePath:      "",
+				RecordXMLDumpDir: "",
 				// 管理台默认只绑本机，与业务 0.0.0.0:8643 分离
 				AdminListen:    "127.0.0.1:8644",
 				AdminToken:     "",

@@ -1,10 +1,11 @@
 name: wechat_golem
 label: WeChat (Golem bridge)
 kind: platform
-version: 1.0.0
+version: 1.1.0
 description: >
-  Hermes 官方平台适配器：经 Golem hermes_bridge HTTP/SSE 桥接微信。
-  适配器跑在 Ubuntu VM，Golem 桥跑在 Windows 宿主机。
+  Hermes 官方平台适配器：经 Golem hermes_bridge 的 HTTP/SSE 桥接微信。
+  支持群门闩、真 @、图片/视频/语音/表情收发、表情收藏库与群成员档案。
+  Golem 侧与 Hermes 侧可同机或分机部署（桥地址由 WECHAT_GOLEM_BASE_URL 指定）。
 author: ovo
 requires_env:
   - name: WECHAT_GOLEM_TOKEN
@@ -12,7 +13,7 @@ requires_env:
     prompt: "Bridge token"
     password: true
   - name: WECHAT_GOLEM_BASE_URL
-    description: "宿主机桥地址，如 http://192.168.47.1:8643（VM 经 VMware 宿主机网关，不跟物理网卡 DHCP 变）"
+    description: "Golem 桥地址，如 http://127.0.0.1:8643（同机）或 http://<golem-host>:8643（分机）"
     prompt: "Bridge base URL"
     password: false
 optional_env:
@@ -31,4 +32,45 @@ optional_env:
   - name: WECHAT_GOLEM_ALLOW_ALL_USERS
     description: "true 时白名单会话内全员可聊（危险命令仍走审批）"
     prompt: "Allow all users (true/false)"
+    password: false
+  # ---- 持久数据目录：决定表情库/群友档案/入站媒体落在哪，迁移与备份需要一并搬 ----
+  - name: WECHAT_GOLEM_STICKER_DIR
+    description: "表情收藏库目录，默认 $HERMES_HOME/wechat_stickers；多 profile 想共享才改成公共路径"
+    prompt: "Sticker library dir (blank = profile default)"
+    password: false
+  - name: WECHAT_GOLEM_MEMBER_PROFILE_DIR
+    description: "群成员档案目录，默认 $HERMES_HOME/wechat_member_profiles"
+    prompt: "Member profile dir (blank = profile default)"
+    password: false
+  - name: WECHAT_GOLEM_MEDIA_DIR
+    description: "入站媒体缓存目录（24h 自动清理），默认 $HERMES_HOME/wechat_inbound_media"
+    prompt: "Inbound media cache dir (blank = profile default)"
+    password: false
+  # ---- 控制捷径词表：改这些必须同步 Golem 桥 config.toml 的同名字段 ----
+  # 桥承担群门闩，桥不认的词会被吞掉、适配器根本收不到（症状是「改了没反应」）。
+  # 桥 v0.13+ 的 /health 会报生效词表，适配器连上后比对不一致即告警。
+  - name: WECHAT_GOLEM_INTERRUPT_TOKENS
+    description: "打断整句词，逗号分隔；默认「打断」。须与桥 interrupt_tokens 一致"
+    prompt: "Interrupt tokens (blank = 打断)"
+    password: false
+  - name: WECHAT_GOLEM_RESET_TOKENS
+    description: "新开会话整句词，逗号分隔；默认「新开会话,新对话」。须与桥 session_reset_tokens 一致"
+    prompt: "Session reset tokens (blank = default)"
+    password: false
+  - name: WECHAT_GOLEM_ARCHIVE_TOKENS
+    description: "归档群友整句词，逗号分隔；默认「归档,归档群友,记群友,记成员,归档成员」。须与桥 archive_tokens 一致"
+    prompt: "Archive tokens (blank = default)"
+    password: false
+  - name: WECHAT_GOLEM_SILENCE_TOKENS
+    description: "追加的沉默整句词（命中则不回消息）；纯出站判定，桥侧不参与，可自由改"
+    prompt: "Extra silence tokens"
+    password: false
+  # ---- 入站合批去抖：默认 0（桥侧已有 3s 群去抖）----
+  - name: WECHAT_GOLEM_DEBOUNCE_MS
+    description: "私聊去抖毫秒，默认 0=立即投递（靠单飞+pending 合并积压）"
+    prompt: "DM debounce ms (blank = 0)"
+    password: false
+  - name: WECHAT_GOLEM_GROUP_DEBOUNCE_MS
+    description: "群聊去抖毫秒，默认 0（桥已做去抖，一般不必再设）"
+    prompt: "Group debounce ms (blank = 0)"
     password: false

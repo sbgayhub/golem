@@ -319,7 +319,7 @@ func (p *BridgePlugin) silentUploadImageBytes(data []byte) (cdnUploadMeta, error
 }
 
 // uploadImageForRecord 实验路径：为 url 嵌图重新取两套 CDN（勿作产品默认）。
-// via=send：会话内 SendImage；via=cdn：filehelper Upload。见 t-doc/wechat-msg-formats.md §2.8。
+// via=send：会话内 SendImage；via=cdn：filehelper Upload。
 func (p *BridgePlugin) uploadImageForRecord(chatID string, data []byte, name, avatar, timeStr, desc string) (recordItem, error) {
 	if len(data) == 0 {
 		return recordItem{}, fmt.Errorf("图片数据为空")
@@ -529,9 +529,13 @@ func cdnIDPrefix(id string) string {
 	return id[:16]
 }
 
-// dumpOutboundRecordXML 把即将 SendApp 的 type=19 XML 落到 host 工作目录，便于和真机 dump 对比。
-func dumpOutboundRecordXML(xml string) (string, error) {
-	dir := "hermes_bridge_record_dump"
+// dumpOutboundRecordXML 把即将 SendApp 的 type=19 XML 落到 dir，便于和真机 dump 对比。
+// dir 为空时不落盘（默认）：这是纯诊断路径，之前写死相对目录会随 host 工作目录漂移。
+func dumpOutboundRecordXML(dir, xml string) (string, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return "", nil
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}

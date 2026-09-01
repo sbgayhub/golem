@@ -122,66 +122,103 @@ func markFlushedLocked(st *sessionState, seqs []int64) {
 
 // ---- 触发判定 ----
 
-// isInterruptReplyText 与适配器 _is_interrupt_command 对齐：整句打断词（默认「打断」）。
-// 不用 Contains，避免「别打断我」之类误触。
-func isInterruptReplyText(text string) bool {
-	raw := strings.TrimSpace(strings.ToLower(text))
+// 控制捷径的内置默认词表。配置留空时用这里的值。
+//
+// 这四组词必须与适配器侧保持一致（适配器读 WECHAT_GOLEM_INTERRUPT_TOKENS /
+// _RESET_TOKENS / _ARCHIVE_TOKENS）。桥承担群门闩：桥不认的词会被门闩吞掉，
+// 适配器根本收不到，症状是「改了 env 完全没反应」。GET /health 暴露桥的生效
+// 词表，适配器连上后比对并告警，让这类分叉可见。
+var (
+	defaultInterruptTokens    = []string{"打断"}
+	defaultSessionResetTokens = []string{"新开会话", "新对话"}
+	defaultArchiveTokens      = []string{"归档", "归档群友", "记群友", "记成员", "归档成员"}
+	defaultApprovalTokens     = []string{
+		"yes", "y", "no", "n",
+		"always", "session", "once", "all",
+		"deny", "approve",
+		"是", "否", "同意", "拒绝", "允许", "取消",
+	}
+)
+
+// normalizeTokens 清洗配置词表：去空白、转小写、去重。空则返回 fallback。
+func normalizeTokens(configured, fallback []string) []string {
+	out := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, t := range configured {
+		t = strings.ToLower(strings.TrimSpace(t))
+		if t == "" {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		out = append(out, t)
+	}
+	if len(out) == 0 {
+		return fallback
+	}
+	return out
+}
+
+// matchToken 整句匹配（大小写无关）。不用 Contains，避免「别打断我」之类误触。
+func matchToken(text string, tokens []string) bool {
+	raw := strings.ToLower(strings.TrimSpace(text))
 	if raw == "" {
 		return false
 	}
-	// 与适配器 WECHAT_GOLEM_INTERRUPT_TOKENS 默认一致；桥不读 Hermes env，写死默认集。
-	switch raw {
-	case "打断":
-		return true
-	default:
-		return false
+	for _, t := range tokens {
+		if raw == t {
+			return true
+		}
 	}
+	return false
+}
+
+func (p *BridgePlugin) interruptTokens() []string {
+	return normalizeTokens(p.configSnapshot().InterruptTokens, defaultInterruptTokens)
+}
+
+func (p *BridgePlugin) sessionResetTokens() []string {
+	return normalizeTokens(p.configSnapshot().SessionResetTokens, defaultSessionResetTokens)
+}
+
+func (p *BridgePlugin) archiveTokens() []string {
+	return normalizeTokens(p.configSnapshot().ArchiveTokens, defaultArchiveTokens)
+}
+
+func (p *BridgePlugin) approvalTokens() []string {
+	return normalizeTokens(p.configSnapshot().ApprovalTokens, defaultApprovalTokens)
+}
+
+// isInterruptReplyText 与适配器 _is_interrupt_command 对齐：整句打断词（默认「打断」）。
+func (p *BridgePlugin) isInterruptReplyText(text string) bool {
+	return matchToken(text, p.interruptTokens())
 }
 
 // isSessionResetText 与适配器 _is_session_reset_command 对齐：整句「新开会话/新对话」。
 // 仅主人生效（OnEvent 里判 SpeakerIsOwner）；桥只透传+作废未推批，真正清 gateway session 归适配器。
-func isSessionResetText(text string) bool {
-	switch strings.TrimSpace(text) {
-	case "新开会话", "新对话":
-		return true
-	}
-	return false
+func (p *BridgePlugin) isSessionResetText(text string) bool {
+	return matchToken(text, p.sessionResetTokens())
 }
 
 // isMemberArchiveText 与适配器归档捷径对齐：主人整句「归档/归档群友/…」。
 // 必须立即透传（群门闩否则吞掉无 @ 的短词）；适配器再扩成完整 upsert 指令投给 agent。
-// 词表与适配器 WECHAT_GOLEM_ARCHIVE_TOKENS 默认保持一致；桥不读 Hermes env。
-func isMemberArchiveText(text string) bool {
-	switch strings.TrimSpace(text) {
-	case "归档", "归档群友", "记群友", "记成员", "归档成员":
-		return true
-	}
-	return false
+func (p *BridgePlugin) isMemberArchiveText(text string) bool {
+	return matchToken(text, p.archiveTokens())
 }
 
 // isApprovalReplyText 与适配器 _is_approval_reply 对齐的子集：整句审批捷径。
 // 这类消息必须立刻透传、不去抖，否则卡审批。
-func isApprovalReplyText(text string) bool {
+// 两词组合（all/approve/deny + session/always/once/all）不受配置影响，始终生效。
+func (p *BridgePlugin) isApprovalReplyText(text string) bool {
 	raw := strings.TrimSpace(text)
 	if raw == "" {
 		return false
 	}
-	tokens := map[string]struct{}{
-		"yes": {}, "y": {}, "no": {}, "n": {},
-		"always": {}, "session": {}, "once": {}, "all": {},
-		"deny": {}, "approve": {},
-		"是": {}, "否": {}, "同意": {}, "拒绝": {}, "允许": {}, "取消": {},
-	}
 	parts := strings.Fields(strings.ToLower(raw))
 	if len(parts) == 1 {
-		if _, ok := tokens[parts[0]]; ok {
-			return true
-		}
-		// 中文整句大小写无关已在 lower；原文也查一遍（中文）
-		if _, ok := tokens[raw]; ok {
-			return true
-		}
-		return false
+		return matchToken(parts[0], p.approvalTokens())
 	}
 	if len(parts) == 2 {
 		a, b := parts[0], parts[1]

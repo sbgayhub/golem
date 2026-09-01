@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-# hermes_ops — Hermes gateway 只读运维小服务（跑在 Ubuntu VM）
+# hermes_ops — Hermes gateway 只读运维小服务（跑在 Hermes 所在主机）
 #
 # 设计：
-#   - 只读：健康 / systemd 状态 / 工具注册自检 / sessions 列表 / 日志尾
+#   - 只读：健康 / 服务状态 / 工具注册自检 / sessions 列表 / 日志尾
 #   - 禁止任意 shell；命令与路径白名单
-#   - 默认绑 0.0.0.0:8650（供 Windows 宿主机桥反代）；生产可改 127.0.0.1 + SSH 隧道
+#   - 默认只绑 127.0.0.1；要给别的主机（如桥所在机器）访问必须显式设 token + 监听地址
 #   - Bearer 与桥 hermes_ops_token 对齐（环境变量 HERMES_OPS_TOKEN）
 #
 # 依赖：标准库 only
 #
 # 启动示例：
-#   export HERMES_HOME=$HOME/.hermes/profiles/wechat
+#   export HERMES_PROFILE=wechat            # 派生 HERMES_HOME 与 systemd 单元名
 #   export HERMES_OPS_TOKEN='长随机串'
-#   export HERMES_OPS_LISTEN=0.0.0.0:8650
+#   export HERMES_OPS_LISTEN=0.0.0.0:8650   # 需被别的主机访问时才改；必须同时设 token
 #   python3 hermes_ops.py
 #
 # systemd user 单元示例见同目录 hermes-ops.service.example
@@ -22,27 +22,46 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-LISTEN = os.environ.get("HERMES_OPS_LISTEN", "0.0.0.0:8650")
+# profile 名统一派生 HERMES_HOME 默认值、systemd 单元名与 CLI -p 参数，
+# 免得换 profile 要改三处。三者仍可各自用自己的 env 覆盖。
+PROFILE = (os.environ.get("HERMES_PROFILE") or "wechat").strip() or "wechat"
+
+# 监听：默认只绑回环。无 token 时暴露到 LAN 等于把日志/会话/群友档案敞开读写，
+# 所以默认值取安全的一侧，要放开必须显式配 token（见 main 的启动校验）。
+LISTEN = os.environ.get("HERMES_OPS_LISTEN", "127.0.0.1:8650")
 TOKEN = (os.environ.get("HERMES_OPS_TOKEN") or "").strip()
 HERMES_HOME = Path(
     os.environ.get("HERMES_HOME")
-    or os.path.expanduser("~/.hermes/profiles/wechat")
+    or os.path.expanduser(f"~/.hermes/profiles/{PROFILE}")
 ).resolve()
-UNIT = os.environ.get("HERMES_GATEWAY_UNIT", "hermes-gateway-wechat.service")
-LOG_DIR = HERMES_HOME / "logs"
-# gateway 状态库常见路径（Hermes 版本可能变；找不到则 sessions 返回 note）
-STATE_CANDIDATES = [
-    HERMES_HOME / "state.db",
-    HERMES_HOME / "data" / "state.db",
-    HERMES_HOME / "gateway" / "state.db",
-]
+UNIT = os.environ.get("HERMES_GATEWAY_UNIT", f"hermes-gateway-{PROFILE}.service")
+
+# 服务管理器：auto 时探测；none 表示本机不用 systemd（容器 / macOS / supervisor），
+# 此时 systemd 状态不参与红灯判定，免得 /overview 恒红且报一串 FileNotFoundError。
+SERVICE_MANAGER = (
+    os.environ.get("HERMES_OPS_SERVICE_MANAGER") or "auto"
+).strip().lower()
+
+LOG_DIR = Path(os.environ.get("HERMES_OPS_LOG_DIR") or (HERMES_HOME / "logs"))
+# gateway 状态库：显式指定优先，否则按常见路径猜（Hermes 版本可能变）
+STATE_CANDIDATES = (
+    [Path(os.path.expanduser(os.environ["HERMES_OPS_STATE_DB"]))]
+    if os.environ.get("HERMES_OPS_STATE_DB")
+    else [
+        HERMES_HOME / "state.db",
+        HERMES_HOME / "data" / "state.db",
+        HERMES_HOME / "gateway" / "state.db",
+    ]
+)
 
 LOG_FILES = {
     "agent": LOG_DIR / "agent.log",
@@ -50,10 +69,13 @@ LOG_FILES = {
     "errors": LOG_DIR / "errors.log",
 }
 
+# 两个目录都从 HERMES_HOME 派生，与适配器侧默认值保持一致。
+# 之前表情库走 Path.home()、档案走 HERMES_HOME，ops 与 gateway 跑在不同用户下时
+# 表现为「表情库空、档案正常」，排查方向完全被误导。
 STICKER_DIR = Path(
     os.path.expanduser(
         os.environ.get("WECHAT_GOLEM_STICKER_DIR")
-        or str(Path.home() / ".hermes" / "wechat_stickers")
+        or str(HERMES_HOME / "wechat_stickers")
     )
 ).resolve()
 MEMBER_DIR = Path(
@@ -63,13 +85,43 @@ MEMBER_DIR = Path(
     )
 ).resolve()
 
-# 工具自检关键词（与 t-doc 踩坑一致）
+# 工具自检关键词
 TOOL_OK_PAT = re.compile(
     r"tool registered:\s*(wechat_\w+)|verify=ok=True", re.I
 )
 TOOL_CRASH_PAT = re.compile(
     r"registration crashed|query tools registration crashed", re.I
 )
+
+
+def detect_service_manager() -> str:
+    """探测服务管理器：systemd-user / systemd-system / none。
+
+    HERMES_OPS_SERVICE_MANAGER 显式指定时直接采用。auto 时要求同时有 systemctl
+    可执行文件与 /run/systemd/system（后者是「本机真的以 systemd 为 init」的标准判据，
+    容器/WSL1/macOS 都没有）。再看有无 user bus 决定 --user 还是系统级。
+    """
+    if SERVICE_MANAGER in ("none", "systemd-user", "systemd-system"):
+        return SERVICE_MANAGER
+    if not shutil.which("systemctl") or not os.path.isdir("/run/systemd/system"):
+        return "none"
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    if uid is not None and os.path.isdir(f"/run/user/{uid}/systemd"):
+        return "systemd-user"
+    if os.environ.get("DBUS_SESSION_BUS_ADDRESS") or os.environ.get("XDG_RUNTIME_DIR"):
+        return "systemd-user"
+    return "systemd-system"
+
+
+_SERVICE_MANAGER_RESOLVED = detect_service_manager()
+
+
+def _systemctl_argv(*args: str) -> list[str]:
+    argv = ["systemctl"]
+    if _SERVICE_MANAGER_RESOLVED == "systemd-user":
+        argv.append("--user")
+    argv.extend(args)
+    return argv
 
 
 def _run(argv: list[str], timeout: float = 8.0) -> tuple[int, str]:
@@ -88,14 +140,30 @@ def _run(argv: list[str], timeout: float = 8.0) -> tuple[int, str]:
 
 
 def systemd_status() -> dict:
-    code, out = _run(
-        ["systemctl", "--user", "is-active", UNIT], timeout=5
-    )
+    """服务状态。非 systemd 环境返回 supported=False 且 ok=None，不参与红灯。
+
+    之前无条件跑 systemctl --user：容器 / macOS / WSL1 / supervisor / 系统级 systemd
+    下 is_active 会变成 "FileNotFoundError: ..." 之类的异常串，/overview 恒红，
+    而红灯文本完全指错方向。
+    """
+    if _SERVICE_MANAGER_RESOLVED == "none":
+        return {
+            "unit": UNIT,
+            "manager": "none",
+            "supported": False,
+            "is_active": "unknown",
+            "ok": None,
+            "props": {},
+            "note": (
+                "本机未使用 systemd（容器 / macOS / WSL1 / supervisor 等），已跳过服务状态检查。"
+                "如确实在用 systemd，设 HERMES_OPS_SERVICE_MANAGER=systemd-user 或 systemd-system。"
+            ),
+        }
+
+    code, out = _run(_systemctl_argv("is-active", UNIT), timeout=5)
     active = out.strip() if code == 0 else out.strip() or "unknown"
     code2, show = _run(
-        [
-            "systemctl",
-            "--user",
+        _systemctl_argv(
             "show",
             UNIT,
             "-p",
@@ -108,7 +176,7 @@ def systemd_status() -> dict:
             "NRestarts",
             "-p",
             "ActiveEnterTimestamp",
-        ],
+        ),
         timeout=5,
     )
     props = {}
@@ -118,6 +186,8 @@ def systemd_status() -> dict:
             props[k.strip()] = v.strip()
     return {
         "unit": UNIT,
+        "manager": _SERVICE_MANAGER_RESOLVED,
+        "supported": True,
         "is_active": active,
         "ok": active == "active",
         "props": props,
@@ -125,20 +195,32 @@ def systemd_status() -> dict:
     }
 
 
+TAIL_WINDOW_BYTES = 2 << 20  # 单次最多回看 2MB 尾部
+
+
 def tail_file(path: Path, n: int = 80, grep: str | None = None) -> dict:
     if not path.is_file():
         return {"path": str(path), "exists": False, "lines": []}
     n = max(1, min(n, 500))
-    # 二进制安全：按字节读尾再按行拆（日志可能非严格 UTF-8）
+    # seek 到尾部只读窗口内的字节，不把整个文件读进内存：read_bytes() 会按文件实际
+    # 大小分配一次，管理台每点一次日志页就来一发。Hermes 侧有日志轮转（观测到 .1/.2/.3
+    # 备份，单文件上限约 5MB——该数值由备份大小反推，未核其源码），所以常规日志收益有限；
+    # 但 gateway-*-diag.log 这类只追加、无轮转的文件没有上限，那才是这里要防的。
+    # 二进制安全：按字节读尾再按行拆（日志可能非严格 UTF-8）。
     try:
-        data = path.read_bytes()
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            if size > TAIL_WINDOW_BYTES:
+                f.seek(-TAIL_WINDOW_BYTES, os.SEEK_END)
+            data = f.read()
     except OSError as e:
         return {"path": str(path), "exists": True, "error": str(e), "lines": []}
-    # 最多扫最后 2MB
-    if len(data) > 2 << 20:
-        data = data[-(2 << 20) :]
+    truncated = size > TAIL_WINDOW_BYTES
     text = data.decode("utf-8", errors="replace")
     lines = text.splitlines()
+    # 窗口起点多半落在某行中间，丢掉这半行，避免返回残缺日志
+    if truncated and lines:
+        lines = lines[1:]
     if grep:
         g = grep.lower()
         lines = [ln for ln in lines if g in ln.lower()]
@@ -149,6 +231,8 @@ def tail_file(path: Path, n: int = 80, grep: str | None = None) -> dict:
         "lines": lines,
         "grep": grep or "",
         "returned": len(lines),
+        "file_bytes": size,
+        "window_truncated": truncated,
     }
 
 
@@ -205,9 +289,9 @@ def list_sessions(limit: int = 40) -> dict:
     limit = max(1, min(limit, 200))
     db = find_state_db()
     if db is None:
-        # 尝试 hermes CLI
+        # 尝试 hermes CLI（profile 名跟随 HERMES_PROFILE，不写死）
         code, out = _run(
-            ["hermes", "-p", "wechat", "sessions", "list"], timeout=15
+            ["hermes", "-p", PROFILE, "sessions", "list"], timeout=15
         )
         return {
             "source": "cli" if code == 0 else "none",
@@ -215,12 +299,19 @@ def list_sessions(limit: int = 40) -> dict:
             "ok": code == 0,
             "raw": out[-8000:],
             "sessions": [],
-            "note": "未找到 state.db；已尝试 hermes sessions list"
-            if code == 0
-            else "未找到 state.db 且 CLI 失败；请确认 HERMES_HOME",
+            "note": (
+                f"未找到 state.db；已尝试 hermes -p {PROFILE} sessions list"
+                if code == 0
+                else (
+                    f"未找到 state.db 且 CLI 失败；确认 HERMES_HOME={HERMES_HOME}、"
+                    f"HERMES_PROFILE={PROFILE}，或显式设 HERMES_OPS_STATE_DB 指向 state.db"
+                )
+            ),
         }
     try:
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=3)
+        # 用 as_uri() 而非手拼 f"file:{db}"：Windows 路径含盘符与反斜杠，
+        # 直接拼进 URI 会被 SQLite 的 URI 解析器搞坏，/sessions 恒失败。
+        conn = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=3)
         conn.row_factory = sqlite3.Row
         cur = conn.cursor()
         # 表结构随版本变化：尝试常见名
@@ -709,7 +800,8 @@ def overview() -> dict:
     st = systemd_status()
     tools = tools_check()
     alerts = []
-    if not st.get("ok"):
+    # ok 为 None = 非 systemd 环境，不判红；只有明确 False 才是真异常
+    if st.get("ok") is False:
         alerts.append(f"gateway 单元未 active：{st.get('is_active')}")
     if not tools.get("ok"):
         if tools.get("crash_samples"):
@@ -720,8 +812,10 @@ def overview() -> dict:
         alerts.append(f"日志目录不存在: {LOG_DIR}")
     return {
         "ok": len(alerts) == 0,
+        "profile": PROFILE,
         "hermes_home": str(HERMES_HOME),
         "systemd": st,
+        "service_manager": _SERVICE_MANAGER_RESOLVED,
         "tools_ok": tools.get("ok"),
         "tools_hint": tools.get("hint"),
         "alerts": alerts,
@@ -730,17 +824,22 @@ def overview() -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "hermes_ops/0.5"
+    server_version = "hermes_ops/0.6"
 
     def log_message(self, fmt: str, *args) -> None:
         # 简洁 stdout
-        sys_stderr = __import__("sys").stderr
-        print(f"[hermes_ops] {self.address_string()} {fmt % args}", file=sys_stderr)
+        print(f"[hermes_ops] {self.address_string()} {fmt % args}", file=sys.stderr)
 
     def _auth_ok(self) -> bool:
         if not TOKEN:
-            # 未设 token：仅建议本机；仍放行但打警告一次可接受
-            return True
+            # 无 token 只在回环监听时放行（启动校验已拒绝「非回环 + 无 token」）。
+            # 双重保险：即使监听地址判断有偏差，也不把接口敞给非本机来源。
+            peer = ""
+            try:
+                peer = str(self.client_address[0] or "")
+            except Exception:
+                peer = ""
+            return peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
         got = (self.headers.get("Authorization") or "").strip()
         if got.lower().startswith("bearer "):
             got = got[7:].strip()
@@ -773,10 +872,14 @@ class Handler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "service": "hermes_ops",
-                    "version": "0.5",
+                    "version": "0.6",
+                    "profile": PROFILE,
                     "hermes_home": str(HERMES_HOME),
+                    "log_dir": str(LOG_DIR),
                     "sticker_dir": str(STICKER_DIR),
                     "member_dir": str(MEMBER_DIR),
+                    "service_manager": _SERVICE_MANAGER_RESOLVED,
+                    "auth": "token" if TOKEN else "loopback-only",
                     "ts": int(time.time()),
                 },
             )
@@ -977,18 +1080,44 @@ class Handler(BaseHTTPRequestHandler):
 
 
 
+def _is_loopback_host(host: str) -> bool:
+    return host.strip().strip("[]") in ("127.0.0.1", "localhost", "::1", "")
+
+
 def main() -> None:
     host, _, port_s = LISTEN.partition(":")
     port = int(port_s or "8650")
+
+    # 非回环监听 + 无 token = 把日志、会话列表、群友档案（含 PUT/DELETE 写删）
+    # 敞给同网段任何人。这种组合直接拒绝启动，而不是打一行警告后照样跑。
+    if not TOKEN and not _is_loopback_host(host):
+        print(
+            f"[hermes_ops] 拒绝启动：监听 {host}:{port} 不是回环地址，但 HERMES_OPS_TOKEN 为空。\n"
+            "            这会让同网段任何人可读日志/会话/群友档案，并可写删档案。\n"
+            "            请设 HERMES_OPS_TOKEN=<长随机串>，或改 HERMES_OPS_LISTEN=127.0.0.1:"
+            f"{port} 走 SSH 隧道。",
+            file=sys.stderr,
+            flush=True,
+        )
+        raise SystemExit(2)
+
     if not TOKEN:
         print(
-            "[hermes_ops] 警告: HERMES_OPS_TOKEN 为空，接口无鉴权",
+            "[hermes_ops] 警告: HERMES_OPS_TOKEN 为空，仅接受来自本机的请求",
             flush=True,
         )
     print(
-        f"[hermes_ops] listen={host}:{port} HERMES_HOME={HERMES_HOME} unit={UNIT} stickers={STICKER_DIR} members={MEMBER_DIR}",
+        f"[hermes_ops] listen={host}:{port} profile={PROFILE} HERMES_HOME={HERMES_HOME} "
+        f"unit={UNIT} service_manager={_SERVICE_MANAGER_RESOLVED} "
+        f"stickers={STICKER_DIR} members={MEMBER_DIR}",
         flush=True,
     )
+    if _SERVICE_MANAGER_RESOLVED == "none":
+        print(
+            "[hermes_ops] 提示: 未检测到 systemd，服务状态检查已跳过（不计入 /overview 红灯）。"
+            "如在用 systemd 请设 HERMES_OPS_SERVICE_MANAGER=systemd-user|systemd-system",
+            flush=True,
+        )
     httpd = ThreadingHTTPServer((host, port), Handler)
     try:
         httpd.serve_forever()

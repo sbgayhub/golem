@@ -20,7 +20,7 @@ type recordItem struct {
 	Avatar  string // 头像 URL，可空
 	Time    string // 展示时间，可空则用当前时间
 
-	// 图片 CDN（真机 datatype=2；见 t-doc/wechat-msg-formats.md）
+	// 图片 CDN（真机 datatype=2）
 	DataURL   string // cdndataurl
 	DataKey   string // cdndatakey
 	FullMD5   string // fullmd5

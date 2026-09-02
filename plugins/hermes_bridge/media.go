@@ -191,6 +191,7 @@ func (p *BridgePlugin) sendAppMessage(receiver string, subType uint32, xml strin
 				"sub_type", subType, "msg_type", msgType.GetCode())
 			return errAppMsgNoNewID
 		}
+		p.recordOutbox(receiver, "card", content, resp.GetNewId())
 		return nil
 	})
 }
@@ -250,6 +251,7 @@ func (p *BridgePlugin) sendImageMessageWithMeta(receiver string, data []byte) (c
 	if meta.FileSize == 0 {
 		meta.FileSize = uint32(len(data))
 	}
+	p.recordOutbox(receiver, "image", "[图片]", meta.NewMsgID)
 	return meta, uploadOK, nil
 }
 
@@ -286,6 +288,7 @@ func (p *BridgePlugin) sendEmojiMessage(receiver string, data []byte) (uploadOut
 				"bytes", len(data), "md5", md5hex)
 			return errEmojiNoNewID
 		}
+		p.recordOutbox(receiver, "emoji", "[表情]", resp.GetNewId())
 		return nil
 	})
 }
@@ -320,6 +323,7 @@ func (p *BridgePlugin) sendEmojiByMd5(receiver string, md5hex string) (uploadOut
 				"md5", md5hex)
 			return errEmojiNoNewID
 		}
+		p.recordOutbox(receiver, "emoji", "[表情]", resp.GetNewId())
 		return nil
 	})
 }
@@ -884,8 +888,11 @@ func (p *BridgePlugin) sendVoiceBytes(targetID string, srcData []byte) error {
 		Content:  "[语音]",
 		Data:     &message.Message_Voice{Voice: voice},
 	}
-	if _, err := p.message.Send(msg); err != nil {
+	resp, err := p.message.Send(msg)
+	if err != nil {
 		if strings.Contains(err.Error(), "code: -104") {
+			// 已知：报错但实际送达。没有回包就没有 NewMsgID，
+			// 这条语音因此**进不了出站记账**，事后撤不了（只影响撤回，发送正常）。
 			slog.Warn("[hermes_bridge] 语音发送返回 -104（经验证实际已送达）",
 				"err", err,
 				"converted", converted,
@@ -904,6 +911,7 @@ func (p *BridgePlugin) sendVoiceBytes(targetID string, srcData []byte) error {
 		)
 		return fmt.Errorf("发送语音失败: %w", err)
 	}
+	p.recordOutbox(targetID, "voice", "[语音]", resp.GetNewId())
 	return nil
 }
 
@@ -958,8 +966,12 @@ func (p *BridgePlugin) sendVideoMessage(targetID string, videoData []byte) (uplo
 		}},
 	}
 	return p.callSendWithRetry(uploadVideoTimeout, func() error {
-		_, err := p.message.Send(msg)
-		return err
+		resp, err := p.message.Send(msg)
+		if err != nil {
+			return err
+		}
+		p.recordOutbox(targetID, "video", "[视频]", resp.GetNewId())
+		return nil
 	})
 }
 
@@ -1003,7 +1015,10 @@ func (p *BridgePlugin) sendPlainTextWithReminds(targetID, content string, remind
 		Content:  content,
 		Data:     &message.Message_Text{Text: text},
 	}
-	_, err := p.message.Send(msg)
+	resp, err := p.message.Send(msg)
+	if err == nil {
+		p.recordOutbox(targetID, "text", content, resp.GetNewId())
+	}
 	return err
 }
 

@@ -85,6 +85,13 @@ type Config struct {
 	ArchiveTokens []string `toml:"archive_tokens" comment:"归档捷径整句词；空=默认5词；须与适配器 WECHAT_GOLEM_ARCHIVE_TOKENS 一致"`
 	// ApprovalTokens 审批捷径整句词（仅主人）；两词组合 all/approve/deny + session/always/once/all 始终生效
 	ApprovalTokens []string `toml:"approval_tokens" comment:"审批捷径整句词；空=默认16词（yes/no/是/否/同意…）"`
+	// RevokeTokens 撤回捷径整句词（仅主人）。桥内闭环：命中即撤自己最近一条，
+	// 不推 SSE、不惊动 agent，故**无需**与适配器 env 同步（适配器侧没有对应词表）。
+	RevokeTokens []string `toml:"revoke_tokens" comment:"撤回捷径整句词（仅主人，桥内直接撤，不推 SSE）；空=默认[\"撤回\",\"撤回吧\",\"撤回上一条\"]"`
+	// RevokeWindowSec 撤回时间窗（秒）。微信规则为 120s；超窗时桥直接拒绝并说明，
+	// 因为 host 的 Revoke 无论微信是否真撤都回成功，发出去只会得到假成功。
+	// 负数=不卡窗口（自担风险），0=用默认 120。
+	RevokeWindowSec int `toml:"revoke_window_seconds" comment:"撤回时间窗秒数，0=默认120（微信规则）；负数=不检查"`
 
 	// SilkEncoderPath silk_v3_encoder 可执行文件路径，用于语音转腾讯变体 SILK（优先）。
 	// 若未配置或执行失败则降级为纯 ffmpeg AMR。Windows 填 …\silk_v3_encoder.exe，
@@ -177,6 +184,10 @@ type BridgePlugin struct {
 	// via=send 嵌图时产生的临时图片 NewId，send_record 成功后撤回
 	recordRevokeMu    sync.Mutex
 	recordRevokeQueue []recordRevokeJob
+
+	// 出站消息记账：会话 → 最近发出的 NewMsgID，供「撤回」定位（见 outbox.go）
+	outMu  sync.Mutex
+	outbox map[string][]outboxEntry
 }
 
 func (p *BridgePlugin) configSnapshot() Config {
@@ -210,6 +221,9 @@ func main() {
 				SessionResetTokens: []string{},
 				ArchiveTokens:      []string{},
 				ApprovalTokens:     []string{},
+				// 撤回捷径：桥内闭环，无适配器侧 env 需要同步
+				RevokeTokens:    []string{},
+				RevokeWindowSec: defaultRevokeWindowSec,
 				// 外部程序留空 = 在 PATH 中查找
 				FFmpegPath:       "",
 				FFprobePath:      "",
@@ -228,6 +242,7 @@ func main() {
 		emojiSeen:   map[string][]time.Time{},
 		lastBurst:   map[string]time.Time{},
 		mediaRefs:   map[string]*inboundMedia{},
+		outbox:      map[string][]outboxEntry{},
 		dlClient:    &http.Client{Timeout: 20 * time.Second},
 		mediaClient: &http.Client{Timeout: 120 * time.Second},
 	}

@@ -21,7 +21,7 @@
 Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
 
-**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice`（named schema + session-map 兜底 `chat_id`）。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`）。agent 验收勿 curl 桥。
+**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice` / `wechat_revoke`（named schema + session-map 兜底 `chat_id`）。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`）。agent 验收勿 curl 桥。
 
 ## 安装
 
@@ -60,7 +60,7 @@ profile `wechat` 时 `HERMES_HOME=~/.hermes/profiles/wechat`：
 ```bash
 # ✅ 正确（唯一应保留的副本）
 mkdir -p "$HERMES_HOME/plugins/platforms/wechat_golem"
-cp PLUGIN.yaml adapter.py "$HERMES_HOME/plugins/platforms/wechat_golem/"
+cp plugin.yaml adapter.py "$HERMES_HOME/plugins/platforms/wechat_golem/"   # manifest 必须全小写
 # loader 要包名：__init__.py 必须与 adapter.py 同内容
 cp "$HERMES_HOME/plugins/platforms/wechat_golem/adapter.py" \
    "$HERMES_HOME/plugins/platforms/wechat_golem/__init__.py"
@@ -81,7 +81,7 @@ WECHAT_GOLEM_ALLOWED_USERS=主人wxid
 HERMES_EXEC_ASK=1
 ```
 
-持久数据目录（默认都在 profile 内，迁移/备份要一并搬；完整清单见 `PLUGIN.yaml`）：
+持久数据目录（默认都在 profile 内，迁移/备份要一并搬；完整清单见 `plugin.yaml`）：
 `WECHAT_GOLEM_STICKER_DIR`（表情库）、`WECHAT_GOLEM_MEMBER_PROFILE_DIR`（群友档案）、
 `WECHAT_GOLEM_MEDIA_DIR`（入站媒体缓存）。
 
@@ -117,6 +117,13 @@ hermes -p wechat gateway install   # systemd user 服务
 | `/hermes help` | 帮助 |
 
 Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未知命令」且不会进 Hermes**。
+
+## 撤回
+
+- agent 侧：`wechat_revoke`（无参=撤本会话最近一条；`count` 撤多条；`message_id` 指定某条）→ 桥 `POST /revoke`
+- 主人侧：微信整句 **`撤回`** 由**桥**直接处理，**不推 SSE**——agent 的历史里会留着那条已被撤掉的消息，platform_hint 已提醒它别据此以为消息还在
+- 微信限时约 2 分钟；桥自己卡窗口（`revoke_window_seconds`）并把原因写进 `error`，可原样转告用户
+- 只能撤机器人自己发的（桥出站记账里的）；撤成功微信自带提示，别再发「已撤回」
 
 ## 审批
 

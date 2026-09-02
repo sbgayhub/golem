@@ -12,7 +12,8 @@ import (
 // 命令由 host 层校验主人权限；群聊里 member.Username == owner 也放行。
 
 type hermesStatusCommand struct {
-	_ struct{} `cmd:"hermes status" help:"查看 hermes_bridge 状态与白名单" usage:"/hermes status" example:"/hermes status"`
+	_       struct{} `cmd:"hermes status" help:"查看 hermes_bridge 状态与白名单" usage:"/hermes status" example:"/hermes status"`
+	Command *plugin.Command
 }
 
 type hermesEnableCommand struct {
@@ -76,8 +77,9 @@ func (p *BridgePlugin) OnCommand(cmd *plugin.Command) (string, error) {
 	return plugin.DispatchCommand(cmd)
 }
 
-func (p *BridgePlugin) handleStatus(hermesStatusCommand) (string, error) {
-	return p.statusText(), nil
+func (p *BridgePlugin) handleStatus(cmd hermesStatusCommand) (string, error) {
+	// 带上当前会话，好让「可撤 N 条」这类按会话的计数落在主人正看的这个会话上
+	return p.statusText(cmd.Command.GetSender().GetUsername()), nil
 }
 
 func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
@@ -103,6 +105,9 @@ func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
 		"私聊：白名单或主人会话逐条推。审批回复用 yes/no（不要 /approve）。",
 		"打断：群/私聊整句发「打断」（不限主人）立即透传，并取消该会话未推去抖批。",
 		"归档：主人整句「归档/归档群友/记群友」立即透传，适配器扩成批量写群友档案（不清会话）。",
+		"撤回：主人整句「" + strings.Join(p.revokeTokens(), "/") + "」由桥直接撤掉自己最近发的一条" +
+			fmt.Sprintf("（不经 agent；微信 %ds 时限内有效）。", int(p.revokeWindow().Seconds())),
+		"　　　agent 也可自己撤（wechat_revoke 工具 → 桥 /revoke，可带 count 撤多条）。",
 		"危险终端命令由 Hermes approvals 审批，不在本插件裁决。",
 	}, "\n"), nil
 }

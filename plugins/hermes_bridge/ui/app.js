@@ -119,6 +119,9 @@
     interrupt: "打断",
     no_adapter: "无适配器",
     gate_not_triggered: "未触发门闩",
+    revoke_shortcut: "撤回捷径",
+    revoke_none: "无可撤消息",
+    revoke_failed: "撤回失败",
   };
 
   function fmtDate(ts) {
@@ -608,6 +611,7 @@
         context_only: "只记不推",
         dropped: "丢弃",
         cancelled: "打断作废",
+        revoked: "撤回捷径（桥内处理，未推 SSE）",
       }[ev.kind] || ev.kind;
     el.innerHTML = `<div class="k" title="${esc(kindTitle)}">${esc(ev.kind || "?")}</div>
       <div><span class="muted">${esc(fmtTs(ev.ts))} #${ev.id}</span>

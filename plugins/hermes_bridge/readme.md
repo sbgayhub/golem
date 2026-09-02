@@ -12,7 +12,7 @@ Golem 侧微信桥，对接 Hermes 官方平台适配器 `wechat_golem`（源码
          └ hermes_bridge
               ├ 业务口 listen（默认 0.0.0.0:8643，给 Hermes 适配器）
               │    GET  /health  /events  /media  /status  /self …
-              │    POST /send  /send_image|video|voice|emoji  /send_app|record|quote …
+              │    POST /send  /send_image|video|voice|emoji  /send_app|record|quote  /revoke …
               └ 管理台 admin_listen（默认 127.0.0.1:8644，仅本机）
                    GET  /ui/              单页管理台（embed）
                    GET  /admin/meta       无鉴权发现入口（供以后 Golem 总控跳转）
@@ -32,6 +32,7 @@ Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 - **斗图门闩**（v0.3.2+）：滑动窗口内第 N 条群表情（默认 30s 内第 3 条）也触发一批推送，`trigger_reason=emoji_burst`、addressing 保持 none（同冒泡语义，只解释送达原因）；同会话默认 5 分钟最多一次，`emoji_burst_count = 0` 关闭。这是 agent 参与斗图与自动收藏的主要入口。
 - **群聊身份信封**：每条批次消息都附桥生成的 `verified`、发送者、`sender_role`、`addressing`、`trigger_reason`；`trigger_names` 命中时为 `addressing=self` / `trigger_reason=trigger_name`。真 @/引用别人保持 `other_participants`，即使因冒泡送达也不得被当成发给本机器人；详见部署笔记 §五。
 - **控制捷径**（立即 SSE、不去抖、不包群上下文）：审批 `yes/no/...`（**仅主人**；适配器还会核对确有待审批项，群内无待审批则忽略、私聊转普通消息，防止闲聊「同意/no」误唤醒 agent）；整句 **`打断`**（不限主人）。打断时还**作废**该会话当前未推送的去抖批次（停 timer + 标水位），避免 ⚡ 后又被尸体批次叫醒。整句 **`新开会话`/`新对话`**（仅主人，v0.3.3+）：同样作废未推批后透传 `trigger_reason=session_reset`，适配器进程内 `reset_session` 清空该会话 gateway 历史并回执——聊天里就地重置，**长期记忆与群成员档案不受影响**。整句 **`归档`/`归档群友`/`记群友`**（仅主人）：旁路门闩透传 `member_archive`，适配器扩成批量 `wechat_member_profile_upsert` 指令（**不清 session**；见下方「群成员偏好档案」）。
+- **撤回**（v0.14+）：整句 **`撤回`/`撤回吧`/`撤回上一条`**（**仅主人**）是唯一**不透传**的捷径——桥直接撤掉自己在该会话最近发的一条，不推 SSE、不惊动 agent（微信撤回窗口只约 2 分钟，绕一圈常赶不上），只在撤不掉时回一句原因。agent 主动撤走 tool `wechat_revoke` → `POST /revoke`（可 `count` 撤多条、`message_id` 指定某条）。所有出站消息都记账（每会话最近 24 条 / TTL 10 分钟，见 `outbox.go`），各 `send*` 接口因此也回 `message_id`。超过 `revoke_window_seconds`（默认 120）的直接拒绝并说明原因：host 的 `Revoke` 无论微信是否真撤都回成功，不拦就是「假成功」。词表 `revoke_tokens` **桥侧独有，适配器无对应 env**。
 - **私聊**：桥逐条 SSE；**适配器**侧同会话单飞 + pending（防 ⚡ Interrupt，见 `wechat_golem/README.md` §入站交付）。
 - **出站 AppMsg 卡片**（音乐等）：适配器拼好 `<appmsg>` XML + `sub_type` 后 POST `/send_app`，桥走 `message.Send`(TypeAppMusic) 经 host `SendApp` 发送；复用媒体防叠发策略（超时不重开 Send）。业务（搜歌、选 AppID 来源显示）全在 Hermes 侧，桥只补数据通道。
 - **出站聊天记录卡片**（对齐 `meme list` / `/pm list`，可嵌图）：POST `/send_record` 传 `items`（文本 `{name,content}` 与图片 `{type:image,url|media_ref}` 可混排；或 `lines`/`records` 纯文本），桥拼 AppMsg `type=19`（图片 datatype=2）后 `sendAppMessage`；tool `wechat_send_record`。图片勿传 data_b64。
@@ -72,6 +73,10 @@ interrupt_tokens     = []       # 默认 ["打断"]
 session_reset_tokens = []       # 默认 ["新开会话", "新对话"]
 archive_tokens       = []       # 默认 ["归档","归档群友","记群友","记成员","归档成员"]
 approval_tokens      = []       # 默认 yes/no/是/否/同意/拒绝… 共 16 个
+
+# 撤回（仅主人；桥内闭环，**不**需要同步适配器 env）
+revoke_tokens         = []      # 默认 ["撤回","撤回吧","撤回上一条"]
+revoke_window_seconds = 120     # 微信撤回时限；超窗直接拒绝并说明（0=用默认，负数=不检查）
 
 # Hermes 只读 ops（hermes_ops；管理台「Hermes」页）
 # hermes_ops_url   = "http://<hermes-host>:8650"   # 同机可用 127.0.0.1
@@ -142,7 +147,8 @@ emoji_burst_cooldown_minutes = 5
 
 Host 会拦截**所有**未注册的 `/` 命令（`未知命令：/xxx`），消息不会进本桥。  
 Hermes 危险命令审批请用微信纯文本 **`yes` / `no`**，不要发 `/approve`。  
-停当前 agent 任务：微信纯文本整句 **`打断`**（群/私聊均可；群须在白名单）。不要发 `@机器人 打断` 指望当令牌——须单独一条整句 `打断`。
+停当前 agent 任务：微信纯文本整句 **`打断`**（群/私聊均可；群须在白名单）。不要发 `@机器人 打断` 指望当令牌——须单独一条整句 `打断`。  
+撤回机器人刚发的消息：主人纯文本整句 **`撤回`**（桥直接撤，不经 agent；微信只给约 2 分钟）。`/hermes status` 会报当前会话还剩几条可撤——「可撤 0 条」即解释「喊了没反应」。
 
 ## 构建
 
@@ -157,11 +163,12 @@ task build:hermes_bridge
 完整步骤见 **[DEPLOY.md](DEPLOY.md)**。要点：
 
 1. **只装一份**适配器，路径必须带 `platforms/`（`$HERMES_HOME/plugins/platforms/wechat_golem/`），
-   从本仓库 `wechat_golem/` 拷 `PLUGIN.yaml` + `adapter.py`，再把 `adapter.py` 复制成 `__init__.py`。
+   从本仓库 `wechat_golem/` 拷 `plugin.yaml`（**必须全小写**，Hermes 只扫小写）+ `adapter.py`，
+   再把 `adapter.py` 复制成 `__init__.py`。
    不要同时装 `~/.hermes/plugins/wechat_golem/` 等顶层副本（会改错文件、「修了不生效」）。
 
 2. `.env` 至少要有 `WECHAT_GOLEM_TOKEN`（与桥 `token` 一致）与 `WECHAT_GOLEM_BASE_URL`
-   （桥业务口地址；同机即 `http://127.0.0.1:8643`）。其余可选变量见 `wechat_golem/PLUGIN.yaml`。
+   （桥业务口地址；同机即 `http://127.0.0.1:8643`）。其余可选变量见 `wechat_golem/plugin.yaml`。
 
 3. `config.yaml`：`plugins.enabled` 含 `platforms/wechat_golem`；
    顶层 `group_sessions_per_user: false`（否则群里每人一条 session、上下文串台）；

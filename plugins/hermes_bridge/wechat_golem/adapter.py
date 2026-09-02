@@ -4102,6 +4102,52 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             "hint": "用图像/文件工具按 path 查看",
         }
 
+    async def revoke_message(
+        self,
+        chat_id: str,
+        *,
+        message_id: str = "",
+        count: int = 1,
+    ) -> Dict[str, Any]:
+        """POST 桥 /revoke：撤回机器人自己发出的消息。
+
+        message_id 空 → 撤该会话最近 count 条（桥侧从新到旧，默认 1）；
+        给了 message_id 就只撤那条（值来自各 send 接口回的 message_id）。
+
+        微信只允许撤自己的消息、且限时约 2 分钟。桥自己卡这个窗口并把原因写进
+        error（host 底层无论微信是否真撤都回成功，不卡就是假成功），所以失败时
+        error 基本可以直接转告用户。
+        """
+        cid = str(chat_id or "").strip()
+        if not cid:
+            return {"success": False, "error": "chat_id 必填（当前会话 id）"}
+        body: Dict[str, Any] = {"chat_id": cid}
+        mid = str(message_id or "").strip()
+        if mid:
+            body["message_id"] = mid
+        try:
+            n = int(count)
+        except (TypeError, ValueError):
+            n = 1
+        if n > 1 and not mid:
+            body["count"] = n
+        data = await self._post_json("revoke", body)
+        if not isinstance(data, dict):
+            return {"success": False, "error": "桥 /revoke 返回格式异常"}
+        # 出站类工具统一 warning：便于事后对「嘴上说撤了、微信里还在」
+        logger.warning(
+            "[wechat_golem] revoke chat=%s message_id=%r count=%s success=%s "
+            "revoked=%s failed=%s error=%r",
+            cid,
+            mid,
+            n,
+            data.get("success"),
+            len(data.get("revoked") or []),
+            len(data.get("failed") or []),
+            str(data.get("error") or "")[:200],
+        )
+        return data
+
     async def sticker_save(
         self,
         *,
@@ -4517,8 +4563,8 @@ def _register_wechat_query_tools(ctx) -> None:
     斗图/表情必须 wechat_send_emoji（TypeEmoji）；勿用 send_image 冒充。
     """
     # 启动标记：确认本文件已被加载（无此行=改了没拷/拷错路径）
-    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile)")
-    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile)", flush=True)
+    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke)")
+    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke)", flush=True)
 
     register_tool = getattr(ctx, "register_tool", None)
     if not callable(register_tool):
@@ -4575,6 +4621,7 @@ def _register_wechat_query_tools(ctx) -> None:
             "wechat_send_emoji",
             "wechat_send_voice",
             "wechat_sticker_send",
+            "wechat_revoke",
         ):
             logger.warning(
                 "[wechat_golem] tool result name=%s success=%s error=%r bytes=%s",
@@ -5571,6 +5618,38 @@ def _register_wechat_query_tools(ctx) -> None:
 
     _tool_fetch_media = _make_query_handler("wechat_fetch_media", _run_fetch_media)
 
+    # ---- 撤回 ----
+
+    def _count_from_args(merged: Dict[str, Any], *keys: str) -> int:
+        """取条数：模型常把数字写成字符串，或干脆不传。"""
+        for k in keys:
+            v = (merged or {}).get(k)
+            if isinstance(v, bool):
+                continue
+            if isinstance(v, int):
+                return v
+            if isinstance(v, float):
+                return int(v)
+            if isinstance(v, str) and v.strip().isdigit():
+                return int(v.strip())
+        return 0
+
+    def _run_revoke(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
+        chat_id = _chat_id_from_args(merged)
+        # _str_from_args 定义在下方表情库分组里；同一作用域，tool 触发时早已就绪
+        message_id = _str_from_args(merged, "message_id", "msg_id", "id", "svrid")
+        count = _count_from_args(merged, "count", "n", "last", "num")
+        if not chat_id:
+            return {"success": False, "error": "chat_id 必填（当前会话 id）"}
+        # message_id 必须是纯数字；模型有时把 media_ref / 昵称塞进来
+        if message_id and not message_id.isdigit():
+            message_id = ""
+        return _run_coro(
+            ad.revoke_message(chat_id, message_id=message_id, count=count or 1)
+        )
+
+    _tool_revoke = _make_query_handler("wechat_revoke", _run_revoke)
+
     # ---- 表情收藏库 tools ----
 
     def _str_from_args(merged: Dict[str, Any], *keys: str) -> str:
@@ -6458,6 +6537,39 @@ def _register_wechat_query_tools(ctx) -> None:
             _tool_fetch_media,
         ),
         (
+            "wechat_revoke",
+            "撤回你（机器人）自己刚发到微信的消息。用户说「撤回」「删掉刚才那条」"
+            "「说错了收回」时用它；不传参数就撤该会话最近一条。"
+            "只能撤自己发的，且微信限时约 2 分钟——发出去越久越可能失败，别拖到确认之后再调。"
+            "自己发错（发错群、内容有误、图发重了）也可主动调，不必等用户开口。"
+            "分段发出的长回复要整轮撤：传 count=段数（如 count=3 撤最近三条）。"
+            "撤成功后微信自己会显示「撤回了一条消息」，**别再发一条「已撤回」的文字**——"
+            "无话可说时最终回复只输出 NO_REPLY。失败时 error 里已是可直接转告用户的原因"
+            "（如超过时限），照实说一句即可，不要重试第二次。"
+            "chat_id 省略时 handler 从当前 session 推断。",
+            {
+                "type": "object",
+                "properties": {
+                    "chat_id": {
+                        "type": "string",
+                        "description": "会话 ID（群 xxx@chatroom / 私聊 wxid）；省略则按当前会话推断",
+                    },
+                    "count": {
+                        "type": "integer",
+                        "description": "撤最近几条，默认 1；长回复被切成多段时传段数",
+                    },
+                    "message_id": {
+                        "type": "string",
+                        "description": "只撤指定的一条（桥 send 接口回的 message_id，纯数字）；"
+                        "一般不用填，留空即撤最近的",
+                    },
+                },
+                # 不强制 required：Hermes 常见 args={}；无参就是「撤最近一条」
+                "required": [],
+            },
+            _tool_revoke,
+        ),
+        (
             "wechat_sticker_save",
             "收藏微信表情。入站带 emoji_md5+media_ref 时传 media_ref 即可（自动 fetch、md5 判重）。"
             "同一表情重复 save=合并补标。"
@@ -6760,6 +6872,13 @@ def register(ctx) -> None:
                 "cron、skill、配置、文件、终端等高影响操作必须同时满足主人身份和 addressing=self 或 quoted_self。"
                 "微信适合短消息，Markdown 渲染有限，优先简洁口语。"
                 "危险终端命令会弹审批；等待主人回复 yes/no（不要用斜杠命令）后再继续。"
+                "【撤回】发错了（发错会话、内容有误、图重复）或用户说「撤回/删掉刚才那条/说错了」时，"
+                "调 wechat_revoke：不传参数即撤本会话最近一条，长回复被切成多段时传 count=段数。"
+                "微信只给约 2 分钟窗口——该撤就立刻撤，别先解释再撤、也别等下一轮；"
+                "撤成功微信自带「撤回了一条消息」提示，不要再发「已撤回」这类文字（无话可说就只输出 NO_REPLY）；"
+                "失败时 error 已是可直接转告的原因（如超时限），照实说一句，别重试。"
+                "另：主人在微信整句发「撤回」由桥直接处理、不进你的上下文，"
+                "所以你的历史里可能留着一条已在微信被撤掉的消息——别据此以为它还在群里。"
                 "【wxid 保密】wxid / chatroom id 仅供 tool 内部与真 @ 使用；日常对用户只说昵称/群名。"
                 "除非用户明确要求「告诉我 wxid/微信号内部 id」，回复里不要写出 wxid_… 或完整会话 id，"
                 "也不要写「你的 wxid 是…」「已确认 wxid…」这类复述。"

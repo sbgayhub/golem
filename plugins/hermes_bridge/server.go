@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,8 @@ func (p *BridgePlugin) startHTTP() error {
 	mux.Handle("/send_record", p.authMiddleware(p.limitBody(maxBody, http.HandlerFunc(p.handleSendRecord))))
 	// 引用回复（AppMsg type=57；桥拼 XML，一期仅文本 refer type=1）
 	mux.Handle("/send_quote", p.authMiddleware(p.limitBody(maxBody, http.HandlerFunc(p.handleSendQuote))))
+	// 撤回自己发出的消息（按 message_id 或最近 N 条；见 outbox.go）
+	mux.Handle("/revoke", p.authMiddleware(p.limitBody(1<<20, http.HandlerFunc(p.handleRevoke))))
 	mux.Handle("/status", p.authMiddleware(http.HandlerFunc(p.handleStatusAPI)))
 	// 入站媒体按需取回：SSE 只带 media_ref，agent 要看图时才来取（此刻才下载）
 	mux.Handle("/media", p.authMiddleware(http.HandlerFunc(p.handleFetchMedia)))
@@ -190,6 +193,8 @@ func (p *BridgePlugin) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"session_reset": p.sessionResetTokens(),
 			"archive":       p.archiveTokens(),
 			"approval":      p.approvalTokens(),
+			// revoke 桥内闭环处理，适配器无对应词表，只报出来便于排障与管理台展示
+			"revoke": p.revokeTokens(),
 		},
 		"media_tools": p.mediaToolStatus(),
 	})
@@ -296,6 +301,9 @@ type sendMediaReq struct {
 type sendResult struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
+	// MessageID 刚发出那条的 new_msg_id（十进制字符串，防 JSON 大整数丢精度）。
+	// 供调用方留句柄用于撤回；桥侧撤回不依赖它（/revoke 默认按「最近 N 条」）。
+	MessageID string `json:"message_id,omitempty"`
 }
 
 // sendAppReq 出站 AppMsg 卡片（音乐/链接/聊天记录等）：XML 与 sub_type 由适配器拼好，
@@ -407,7 +415,7 @@ func (p *BridgePlugin) handleSend(w http.ResponseWriter, r *http.Request) {
 	if len(reminds) > 0 {
 		slog.Info("[hermes_bridge] 已发文本(含真@)", "chat", req.ChatID, "mentions", len(reminds))
 	}
-	writeJSON(w, http.StatusOK, sendResult{Success: true})
+	writeJSON(w, http.StatusOK, sendResult{Success: true, MessageID: p.lastOutboxID(req.ChatID)})
 }
 
 // mentionSpacer 微信真 @ 显示名后常用四分之一 em 空格（U+2005），不是普通 ASCII 空格。
@@ -634,10 +642,12 @@ func (p *BridgePlugin) handleSendRecord(w http.ResponseWriter, r *http.Request) 
 		"chat", req.ChatID, "items", len(items), "images", imgN, "title", title, "xml_len", len(xml))
 	// via=send 时撤回为取 CDN 而发的临时图（默认开；诊断可 record_image_revoke=false）
 	p.flushRecordImageRevokes()
+	// caption 之前取：caption 也会记账，晚取就变成 caption 那条的 id 了
+	msgID := p.lastOutboxID(req.ChatID)
 	if cap := strings.TrimSpace(req.Caption); cap != "" {
 		_ = p.sendPlainText(p.resolveReceiver(req.ChatID), cap)
 	}
-	writeJSON(w, http.StatusOK, sendResult{Success: true})
+	writeJSON(w, http.StatusOK, sendResult{Success: true, MessageID: msgID})
 }
 
 func (p *BridgePlugin) handleSendImage(w http.ResponseWriter, r *http.Request) {
@@ -756,10 +766,103 @@ func (p *BridgePlugin) handleSendQuote(w http.ResponseWriter, r *http.Request) {
 		"chat", req.ChatID, "svrid", req.SvrID, "fromusr", req.FromUsr,
 		"chatusr", req.ChatUsr, "displayname", req.DisplayName,
 		"reply_len", len([]rune(req.Reply)), "xml_len", len(xml))
+	msgID := p.lastOutboxID(req.ChatID)
 	if cap := strings.TrimSpace(req.Caption); cap != "" {
 		_ = p.sendPlainText(p.resolveReceiver(req.ChatID), cap)
 	}
-	writeJSON(w, http.StatusOK, sendResult{Success: true})
+	writeJSON(w, http.StatusOK, sendResult{Success: true, MessageID: msgID})
+}
+
+// revokeReq POST /revoke：撤回桥自己发出的消息。
+//
+// message_id 空 → 撤该会话最近 count 条（默认 1，从新到旧）；给了 message_id 只撤那条。
+// 只能撤桥发出且仍在出站记账里的（见 outbox.go）：微信本就只允许撤自己的消息，
+// 而超过 revoke_window_seconds（默认 120s，微信规则）后必然撤不掉，桥会直接拒绝
+// 并说明原因——host 的 Revoke 无论微信是否真撤都回成功，不拦就会得到「假成功」。
+type revokeReq struct {
+	ChatID    string `json:"chat_id"`
+	MessageID string `json:"message_id,omitempty"` // 十进制字符串，防 JSON 大整数丢精度
+	Count     int    `json:"count,omitempty"`      // 默认 1；给了 message_id 则忽略
+}
+
+type revokeResult struct {
+	Success bool            `json:"success"`
+	Error   string          `json:"error,omitempty"`
+	Revoked []revokeOutcome `json:"revoked,omitempty"`
+	Failed  []revokeOutcome `json:"failed,omitempty"`
+	// Remaining 撤完后本会话还剩几条可撤，便于调用方决定要不要接着撤
+	Remaining int `json:"remaining"`
+}
+
+// handleRevoke 撤回出站消息。
+//
+// 不走 allowSend 出站限流：撤回是纠错动作，被「发送频率超限」挡住会很难解释；
+// 而每会话记账最多 maxOutboxPerChat 条、撤一条即出表，调用天然有界。
+func (p *BridgePlugin) handleRevoke(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req revokeReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, revokeResult{Error: "invalid json: " + err.Error()})
+		return
+	}
+	req.ChatID = strings.TrimSpace(req.ChatID)
+	req.MessageID = strings.TrimSpace(req.MessageID)
+	if req.ChatID == "" {
+		writeJSON(w, http.StatusBadRequest, revokeResult{Error: "chat_id 必填"})
+		return
+	}
+	if err := p.guardSendTarget(req.ChatID); err != nil {
+		writeJSON(w, http.StatusForbidden, revokeResult{Error: err.Error()})
+		return
+	}
+	if p.message == nil {
+		writeJSON(w, http.StatusServiceUnavailable, revokeResult{Error: "消息能力未注入"})
+		return
+	}
+	var target uint64
+	if req.MessageID != "" {
+		id, err := strconv.ParseUint(req.MessageID, 10, 64)
+		if err != nil || id == 0 {
+			writeJSON(w, http.StatusBadRequest, revokeResult{
+				Error: "message_id 须是十进制正整数（桥各 send 接口回的 message_id）",
+			})
+			return
+		}
+		target = id
+	}
+	count := req.Count
+	if count <= 0 {
+		count = 1
+	}
+	if count > maxOutboxPerChat {
+		count = maxOutboxPerChat
+	}
+
+	done, failed, err := p.revokeOutbox(req.ChatID, count, target)
+	if err != nil {
+		// 没有可撤句柄：404 便于 agent 区分「撤不了」和「参数错」
+		slog.Info("[hermes_bridge] /revoke 无可撤消息", "chat", req.ChatID, "err", err)
+		writeJSON(w, http.StatusNotFound, revokeResult{Error: err.Error()})
+		return
+	}
+	res := revokeResult{
+		Success:   len(done) > 0,
+		Revoked:   done,
+		Failed:    failed,
+		Remaining: p.outboxCount(req.ChatID),
+	}
+	if len(done) == 0 {
+		res.Error = revokeFailSummary(failed)
+		slog.Warn("[hermes_bridge] /revoke 全部失败", "chat", req.ChatID, "detail", res.Error)
+		writeJSON(w, http.StatusBadGateway, res)
+		return
+	}
+	slog.Info("[hermes_bridge] /revoke 完成",
+		"chat", req.ChatID, "revoked", len(done), "failed", len(failed), "remaining", res.Remaining)
+	writeJSON(w, http.StatusOK, res)
 }
 
 // handleSendApp 出站 AppMsg 卡片：适配器拼好 XML + sub_type 后 POST 这里。
@@ -826,10 +929,11 @@ func (p *BridgePlugin) handleSendApp(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("[hermes_bridge] 已发 AppMsg 卡片", "chat", req.ChatID, "sub_type", req.SubType)
+	msgID := p.lastOutboxID(req.ChatID)
 	if cap := strings.TrimSpace(req.Caption); cap != "" {
 		_ = p.sendPlainText(p.resolveReceiver(req.ChatID), cap)
 	}
-	writeJSON(w, http.StatusOK, sendResult{Success: true})
+	writeJSON(w, http.StatusOK, sendResult{Success: true, MessageID: msgID})
 }
 
 func (p *BridgePlugin) handleMedia(w http.ResponseWriter, r *http.Request, kind string) {
@@ -974,10 +1078,11 @@ func (p *BridgePlugin) handleMedia(w http.ResponseWriter, r *http.Request, kind 
 		writeJSON(w, http.StatusBadGateway, sendResult{Error: sendErr.Error()})
 		return
 	}
+	msgID := p.lastOutboxID(req.ChatID)
 	if cap := strings.TrimSpace(req.Caption); cap != "" {
 		_ = p.sendPlainText(p.resolveReceiver(req.ChatID), cap)
 	}
-	writeJSON(w, http.StatusOK, sendResult{Success: true})
+	writeJSON(w, http.StatusOK, sendResult{Success: true, MessageID: msgID})
 }
 
 // guardSendTarget 出站目标须在白名单；主人私聊始终放行（与入站一致）。

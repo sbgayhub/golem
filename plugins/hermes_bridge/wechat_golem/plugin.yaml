@@ -1,10 +1,10 @@
 name: wechat_golem
 label: WeChat (Golem bridge)
 kind: platform
-version: 1.1.0
+version: 1.2.0
 description: >
   Hermes 官方平台适配器：经 Golem hermes_bridge 的 HTTP/SSE 桥接微信。
-  支持群门闩、真 @、图片/视频/语音/表情收发、表情收藏库与群成员档案。
+  支持群门闩、真 @、图片/视频/语音/表情收发、撤回、表情收藏库与群成员档案。
   Golem 侧与 Hermes 侧可同机或分机部署（桥地址由 WECHAT_GOLEM_BASE_URL 指定）。
 author: ovo
 requires_env:

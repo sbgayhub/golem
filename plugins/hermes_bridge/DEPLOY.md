@@ -27,8 +27,23 @@ Hermes 可达的地址。本文不假设任何特定网络拓扑。
 
 **Hermes 侧（适配器）**
 
-- Python 3.9+ 与 `aiohttp`（`pip install aiohttp`）
+- Python 3.9+
+- `aiohttp`（适配器与桥之间全部 HTTP/SSE 都走它）。必须在**运行 gateway 的那个 venv** 里——
+  适配器是被 import 进 gateway 进程的，不是独立进程；装到系统 `python3`、conda 或别的
+  virtualenv 都不算。
+  它是 Hermes 自己声明的**可选**依赖：源码 `pyproject.toml` 的 `messaging` extra 里
+  `aiohttp==<钉死版本>`（版本为修一串 CVE 而 pin）。有的安装会在 setup 时就装上（实测过一台是
+  3.14.1，与其余包同批落盘），新版则由 `tools/lazy_deps.py` 在**用到时**才惰性安装（受
+  `security.allow_lazy_installs` 控制，默认开）。**本适配器不参与那套惰性安装**，缺了只会
+  静默从 channels 消失，所以装完务必按第六节验一次。
+  真的缺时**别裸 `pip install aiohttp`**（会绕过上面那个 pin）：在 Hermes 源码目录
+  `uv sync --extra messaging`，或重跑官方安装器 / `hermes update`；也不要 `--break-system-packages`。
 - 一个已能跑的 Hermes profile
+- 网关已作为 **systemd 用户级服务**常驻：`hermes -p <profile> gateway install`（它自己会开 linger，
+  不必手动 `loginctl enable-linger`；覆盖升级旧单元后值得核一次
+  `loginctl show-user <user> --property=Linger` 是否仍为 `yes`）。
+  查状态 `hermes -p <profile> gateway status` 或 `systemctl --user is-enabled hermes-gateway-<profile>.service`；
+  前台调试是 `gateway run`。**没有 `gateway logs` 子命令**，日志位置见第六节。
 
 自检：桥装好后在微信发 `/hermes status`，末行会报 `媒体工具: ffmpeg✓ ffprobe✓ silk✗`。
 也可 `curl http://<桥地址>/health`，返回的 `media_tools` 有每个工具的解析结果或错误原因。
@@ -126,7 +141,7 @@ KEEP="$HERMES_HOME/plugins/platforms/wechat_golem"
 mkdir -p "$KEEP"
 
 # 从仓库拷入（仓库路径：plugins/hermes_bridge/wechat_golem/）
-cp plugins/hermes_bridge/wechat_golem/PLUGIN.yaml \
+cp plugins/hermes_bridge/wechat_golem/plugin.yaml \
    plugins/hermes_bridge/wechat_golem/adapter.py "$KEEP/"
 
 # loader 要包名：__init__.py 必须与 adapter.py 同内容
@@ -142,6 +157,10 @@ rm -rf "$KEEP/__pycache__"
 ❌ ~/.hermes/plugins/platforms/wechat_golem/   # 全局第二份
 ```
 
+**manifest 文件名必须全小写 `plugin.yaml`**（bundled 插件同此约定）。写成 `PLUGIN.yaml` 的症状是
+「目录明明在，Hermes 当没看见」：`plugins enable` 不认、工具一个不注册，且没有报错。从 Windows
+拷过来时尤其容易踩——NTFS 大小写不敏感，本地两种写法是同一个文件，只有落到 Linux 才暴露。
+
 环境变量（`$HERMES_HOME/.env`）：
 
 ```bash
@@ -156,7 +175,7 @@ WECHAT_GOLEM_ALLOWED_USERS=主人wxid
 HERMES_EXEC_ASK=1                              # 危险命令走审批
 ```
 
-完整可选变量见 `wechat_golem/PLUGIN.yaml`（安装向导会逐项提示）与本文附录。
+完整可选变量见 `wechat_golem/plugin.yaml`（安装向导会逐项提示）与本文附录。
 
 `config.yaml` 要点：
 
@@ -179,7 +198,8 @@ approvals:
 
 ```bash
 hermes -p wechat plugins enable platforms/wechat_golem   # tool override 选 n
-hermes -p wechat gateway restart
+systemctl --user restart hermes-gateway-wechat.service    # 冷重启，重跑 register(ctx)
+# 也可 hermes -p wechat gateway restart（同样是真重启；但它检测不到 user systemd 时会退回前台跑）
 ```
 
 **必验**：重启后确认工具真注册上了（语法检查抓不到运行期 `NameError`）：
@@ -286,6 +306,74 @@ systemd 并跳过服务状态检查，不会让 `/overview` 恒亮红灯。
 ---
 
 ## 六、排障速查
+
+**插件 enabled 了，但 `channels` 里没有 wechat_golem**
+
+`plugins ls` 显示 enabled 只说明配置里开了，不代表平台注册成功。适配器的
+`check_requirements()`（`adapter.py`）返回 False 时平台就不进 channels，而**两条原因都静默**：
+
+1. **缺 `aiohttp`**：适配器对它是 `try/except ImportError` 软导入，所以模块 import 得去、
+   插件照样显示 enabled，只是平台被 `check_fn` 挡在外面。全新机器上这确实可能发生——aiohttp
+   只是 Hermes 的可选依赖（`messaging` extra），新版由 `tools/lazy_deps.py` 在用到时才装，
+   而本适配器不参与那套惰性安装。
+2. **`WECHAT_GOLEM_TOKEN` / `WECHAT_GOLEM_BASE_URL` 没进 gateway 进程环境**：适配器只读
+   `os.getenv`，缺一样就 return False。必须写在 **profile 的** `$HERMES_HOME/.env`；放
+   `~/.hermes/.env`（默认 profile）或只在自己 shell 里 `export`（systemd 服务读不到）都是同一个症状。
+
+排查顺序是先钉住解释器，再验这两样。
+
+**第一步：gateway 跑的是哪个 python**
+
+适配器不是独立进程，是被 import 进 gateway 进程的，所以「适配器用哪个 python」＝「gateway
+进程是哪个 python 起的」。**以运行中的进程为准**，其他都是推断：
+
+```bash
+P=$(systemctl --user show -p MainPID --value hermes-gateway-<profile>.service); echo "PID=$P"
+tr '\0' '\n' < /proc/$P/cmdline     # argv[0] 就是答案：真正被调用的解释器
+tr '\0' '\n' < /proc/$P/environ | grep -E '^(VIRTUAL_ENV|PYTHONPATH|PYTHONHOME)='
+readlink -f /proc/$P/exe            # 仅供参考：解析符号链接后的真实二进制
+```
+
+⚠️ **别拿 `readlink -f /proc/$P/exe` 的结果去装包或验 import**：venv 里的 `bin/python` 只是个
+指向真实解释器的符号链接，解析后可能是 `/usr/bin/python3.x`，也可能是 uv / pyenv 管的独立解释器
+（实测过一台是 `/usr/local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11`）。
+拿它 `import aiohttp` 看不到 venv 的 site-packages，会误判成「没装」。要用 `$VIRTUAL_ENV/bin/python`
+或 argv[0] 那个路径。
+
+服务没在跑（`PID=0`）时才退回推断：
+
+```bash
+systemctl --user cat hermes-gateway-<profile>.service | grep -i execstart
+head -1 "$(command -v hermes)"      # hermes 自己的 shebang
+```
+
+**第二步：用那个解释器验 aiohttp，用 `/proc` 验 env**
+
+```bash
+V=$(tr '\0' '\n' < /proc/$P/environ | sed -n 's/^VIRTUAL_ENV=//p')
+PY=${V:+$V/bin/python}; PY=${PY:-$(tr '\0' '\n' < /proc/$P/cmdline | head -1)}; echo "PY=$PY"
+"$PY" -c 'import sys, aiohttp; print(sys.prefix); print(aiohttp.__version__, aiohttp.__file__)'
+tr '\0' '\n' < /proc/$P/environ | grep WECHAT_GOLEM   # 两个必填变量真进了进程吗
+
+# 只有上面报 ModuleNotFoundError 才需要装 —— 先明白它为什么会缺：aiohttp 是 Hermes
+# pyproject.toml 里 `messaging` extra 的依赖（版本为修 CVE 钉死），新版 Hermes 由
+# tools/lazy_deps.py 在用到时才惰性装；本适配器不参与那套机制，所以不会自动补。
+# 正解是按 Hermes 自己的清单补，别裸装（裸装会绕过那个 pin）：
+cd <Hermes 源码目录> && uv sync --extra messaging     # 或重跑官方安装器 / hermes update
+# 实在只能单装：照 pyproject.toml 里钉的版本，别让它自己挑新版
+uv pip install --python "$PY" 'aiohttp==<pyproject 里的 pin>'
+# 另注：`security.allow_lazy_installs: false` 或 sealed/hosted 安装下 Hermes 自己也不会
+# 惰性补装，这时只能显式装。
+```
+
+补齐任何一样之后都要**冷重启**（`systemctl --user restart hermes-gateway-<profile>.service`），
+`register(ctx)` 才会重跑、平台才会重新注册。
+
+交叉验证（可选）：适配器安装目录的 `__pycache__/` 能读出**版本号**。loader 导入的是
+`__init__.py`，所以 `__init__.cpython-3XX.pyc` 的 `3XX` 就是 gateway 解释器的版本；而
+`adapter.cpython-3YY.pyc` 是谁跑过 `py_compile adapter.py` 留下的。两个版本号不一致，说明
+语法检查用的解释器和真正加载的不是一个（检查意义打折）。具体生成哪些 pyc 取决于加载方式，
+所以这只是交叉验证，**以 `/proc` 为准**。
 
 **适配器连不上桥（`/health` 的 subscribers=0）**
 

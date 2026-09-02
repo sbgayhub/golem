@@ -4467,10 +4467,45 @@ def probe_hermes_contract() -> Dict[str, Any]:
     return {"ok": ok, "missing": missing, "checked": checked}
 
 
+_UNAVAILABLE_WARNED: set = set()
+
+
+def _warn_unavailable(reason: str) -> None:
+    """平台未注册的原因必须留话。
+
+    check_fn 返回 False 是**静默**的：症状只有「plugins ls 里 enabled、
+    channels 里没有 wechat_golem」，日志里一个字都没有，历史上极难定位
+    （2026-09 有人为此排查半天）。logger 落 agent.log，print 走 journald。
+    同一原因只报一次（check_requirements 会被反复调用）。
+    """
+    if reason in _UNAVAILABLE_WARNED:
+        return
+    _UNAVAILABLE_WARNED.add(reason)
+    text = f"[wechat_golem] 平台未注册（check_requirements 失败）：{reason}"
+    logger.error(text)
+    print(text, flush=True)
+
+
 def check_requirements() -> bool:
     if aiohttp is None:
+        _warn_unavailable(
+            "缺 aiohttp —— 适配器与桥之间的 HTTP/SSE 全靠它。必须装进运行 gateway 的"
+            "那个 venv（$VIRTUAL_ENV/bin/python），装系统 python3 无效；别裸 pip install"
+            "（会绕过 Hermes pyproject 里为 CVE 钉死的版本），在 Hermes 源码目录跑"
+            " uv sync --extra messaging，或重跑官方安装器 / hermes update"
+        )
         return False
-    if not (_env("WECHAT_GOLEM_TOKEN") and _env("WECHAT_GOLEM_BASE_URL")):
+    missing_env = [
+        name
+        for name in ("WECHAT_GOLEM_TOKEN", "WECHAT_GOLEM_BASE_URL")
+        if not _env(name)
+    ]
+    if missing_env:
+        _warn_unavailable(
+            "缺环境变量 %s —— 只读 os.getenv，必须写在 profile 的 $HERMES_HOME/.env"
+            "（放 ~/.hermes/.env 或只在自己 shell 里 export，systemd 服务都读不到），"
+            "改完要冷重启 gateway" % ", ".join(missing_env)
+        )
         return False
     # 契约自检只告警不拦启动：核心收发不依赖那些私有成员
     probe_hermes_contract()

@@ -439,6 +439,27 @@ logrotate**——两套轮转管同一批文件会打架。单文件上限约 `a
 `config.yaml` 顶层设 `group_sessions_per_user: false`（见第三节）。设为默认 `true` 时每个
 群成员各一条 session，会并发多活会话。
 
+**消息发到了别的群（出站串台）**
+
+典型现场：在 A 群让它发图/发表情，趁它还没发完你切到 B 群说了句话，东西发进了 B 群。
+这不是模型看错上下文（一个群一条 session，它看不到别的群），是**出站目标解析**的问题：
+`wechat_send_*` 的 `chat_id` 曾经「可省略」，模型不填时适配器一路兜底到进程级的
+「最近一次入站会话」——而那个变量被任何会话的新消息覆盖。
+
+现在的行为（桥 v0.15 + 适配器 1.3.0）：`chat_id` 在 tool schema 里必填，且出站目标按
+**本轮 run 绑定 > session 登记表 > 唯一在途会话** 定位；模型给的 `chat_id` 与本轮会话
+不一致时自动纠回本轮会话并打 warning。确需发到别的会话（「往 XX 群发个通知」）要显式传
+`allow_cross_chat=true`。适配器还会把本轮 `session_key` 带给桥，桥再校验一次归属，
+不匹配直接拒发。排查看这几行：
+
+```bash
+grep -aE "出站目标|拒发：目标与声明会话" ~/.hermes/profiles/wechat/logs/gateway.log | tail -20
+```
+
+`source=ctx|session_map|inflight` 是可信定位；`source=recent` 说明退到了短窗兜底
+（默认 15s，`WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` 可调），多会话同时在途时不会兜底，
+而是让 tool 报错要求模型补 `chat_id`。
+
 **agent 隔几分钟就忘事**
 
 不是 session 问题，是 `session_reset.mode: none` 下自动压缩把细节摘掉了。让它落持久记忆，
@@ -467,6 +488,7 @@ logrotate**——两套轮转管同一批文件会打架。单文件上限约 `a
 | `WECHAT_GOLEM_SILENCE_TOKENS` | 空 | 追加沉默词；纯出站，可自由改 |
 | `WECHAT_GOLEM_DEBOUNCE_MS` | `0` | 私聊去抖毫秒 |
 | `WECHAT_GOLEM_GROUP_DEBOUNCE_MS` | `0` | 群去抖毫秒（桥已去抖） |
+| `WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` | `15` | 出站 `chat_id` 退到「最近入站会话」的窗口秒数；多会话在途时不兜底 |
 | `HERMES_HOME` | `~/.hermes` | Hermes profile 根（平台变量） |
 | `HERMES_EXEC_ASK` | — | `1` 时危险命令走审批（Hermes 核心读） |
 

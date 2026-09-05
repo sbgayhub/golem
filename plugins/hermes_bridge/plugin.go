@@ -16,8 +16,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.14.0",
-		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；出站撤回（捷径词 + /revoke）；管理台；可迁移配置（外部程序路径、捷径词表）。",
+		Version:     "0.15.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；管理台；可迁移配置（外部程序路径、捷径词表）。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,

@@ -283,6 +283,9 @@ type sendTextReq struct {
 	ChatID  string   `json:"chat_id"`
 	Content string   `json:"content"`
 	Mention []string `json:"mentions,omitempty"` // @ 的 wxid 列表（群聊）
+	// SessionKey 可选：调用方声明「本次发送属于哪个入站会话」。
+	// 带了就必须与 chat_id 指向同一会话，否则桥拒发（见 guardOutbound）。
+	SessionKey string `json:"session_key,omitempty"`
 }
 
 type sendMediaReq struct {
@@ -295,7 +298,8 @@ type sendMediaReq struct {
 	Raw bool `json:"raw,omitempty"`
 	// Md5 仅表情生效：发送已收藏表情时仅传 md5 不传数据，微信用 CDN 原文件。
 	// 与 url/data_b64 互斥——同时提供时忽略 md5，走数据上传路径。
-	Md5 string `json:"md5,omitempty"`
+	Md5        string `json:"md5,omitempty"`
+	SessionKey string `json:"session_key,omitempty"` // 见 sendTextReq.SessionKey
 }
 
 type sendResult struct {
@@ -316,6 +320,8 @@ type sendAppReq struct {
 	Xml     string `json:"xml"`             // 整段 <appmsg>…</appmsg>，桥原样透传给 host SendApp
 	AppID   string `json:"appid,omitempty"` // 可选：调用方明确指定时优先；空则随机回填一个
 	Caption string `json:"caption,omitempty"`
+
+	SessionKey string `json:"session_key,omitempty"` // 见 sendTextReq.SessionKey
 }
 
 // sendRecordItem 聊天记录卡片条目（文本或图片）。
@@ -340,6 +346,8 @@ type sendRecordReq struct {
 	Records map[string]string `json:"records,omitempty"` // 兜底：{名字:内容} 仅文本
 	Lines   []string          `json:"lines,omitempty"`   // 兜底："名字:内容" 仅文本
 	Caption string            `json:"caption,omitempty"`
+
+	SessionKey string `json:"session_key,omitempty"` // 见 sendTextReq.SessionKey
 }
 
 // sendQuoteReq 出站「引用回复」卡片（AppMsg type=57，一期仅文本 refer type=1）。
@@ -356,6 +364,8 @@ type sendQuoteReq struct {
 	Content     string `json:"quote_content"`         // 被引用文本
 	CreateTime  int64  `json:"createtime,omitempty"`  // 0 → 现填
 	Caption     string `json:"caption,omitempty"`
+
+	SessionKey string `json:"session_key,omitempty"` // 见 sendTextReq.SessionKey
 }
 
 func (p *BridgePlugin) handleSend(w http.ResponseWriter, r *http.Request) {
@@ -374,7 +384,7 @@ func (p *BridgePlugin) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, sendResult{Error: "chat_id 与 content 必填"})
 		return
 	}
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, sendResult{Error: err.Error()})
 		return
 	}
@@ -513,7 +523,7 @@ func (p *BridgePlugin) handleSendRecord(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, sendResult{Error: err.Error()})
 		return
 	}
@@ -721,7 +731,7 @@ func (p *BridgePlugin) handleSendQuote(w http.ResponseWriter, r *http.Request) {
 		req.CreateTime = time.Now().Unix()
 	}
 
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, sendResult{Error: err.Error()})
 		return
 	}
@@ -783,6 +793,8 @@ type revokeReq struct {
 	ChatID    string `json:"chat_id"`
 	MessageID string `json:"message_id,omitempty"` // 十进制字符串，防 JSON 大整数丢精度
 	Count     int    `json:"count,omitempty"`      // 默认 1；给了 message_id 则忽略
+
+	SessionKey string `json:"session_key,omitempty"` // 见 sendTextReq.SessionKey
 }
 
 type revokeResult struct {
@@ -814,7 +826,7 @@ func (p *BridgePlugin) handleRevoke(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, revokeResult{Error: "chat_id 必填"})
 		return
 	}
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, revokeResult{Error: err.Error()})
 		return
 	}
@@ -904,7 +916,7 @@ func (p *BridgePlugin) handleSendApp(w http.ResponseWriter, r *http.Request) {
 		}
 		slog.Info("[hermes_bridge] AppMsg 补随机 AppID", "chat", req.ChatID, "appid_tail", tail)
 	}
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, sendResult{Error: err.Error()})
 		return
 	}
@@ -958,7 +970,7 @@ func (p *BridgePlugin) handleMedia(w http.ResponseWriter, r *http.Request, kind 
 		writeJSON(w, http.StatusBadRequest, sendResult{Error: "url 或 data_b64 至少提供一个（表情可仅传 md5）"})
 		return
 	}
-	if err := p.guardSendTarget(req.ChatID); err != nil {
+	if err := p.guardOutbound(req.ChatID, req.SessionKey); err != nil {
 		writeJSON(w, http.StatusForbidden, sendResult{Error: err.Error()})
 		return
 	}
@@ -1087,6 +1099,44 @@ func (p *BridgePlugin) handleMedia(w http.ResponseWriter, r *http.Request, kind 
 
 // guardSendTarget 出站目标须在白名单；主人私聊始终放行（与入站一致）。
 // 空白名单时拒绝非主人目标（强制 /hermes enable）；cron home_channel 也须 enable。
+// chatIDFromSessionKey 把桥自己发出去的 session_key 还原成 chat_id。
+// 入站时的格式见 incoming.go：chatroom:<id>@chatroom / private:<wxid>。
+// 认不出的形态（Hermes 侧自己的 key 等）返回空串 = 不参与校验。
+func chatIDFromSessionKey(sessionKey string) string {
+	sk := strings.TrimSpace(sessionKey)
+	if sk == "" {
+		return ""
+	}
+	for _, prefix := range []string{"chatroom:", "private:"} {
+		if strings.HasPrefix(sk, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(sk, prefix))
+		}
+	}
+	return ""
+}
+
+// guardOutbound 出站三连校验：会话归属 → 白名单。
+//
+// sessionKey 是可选的「本次发送属于哪个入站会话」声明（适配器按当前 agent run
+// 填，见 wechat_golem/adapter.py 的 _outbound_body）。它与 chat_id 是两个独立
+// 信息源：chat_id 可能来自模型填参或适配器兜底推断，会指错会话；sessionKey 来自
+// run 上下文，基本不会错。两者不一致就说明这条消息要发去它不该去的会话——
+// 典型症状是「在 A 群让它干活，切到 B 群说了句话，东西发进了 B 群」。
+// 拒发是对的：宁可让 agent 收到错误重试，也不要在错误的群里上屏。
+//
+// 不带 sessionKey 时退化为原行为（只查白名单），这样 cron 主动推送、
+// 人工 curl、旧版适配器都不受影响。
+func (p *BridgePlugin) guardOutbound(chatID, sessionKey string) error {
+	chatID = strings.TrimSpace(chatID)
+	if want := chatIDFromSessionKey(sessionKey); want != "" && want != chatID {
+		slog.Warn("[hermes_bridge] 拒发：目标与声明会话不一致",
+			"chat", chatID, "session_key", sessionKey, "session_chat", want)
+		return fmt.Errorf("chat_id %s 与本轮会话 %s 不一致，已拒发；"+
+			"请用本轮会话的 chat_id（确需发到别处时由调用方显式跨会话）", chatID, want)
+	}
+	return p.guardSendTarget(chatID)
+}
+
 func (p *BridgePlugin) guardSendTarget(chatID string) error {
 	if strings.TrimSpace(chatID) == "" {
 		return errors.New("chat_id 为空")

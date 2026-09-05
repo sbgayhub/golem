@@ -39,6 +39,7 @@ Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 - **出站引用回复**（AppMsg type=57，一期仅文本 refer type=1）：POST `/send_quote` 传 `reply`/`svrid`/`fromusr`/`quote_content`（`displayname`/`chatusr`/`createtime` 可选）；桥拼顶层 `<appmsg>`（勿包 `<msg>`）后 `sendAppMessage(57)`。host `Send` 只对 Application/ChatRecord/Music 走 `SendApp`，**出站不用 `TypeAppQuote`**（会 default 丢弃、NewId=0）；SubType 仍为 57。入站 SSE/`msg_id` 供 agent 填 `svrid`；tool `wechat_send_quote`。图片引用二期。
 - **入站引用展示**：对方发引用气泡时，本条 `text`=回复正文；`quote_text`/群信封 `quote.summary`=被引用人读摘要（引图为 `[图片]`，**不**把 img XML 给 agent）；`msg_id` 始终是**本条** new_id（出站引用对方本条用它，不是嵌套 `quote_svrid`）。
 - **出站**：适配器 HTTP 回发；目标须在白名单（主人私聊除外）。
+- **出站目标归属校验**（桥 v0.15+）：各 `send*` / `/revoke` 接受可选 `session_key`（形如 `chatroom:xxx@chatroom` / `private:wxid`），带了就必须与 `chat_id` 指向同一会话，否则 403 拒发（`guardOutbound`）。适配器按当前 agent run 填这个字段，于是「A 群的活儿发去 B 群」在桥这一层还能被挡住——它是最后一道防线，第一道在适配器侧（见 `wechat_golem/README.md` §出站目标）。不带该字段时行为不变（只查白名单），cron 主动推送与人工 curl 不受影响。
 - **真 @**：两条件同时要满足——① `mentions` 为真实 **wxid**（`TextData.Reminds`）；② 正文含 **`@显示名` + 特殊空格 U+2005**（不是普通空格）。仅 mentions、正文裸「收到」→ 客户端常无系统 @。桥在有 mentions 时会**自动补** `@名\u2005`（从 ListMembers 取展示名）。适配器可从正文 `@` / `[[mentions:wxid]]` 解析 mentions；最终仍靠桥补齐正文形态。
 - **查询**：`/self` `/group_info` `/group_members` `/group_member_detail`（ListMembers 缓存；**不**调 host 的 GetMembersDetail）。公告/管理员：GetInfo 通常无，响应当 note。
 - **不内嵌** MCP / agent run；会话与工具全在 Hermes gateway。

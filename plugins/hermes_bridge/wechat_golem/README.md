@@ -156,6 +156,29 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 | `WECHAT_GOLEM_RESET_TOKENS` | `新开会话,新对话` | 整句新开会话词（仅主人；CLI prune --chat-id 清历史后桥回执，不投 agent） |
 | `WECHAT_GOLEM_STICKER_DIR` | `~/.hermes/wechat_stickers` | 表情收藏库目录（`<md5>.<ext>` + `index.json`：`moods` 情绪 / `tags` 题材标记 / desc…） |
 | `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群成员偏好档案目录（每成员一个 `<wxid>.json`） |
+| `WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` | `15` | 出站 `chat_id` 退到「最近入站会话」的窗口秒数（见下节） |
+
+## 出站目标（发给谁）
+
+`wechat_send_*` / `wechat_sticker_send` / `wechat_revoke` 的 `chat_id` **必填**，取消息前缀里
+的 `chat_id:` 行。历史上它是「可省略、从当前 session 推断」，模型于是普遍不填，适配器一路
+兜底到进程级的「最近一次入站会话」——那个变量被任何会话的新消息覆盖，于是：在 A 群让它发
+表情，你转头在 B 群说句话，表情就发进了 B 群。
+
+现在按可信度分三层定位本轮会话（`resolve_outbound_target`）：
+
+1. `contextvar`——投递事件前绑定，随 asyncio task 继承，最准
+2. **session 登记表**——`session_key` / opaque `session_id` → `chat_id`；只认精确或带 `:`
+   边界的匹配（裸后缀会让 `98765@chatroom` 命中 `12398765@chatroom`）
+3. **唯一在途会话**——`_INFLIGHT` 账本，给跑在线程池里、拿不到 contextvar 的 handler 兜底
+
+模型给的 `chat_id` 与本轮会话不一致时**纠回本轮会话**并打 warning；确需发到别处要显式传
+`allow_cross_chat=true`。三层都空时才退到「最近入站」，且要求窗口内（默认 15s）且没有第二个
+会话在途，否则 tool 直接报错让模型补 `chat_id`——猜错会话比报错贵得多。
+
+出站请求还会带上本轮 `session_key`，桥侧再校验一次归属，不匹配拒发（见 `../readme.md`）。
+日志：`grep -a "出站目标" gateway.log`，`source=ctx|session_map|inflight` 是可信定位，
+`recent` 是短窗兜底。
 
 **表情库约定**（实现见 `adapter.py`）：
 

@@ -21,6 +21,10 @@ WECHAT_GOLEM_ALLOW_ALL_USERS / WECHAT_GOLEM_ALLOWED_USERS。
   - 整句「打断」：清 pending 并立即投递
   - 出站：字面 \\n → 真换行；正文 @显示名/@wxid/[[mentions:wxid]] → 桥 mentions 真 @（metadata.mentions 可选）
   - 查询：桥 /self /group_info /group_members /group_member_detail（+ tool；session-map 兜底 chat_id）
+  - 出站目标：chat_id 必填，按「本轮 run 绑定 > session 登记表 > 唯一在途会话」定位；
+    与本轮会话冲突时纠回本轮（跨会话须显式 allow_cross_chat），并把 session_key 带给桥
+    再校验一次归属。防的是「A 群的活儿因为你转头在 B 群说话而发进 B 群」，见
+    resolve_outbound_target 与 README §出站目标
   - 发表情：tool wechat_send_emoji → 桥 POST /send_emoji（TypeEmoji；网图自动压 ~500KB，收藏重发用 path+raw 保动图；勿用 send_image 冒充表情）
   - 聊天记录卡片：tool wechat_send_record → 桥 POST /send_record（AppMsg type=19；文本+可选图片 url/media_ref，勿 data_b64；对齐 meme list / /pm list）
   - 引用回复：tool wechat_send_quote → 桥 POST /send_quote（AppMsg type=57；一期文本；svrid=入站 msg_id）
@@ -43,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import hashlib
 import html
 import json
@@ -82,9 +87,35 @@ _MAX_MEDIA_BYTES = 60 * 1024 * 1024
 _SESSION_CHAT_MAP: Dict[str, str] = {}
 _SESSION_CHAT_MAP_MAX = 512
 
+# ---- 出站目标（chat_id）的可信来源 ----
+#
+# 曾经的做法是「登记表查不到就用 _LAST_INBOUND_CHAT_ID（TTL 1h）」，而那是个
+# 进程级单变量，任何会话的新入站消息都会覆盖它。于是：在 A 群让 agent 发图，
+# 图还没发出去你就切到 B 群说了句话，A 群这轮的 send 工具兜底就解析成 B 群
+# —— 消息发错群。修法是把「当前出站目标」变成随 run 携带的上下文，全局最近
+# 入站只在**确定没有并发会话**时做极短窗兜底。
+#
+# 三层可信度，从高到低：
+#   1. _OUTBOUND_CTX  contextvar，投递事件时绑定，随 asyncio task 继承（最准）
+#   2. _SESSION_CHAT_MAP  session_key / session_id → chat_id 登记表（精确命中）
+#   3. _INFLIGHT      当前有在途 run 的会话；只有一个时它就是唯一可能的目标
+# 三层都空时才看 _LAST_INBOUND_CHAT_ID，且要求窗口内无并发（见 outbound_fallback）。
+_OUTBOUND_CTX: contextvars.ContextVar[tuple] = contextvars.ContextVar(
+    "wechat_golem_outbound", default=("", "")
+)
+
+# chat_id → (在途 run 计数, session_key)。gateway 的 tool handler 可能跑在别的
+# 线程（run_in_executor 不传 contextvars），故除 contextvar 外还要有这份进程级账本。
+_INFLIGHT: Dict[str, List[Any]] = {}
+_INFLIGHT_LOCK = threading.Lock()
+
 _LAST_INBOUND_CHAT_ID: str = ""
 _LAST_INBOUND_CHAT_AT: float = 0.0
-_LAST_INBOUND_TTL_S = 3600.0  # 最近入站会话保留 1h，供 opaque session 兜底
+_LAST_INBOUND_TTL_S = 3600.0  # 最近入站正文保留 1h（仅用于昵称反查，误伤小）
+# chat_id 的兜底窗口必须短：超过这个秒数就宁可报错让模型显式传，也不猜。
+_LAST_INBOUND_CHAT_TTL_S = max(
+    1.0, float(os.environ.get("WECHAT_GOLEM_CHAT_FALLBACK_TTL_S") or 15.0)
+)
 
 # 最近入站正文（同 TTL）：Hermes tool 常 args={}，仅带 opaque session_id；
 # detail 的 wxids 无法像 chat_id 那样从 session 推断，只能从用户原话抽「昵称」再反查缓存。
@@ -1061,15 +1092,36 @@ def resolve_session_text(*candidates: Any) -> str:
     return ""
 
 
-def resolve_session_chat_id(*candidates: Any) -> str:
-    """用登记表把 opaque session_id / session_key 还原成 chat_id。"""
+def _session_key_match(s: str, k: str) -> bool:
+    """登记表 key 匹配：精确，或带 ':' 边界的前缀/后缀关系。
+
+    绝不做裸 endswith：微信群 id 形如「纯数字@chatroom」，
+    98765@chatroom 正是 12398765@chatroom 的后缀，裸后缀匹配会把 A 群的
+    session 解析成 B 群的 chat_id（chat_id 自身也被登记为 key）。
+    带上分隔符才是真的「同一 key 的不同前缀形态」，例如
+    agent:main:wechat_golem:group:xxx@chatroom ⊃ xxx@chatroom。
+    """
+    if s == k:
+        return True
+    if len(s) < 8 and len(k) < 8:
+        return False
+    return s.endswith(":" + k) or k.endswith(":" + s)
+
+
+def lookup_session_chat_id(*candidates: Any) -> str:
+    """只查登记表：opaque session_id / session_key → chat_id；查不到返空。
+
+    这里刻意不做「最近一次入站」兜底：兜底由 resolve_outbound_target 统一
+    决策，调用方才能区分「确实映射到了」与「猜的」——旧实现两者混在一起，
+    _prefer_session_chat_id 会拿一个猜出来的值覆盖模型填对的 chat_id。
+    """
     for raw in candidates:
         if raw is None:
             continue
         if isinstance(raw, dict):
             for k in ("session_id", "session_key", "session", "chat_id"):
                 v = raw.get(k)
-                found = resolve_session_chat_id(v) if v is not None else ""
+                found = lookup_session_chat_id(v) if v is not None else ""
                 if found:
                     return found
             continue
@@ -1078,18 +1130,195 @@ def resolve_session_chat_id(*candidates: Any) -> str:
             continue
         if s in _SESSION_CHAT_MAP:
             return _SESSION_CHAT_MAP[s]
-        # 宽松：任意已登记 key 是 s 的后缀/前缀
         for k, cid in list(_SESSION_CHAT_MAP.items()):
-            if s == k or s.endswith(k) or k.endswith(s):
-                if len(s) >= 8 or len(k) >= 8:
-                    return cid
-    # 登记表没命中：用最近一次入站 chat_id（单适配器进程内）
+            if _session_key_match(s, k):
+                return cid
+    return ""
+
+
+def bind_outbound_target(chat_id: str, session_key: str = "") -> Any:
+    """把「当前出站目标」绑到本 task 的 context；返回 reset token。
+
+    asyncio.create_task 会复制调用时的 context，所以 gateway 在
+    handle_message 里 create_task 出来的 agent run 能继承到这个值。
+    走线程池的 handler 继承不到，那时退回 _INFLIGHT 账本。
+    """
+    return _OUTBOUND_CTX.set((str(chat_id or "").strip(), str(session_key or "").strip()))
+
+
+def unbind_outbound_target(token: Any) -> None:
+    if token is None:
+        return
+    try:
+        _OUTBOUND_CTX.reset(token)
+    except (ValueError, RuntimeError):
+        # 跨 task reset 会抛；忽略即可，context 随 task 结束自然回收
+        pass
+
+
+def current_outbound_target() -> tuple:
+    """(chat_id, session_key)；未绑定返 ("", "")。"""
+    try:
+        cid, sk = _OUTBOUND_CTX.get()
+    except LookupError:
+        return "", ""
+    return str(cid or ""), str(sk or "")
+
+
+def inflight_enter(chat_id: str, session_key: str = "") -> None:
+    """登记一个在途 run（投递事件时进，等到 session idle 后出）。"""
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return
+    with _INFLIGHT_LOCK:
+        slot = _INFLIGHT.get(cid)
+        if slot is None:
+            _INFLIGHT[cid] = [1, str(session_key or "").strip()]
+        else:
+            slot[0] += 1
+            if session_key:
+                slot[1] = str(session_key).strip()
+
+
+def inflight_leave(chat_id: str) -> None:
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return
+    with _INFLIGHT_LOCK:
+        slot = _INFLIGHT.get(cid)
+        if slot is None:
+            return
+        slot[0] -= 1
+        if slot[0] <= 0:
+            _INFLIGHT.pop(cid, None)
+
+
+def inflight_targets() -> Dict[str, str]:
+    """当前有在途 run 的 {chat_id: session_key} 快照。"""
+    with _INFLIGHT_LOCK:
+        return {cid: slot[1] for cid, slot in _INFLIGHT.items()}
+
+
+# 出站目标的来源标记，进日志便于事后判责
+OUTBOUND_SRC_CTX = "ctx"  # contextvar，本 run 绑定（最准）
+OUTBOUND_SRC_MAP = "session_map"  # 登记表精确命中
+OUTBOUND_SRC_INFLIGHT = "inflight"  # 唯一在途会话
+OUTBOUND_SRC_EXPLICIT = "explicit"  # 参数里带的（模型填 / 从文本抽出）
+OUTBOUND_SRC_RECENT = "recent"  # 短窗最近入站（仅在无并发时）
+OUTBOUND_SRC_CROSS = "cross_chat"  # 显式跨会话，按参数放行
+
+# 无法确定目标时给模型的指引；比笼统「chat_id 必填」更可执行
+OUTBOUND_TARGET_HINT = (
+    "无法确定要发到哪个会话：请显式传 chat_id"
+    "（取本轮消息前缀里的 chat_id: 那一行；确需发到当前会话之外时另传 allow_cross_chat=true）"
+)
+
+
+def _flag_truthy(v: Any) -> bool:
+    """tool 参数里的布尔：模型可能给 True / "true" / 1 / "yes"。
+
+    与下方 _truthy（只吃 env 字符串）分开，别混用：那个拿到 None 会炸。
+    """
+    if v is True:
+        return True
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v != 0
+    return isinstance(v, str) and v.strip().lower() in ("true", "1", "yes", "y", "on")
+
+
+def allow_cross_chat_from_args(args: Optional[Dict[str, Any]]) -> bool:
+    """是否显式声明了跨会话发送。默认 False：不声明就不许发去别的会话。"""
+    for k in ("allow_cross_chat", "cross_chat", "force_chat_id"):
+        if _flag_truthy((args or {}).get(k)):
+            return True
+    return False
+
+
+def resolve_outbound_target(
+    explicit: Any = "",
+    args: Optional[Dict[str, Any]] = None,
+    *,
+    tool: str = "",
+) -> tuple:
+    """决定这次出站到底发给谁，返回 (chat_id, session_key, source)。
+
+    可信目标 = contextvar > 登记表精确命中 > 唯一在途会话。它代表「本 run 属于
+    哪个会话」，与模型填的 chat_id 是两个独立信息源，冲突时以可信目标为准
+    —— 这正是防串台的核心：模型抄错群、或参数里根本没有 chat_id 而被兜底
+    猜成了刚说话的另一个群，都会在这里被纠回来。
+
+    确实要发到当前会话以外（主人说「往 XX 群发个通知」）就传
+    allow_cross_chat=true，那时按模型给的 chat_id 走并跳过桥侧同会话校验。
+
+    返回的 session_key 只在「chat_id 就是本 run 的会话」时非空，桥侧据此做
+    最后一道校验（见 server.go guardOutbound）；跨会话发送时刻意留空。
+    chat_id 为空表示无从判断，调用方应当报错而不是猜。
+    """
+    args = args or {}
+    explicit = str(explicit or "").strip()
+    cross = allow_cross_chat_from_args(args)
+
+    ctx_chat, ctx_sk = current_outbound_target()
+    mapped = lookup_session_chat_id(
+        args.get("session_id"), args.get("session_key"), args.get("session"), args
+    )
+    flying = inflight_targets()
+
+    trusted, trusted_src = "", ""
+    if ctx_chat:
+        trusted, trusted_src = ctx_chat, OUTBOUND_SRC_CTX
+    elif mapped:
+        trusted, trusted_src = mapped, OUTBOUND_SRC_MAP
+    elif len(flying) == 1:
+        trusted, trusted_src = next(iter(flying)), OUTBOUND_SRC_INFLIGHT
+    session_key = ctx_sk or flying.get(trusted, "") or ""
+
+    if explicit and trusted and explicit != trusted:
+        if cross:
+            logger.warning(
+                "[wechat_golem] 跨会话发送已获显式许可 tool=%s explicit=%s 本轮会话=%s(%s)",
+                tool or "-",
+                explicit,
+                trusted,
+                trusted_src,
+            )
+            return explicit, "", OUTBOUND_SRC_CROSS
+        logger.warning(
+            "[wechat_golem] 出站目标与本轮会话不一致，已纠正 tool=%s 参数=%s "
+            "本轮会话=%s(%s) 在途=%s（确需跨会话请传 allow_cross_chat=true）",
+            tool or "-",
+            explicit,
+            trusted,
+            trusted_src,
+            list(flying.keys()),
+        )
+        return trusted, session_key, trusted_src
+    if trusted:
+        return trusted, session_key, OUTBOUND_SRC_EXPLICIT if explicit else trusted_src
+    if explicit:
+        # 无可信参照可比（如 cron 主动推送）：放行，桥侧白名单仍兜着
+        return explicit, "", OUTBOUND_SRC_EXPLICIT
+    if len(flying) > 1:
+        logger.warning(
+            "[wechat_golem] 多会话在途且参数无 chat_id，拒绝猜测 tool=%s 在途=%s",
+            tool or "-",
+            list(flying.keys()),
+        )
+        return "", "", ""
     if (
         _LAST_INBOUND_CHAT_ID
-        and (time.time() - _LAST_INBOUND_CHAT_AT) <= _LAST_INBOUND_TTL_S
+        and (time.time() - _LAST_INBOUND_CHAT_AT) <= _LAST_INBOUND_CHAT_TTL_S
     ):
-        return _LAST_INBOUND_CHAT_ID
-    return ""
+        logger.info(
+            "[wechat_golem] 出站目标退回最近入站会话 tool=%s chat=%s age=%.1fs",
+            tool or "-",
+            _LAST_INBOUND_CHAT_ID,
+            time.time() - _LAST_INBOUND_CHAT_AT,
+        )
+        return _LAST_INBOUND_CHAT_ID, "", OUTBOUND_SRC_RECENT
+    return "", "", ""
+
+
 
 
 
@@ -1892,6 +2121,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         self._sse_task: Optional[asyncio.Task] = None
         self._running = False
         self._lock_key: Optional[str] = None
+        # 本次出站要带给桥做同会话校验的 session_key。
+        # None = 未决定（_post_json 从 contextvar 兜）；"" = 明确不带（跨会话发送）。
+        self._outbound_session_key: Optional[str] = None
         # 入站车道：session_key / chat_id → lane
         self._lanes: Dict[str, _SessionLane] = {}
         # 私聊去抖毫秒：默认 0=立即投递，靠单飞+pending 在「当前轮结束后」合并积压。
@@ -2336,36 +2568,27 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         """审批等旁路：不经车道，直接 await handle_message（不等 session idle）。
 
         审批 yes/no 必须立刻进 gateway，否则会卡在等待审批的 run 上死锁。
+
+        同样要在 handle_message 前绑好出站目标（gateway 在里面 create_task，
+        新 task 拿的是此刻的 context 快照）。不记 in-flight：这条路径不等
+        session idle，无从知道 run 何时结束，记了就会永久占位。
         """
-        try:
-            await self.handle_message(event)
-        except Exception:
-            logger.exception("[wechat_golem] immediate handle_message failed")
-            return
+        chat_id = self._event_chat_id(event)
         try:
             sk = self._hermes_session_key(event)
         except Exception:
+            logger.debug("[wechat_golem] immediate session_key failed", exc_info=True)
             sk = ""
+        token = bind_outbound_target(chat_id, sk)
         try:
-            chat_id = ""
-            if event.source is not None:
-                chat_id = str(getattr(event.source, "chat_id", "") or "").strip()
-            if not chat_id and isinstance(event.metadata, dict):
-                chat_id = str(event.metadata.get("chat_id") or "").strip()
-            if chat_id:
-                meta = event.metadata if isinstance(event.metadata, dict) else {}
-                raw = str(
-                    meta.get("raw_text") or getattr(event, "text", "") or ""
-                ).strip()
-                remember_session_chat_id(
-                    sk,
-                    meta.get("session_key"),
-                    chat_id,
-                    chat_id=chat_id,
-                    text=raw,
-                )
-        except Exception:
-            logger.exception("[wechat_golem] immediate session map failed")
+            try:
+                await self.handle_message(event)
+            except Exception:
+                logger.exception("[wechat_golem] immediate handle_message failed")
+                return
+            self._remember_event_session(event, chat_id, sk)
+        finally:
+            unbind_outbound_target(token)
 
     def _hermes_session_key(self, event: MessageEvent) -> str:
         """与 BasePlatformAdapter.handle_message 相同的 session key 算法。"""
@@ -2587,75 +2810,100 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         del session_key
         await self._wait_adapter_idle(poll_s=poll_s, timeout_s=timeout_s)
 
+    @staticmethod
+    def _event_chat_id(event: MessageEvent) -> str:
+        """从 event 取微信 chat_id（source 优先，metadata 兜底）。"""
+        try:
+            if event.source is not None:
+                cid = str(getattr(event.source, "chat_id", "") or "").strip()
+                if cid:
+                    return cid
+            if isinstance(event.metadata, dict):
+                return str(event.metadata.get("chat_id") or "").strip()
+        except Exception:
+            logger.debug("[wechat_golem] read event chat_id failed", exc_info=True)
+        return ""
+
     async def _deliver_and_wait_idle(self, event: MessageEvent) -> bool:
         """投递 MessageEvent，并等到该会话真 idle 再返回。
 
         项 2 关键：await handle_message 不够（fire-and-forget）。
         busy 判定按 chat_id 收窄到同会话（命不中时退回整 adapter 兜底）。
         返回 False = handle_message 本身失败（调用方可整批重试）。
+
+        出站目标绑定必须在 handle_message **之前**：gateway 在里面 create_task，
+        新 task 复制的是此刻的 context，agent run 里的 send 工具才能据此定位会话。
+        in-flight 账本同理（覆盖整个 run，直到 _wait_adapter_idle 返回），给
+        跑在线程池里、拿不到 contextvar 的 tool handler 兜底。
         """
+        chat_id = self._event_chat_id(event)
         try:
-            await self.handle_message(event)
+            session_key = self._hermes_session_key(event)
         except Exception:
-            logger.exception("[wechat_golem] handle_message failed")
-            return False
-
-        chat_id = ""
-        try:
-            if event.source is not None:
-                chat_id = str(getattr(event.source, "chat_id", "") or "").strip()
-            if not chat_id and isinstance(event.metadata, dict):
-                chat_id = str(event.metadata.get("chat_id") or "").strip()
-        except Exception:
-            chat_id = ""
-
-        try:
+            logger.exception("[wechat_golem] build session_key failed (pre-handle)")
             session_key = ""
-            try:
-                session_key = self._hermes_session_key(event)
-            except Exception:
-                logger.exception("[wechat_golem] build session_key failed (post-handle)")
 
-            # 把 Hermes session key / 不透明 id 映射到微信 chat_id，供查询 tool 兜底
+        token = bind_outbound_target(chat_id, session_key)
+        inflight_enter(chat_id, session_key)
+        try:
             try:
-                if chat_id:
-                    meta = event.metadata if isinstance(event.metadata, dict) else {}
-                    raw = str(
-                        meta.get("raw_text") or getattr(event, "text", "") or ""
-                    ).strip()
-                    remember_session_chat_id(
-                        session_key,
-                        meta.get("session_key"),
-                        meta.get("session_id"),
-                        f"chat:{chat_id}",
-                        chat_id,
-                        chat_id=chat_id,
-                        text=raw,
-                    )
-                    # 再从 adapter 内部 task 字典扫一遍可能的 opaque key
-                    for bag_name in ("_session_tasks", "_active_sessions"):
-                        bag = getattr(self, bag_name, None) or {}
-                        for k in list(bag.keys()):
-                            remember_session_chat_id(k, chat_id=chat_id, text=raw)
-                    logger.debug(
-                        "[wechat_golem] session map chat_id=%s hermes_key=%s map_size=%s",
-                        chat_id,
-                        session_key or "-",
-                        len(_SESSION_CHAT_MAP),
-                    )
+                await self.handle_message(event)
             except Exception:
-                logger.exception("[wechat_golem] remember_session_chat_id failed")
+                logger.exception("[wechat_golem] handle_message failed")
+                return False
+            self._remember_event_session(event, chat_id, session_key)
+            try:
+                logger.debug(
+                    "[wechat_golem] post-handle primary=%s %s",
+                    session_key or "-",
+                    self._busy_snapshot(),
+                )
+                await self._wait_adapter_idle(
+                    label=session_key or "batch", chat_id=chat_id
+                )
+            except Exception:
+                # 已成功投递；等待阶段的异常不应让调用方误判为投递失败而重投（防重复）
+                logger.exception("[wechat_golem] post-handle wait failed")
+            return True
+        finally:
+            inflight_leave(chat_id)
+            unbind_outbound_target(token)
 
-            logger.debug(
-                "[wechat_golem] post-handle primary=%s %s",
-                session_key or "-",
-                self._busy_snapshot(),
+    def _remember_event_session(
+        self, event: MessageEvent, chat_id: str, session_key: str
+    ) -> None:
+        """把 Hermes session key / 不透明 id 映射到微信 chat_id，供 tool 定位会话。"""
+        if not chat_id:
+            return
+        try:
+            meta = event.metadata if isinstance(event.metadata, dict) else {}
+            raw = str(meta.get("raw_text") or getattr(event, "text", "") or "").strip()
+            remember_session_chat_id(
+                session_key,
+                meta.get("session_key"),
+                meta.get("session_id"),
+                f"chat:{chat_id}",
+                chat_id,
+                chat_id=chat_id,
+                text=raw,
             )
-            await self._wait_adapter_idle(label=session_key or "batch", chat_id=chat_id)
+            # 再从 adapter 内部 task 字典捞 gateway 生成的 opaque key。
+            # 只收「key 里带得上本 chat_id」的那些：多会话并行时这里躺着别的
+            # 会话的 key，无差别登记会把 B 群的 session 指到 A 群的 chat_id。
+            for bag_name in ("_session_tasks", "_active_sessions"):
+                bag = getattr(self, bag_name, None) or {}
+                for k in list(bag.keys()):
+                    if self._key_matches_chat(k, chat_id):
+                        remember_session_chat_id(k, chat_id=chat_id, text=raw)
+            logger.debug(
+                "[wechat_golem] session map chat_id=%s hermes_key=%s map_size=%s",
+                chat_id,
+                session_key or "-",
+                len(_SESSION_CHAT_MAP),
+            )
         except Exception:
-            # 已成功投递；等待阶段的异常不应让调用方误判为投递失败而重投（防重复）
-            logger.exception("[wechat_golem] post-handle wait failed")
-        return True
+            logger.exception("[wechat_golem] remember_session_chat_id failed")
+
 
     async def _dispatch_payload(self, payload: str) -> None:
         try:
@@ -3600,7 +3848,45 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             data["success"] = False
         return data
 
+    # 出站类桥接口：POST 这些 path 时带上 session_key，让桥做最后一道同会话校验
+    _OUTBOUND_PATHS = (
+        "send",
+        "send_image",
+        "send_video",
+        "send_voice",
+        "send_emoji",
+        "send_app",
+        "send_record",
+        "send_quote",
+        "revoke",
+    )
+
+    def _outbound_body(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        """给出站请求补 session_key：桥据此拒绝「chat_id 不属于本轮会话」的发送。
+
+        这是防串台的最后一道防线——适配器侧解析错了目标，桥这里还能挡住。
+        取值优先本次显式绑定（_bind_send_target，跨会话发送时是空串→不带），
+        其次当前 run 的 contextvar；两者都没有就不带，桥退回原行为只查白名单。
+        """
+        p = str(path or "").strip().strip("/").split("?", 1)[0]
+        if p not in self._OUTBOUND_PATHS or body.get("session_key"):
+            return body
+        sk = getattr(self, "_outbound_session_key", None)
+        if sk is None:
+            ctx_chat, ctx_sk = current_outbound_target()
+            target = str(body.get("chat_id") or "").strip()
+            # gateway 拿着明确的目标往别的会话发（cron、home_channel 通知）时
+            # 不声明会话，否则会被桥当成串台拒掉；那条路径本就不是模型在猜目标。
+            if target and ctx_chat and target != ctx_chat:
+                sk = ""
+            else:
+                sk = ctx_sk
+        if not sk:
+            return body
+        return {**body, "session_key": sk}
+
     async def _post_json(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
+        body = self._outbound_body(path, body)
         if not self._session or self._session.closed:
             if aiohttp is None:
                 return {"error": "aiohttp not installed"}
@@ -4598,8 +4884,8 @@ def _register_wechat_query_tools(ctx) -> None:
     斗图/表情必须 wechat_send_emoji（TypeEmoji）；勿用 send_image 冒充。
     """
     # 启动标记：确认本文件已被加载（无此行=改了没拷/拷错路径）
-    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke)")
-    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke)", flush=True)
+    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target)")
+    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target)", flush=True)
 
     register_tool = getattr(ctx, "register_tool", None)
     if not callable(register_tool):
@@ -4858,8 +5144,10 @@ def _register_wechat_query_tools(ctx) -> None:
                 found = _extract_chat_id_from_text(v)
                 if found:
                     return found
-        # opaque session_id（如 20260720_131150_xxxx）不含 @chatroom：走入站登记表
-        mapped = resolve_session_chat_id(
+        # opaque session_id（如 20260720_131150_xxxx）不含 @chatroom：走入站登记表。
+        # 只查表、不再退回「最近一次入站」——那个全局兜底会把 A 群的活儿发到
+        # 刚说过话的 B 群，现由 resolve_outbound_target 统一决策。
+        mapped = lookup_session_chat_id(
             args.get("session_id"),
             args.get("session_key"),
             args.get("session"),
@@ -4869,41 +5157,43 @@ def _register_wechat_query_tools(ctx) -> None:
             return mapped
         return ""
 
-    def _prefer_session_chat_id(
-        explicit: str, args: Optional[Dict[str, Any]]
-    ) -> str:
-        """出站目标纠偏：显式 chat_id 与「当前 session 映射」冲突时，优先 session。
+    def _send_target(merged: Dict[str, Any], tool: str) -> tuple:
+        """出站类 tool 统一解析目标：返回 (chat_id, session_key, error)。
 
-        背景：私聊触发时模型偶发抄成群 @chatroom，记录嵌图 via=send 会把临时图+卡片
-        打进错误会话。session_id 能映射到登记过的入站 chat 时，以映射为准并打日志。
+        error 非空时直接把它当 tool 结果回给模型——让模型补 chat_id 重试，
+        比猜一个会话发出去要好得多。
         """
-        args = args or {}
-        explicit = (explicit or "").strip()
-        mapped = resolve_session_chat_id(
-            args.get("session_id"),
-            args.get("session_key"),
-            args.get("session"),
-            args,
+        chat_id, session_key, source = resolve_outbound_target(
+            _chat_id_from_args(merged), merged, tool=tool
         )
-        if not mapped:
-            return explicit
-        if not explicit:
-            return mapped
-        if explicit == mapped:
-            return explicit
-        # 私聊 session 却指向群（或反过来）：纠正
-        ex_g = explicit.endswith("@chatroom")
-        mp_g = mapped.endswith("@chatroom")
-        if ex_g != mp_g:
-            logger.warning(
-                "[wechat_golem] chat_id 与 session 映射类型不一致，改用 session 映射 "
-                "explicit=%r mapped=%r session_id=%r",
-                explicit,
-                mapped,
-                str(args.get("session_id") or "")[:80],
-            )
-            return mapped
-        return explicit
+        if not chat_id:
+            return "", "", OUTBOUND_TARGET_HINT
+        logger.info(
+            "[wechat_golem] 出站目标 tool=%s chat=%s source=%s session_key=%s",
+            tool,
+            chat_id,
+            source,
+            session_key or "-",
+        )
+        return chat_id, session_key, ""
+
+    def _ctx_chat_id(merged: Dict[str, Any], tool: str) -> str:
+        """只读 / 本地类 tool 的会话解析：与出站同一套优先级，拿不到返空串。"""
+        chat_id, _sk, _src = resolve_outbound_target(
+            _chat_id_from_args(merged), merged, tool=tool
+        )
+        return chat_id
+
+    def _bind_send_target(ad: "WeChatGolemAdapter", session_key: str) -> None:
+        """把本次出站的 session_key 挂到临时 adapter 上，供 _post_json 带给桥做同会话校验。
+
+        显式设值（哪怕是空串）即表示「本次已决定」，_post_json 不再从 contextvar
+        兜——跨会话发送就是靠这一点让桥跳过校验的。
+        """
+        try:
+            ad._outbound_session_key = str(session_key or "")
+        except Exception:
+            logger.debug("[wechat_golem] bind outbound session_key failed", exc_info=True)
 
     def _log_tool_call(
         name: str, raw_args: Any, kwargs: Dict[str, Any], merged: Dict[str, Any]
@@ -4911,10 +5201,12 @@ def _register_wechat_query_tools(ctx) -> None:
         chat_id = _chat_id_from_args(merged)
         sid = merged.get("session_id") or kwargs.get("session_id") or ""
         sid_s = str(sid)[:120] if sid else ""
-        mapped = resolve_session_chat_id(sid, merged.get("session_key"), merged)
+        mapped = lookup_session_chat_id(sid, merged.get("session_key"), merged)
+        ctx_chat, _ctx_sk = current_outbound_target()
         logger.debug(
             "[wechat_golem] tool call name=%s raw_type=%s raw_keys=%s kw_keys=%s "
-            "merged_keys=%s chat_id=%r session_id=%r mapped=%r map_size=%s",
+            "merged_keys=%s chat_id=%r session_id=%r mapped=%r ctx=%r inflight=%s "
+            "map_size=%s",
             name,
             type(raw_args).__name__,
             list(raw_args.keys()) if isinstance(raw_args, dict) else None,
@@ -4923,6 +5215,8 @@ def _register_wechat_query_tools(ctx) -> None:
             chat_id,
             sid_s,
             mapped,
+            ctx_chat,
+            list(inflight_targets().keys()),
             len(_SESSION_CHAT_MAP),
         )
 
@@ -4945,10 +5239,12 @@ def _register_wechat_query_tools(ctx) -> None:
         return _run_coro(_ad.query_self())
 
     def _run_group_info(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        return _run_coro(ad.query_group_info(_chat_id_from_args(merged)))
+        return _run_coro(ad.query_group_info(_ctx_chat_id(merged, "wechat_group_info")))
 
     def _run_group_members(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        return _run_coro(ad.query_group_members(_chat_id_from_args(merged)))
+        return _run_coro(
+            ad.query_group_members(_ctx_chat_id(merged, "wechat_group_members"))
+        )
 
     def _wxids_from_args(merged: Optional[Dict[str, Any]]) -> List[str]:
         """从 tool 参数里抽 wxid 列表（不含昵称解析）。
@@ -5158,7 +5454,7 @@ def _register_wechat_query_tools(ctx) -> None:
     def _run_group_member_detail(
         ad: "WeChatGolemAdapter", merged: Dict[str, Any]
     ) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id = _ctx_chat_id(merged, "wechat_group_member_detail")
         wxids = _wxids_from_args(merged)
         name_hints = _name_hints_from_args(merged)
 
@@ -5255,7 +5551,8 @@ def _register_wechat_query_tools(ctx) -> None:
 
     def _run_send_emoji(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
         # runner 签名与其它 query tool 一致：handler 已创建 ad 并做 normalize
-        chat_id = _chat_id_from_args(merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_send_emoji")
+        _bind_send_target(ad, session_key)
         image_url = _url_from_args(merged)
         data_b64 = ""
         for k in ("data_b64", "data", "base64", "b64"):
@@ -5289,7 +5586,7 @@ def _register_wechat_query_tools(ctx) -> None:
             sorted(str(k) for k in (merged or {}).keys()),
         )
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not image_url and not data_b64 and not path and not md5_val:
             return {
                 "success": False,
@@ -5304,8 +5601,9 @@ def _register_wechat_query_tools(ctx) -> None:
     _tool_send_emoji = _make_query_handler("wechat_send_emoji", _run_send_emoji)
 
     def _run_send_music(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        # 与 _run_send_emoji 一致：抽 chat_id + 语义字段，调适配器 send_app_music 拼装 XML + POST 桥 /send_app。
-        chat_id = _chat_id_from_args(merged)
+        # 与 _run_send_emoji 一致：定目标 + 抽语义字段，调适配器 send_app_music 拼装 XML + POST 桥 /send_app。
+        chat_id, session_key, target_err = _send_target(merged, "wechat_send_music")
+        _bind_send_target(ad, session_key)
 
         def _pick(*keys: str) -> str:
             for k in keys:
@@ -5338,7 +5636,7 @@ def _register_wechat_query_tools(ctx) -> None:
             sorted(str(k) for k in (merged or {}).keys()),
         )
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not title or not audio_url:
             return {
                 "success": False,
@@ -5362,7 +5660,8 @@ def _register_wechat_query_tools(ctx) -> None:
     def _run_send_record(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
         # 聊天记录卡片：对齐 meme list / /pm list；桥 POST /send_record 拼 type=19 XML。
         # Hermes 常把 type/url/media_ref/name 摊到顶层（merged_keys 可见），要收成 items。
-        chat_id = _prefer_session_chat_id(_chat_id_from_args(merged), merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_send_record")
+        _bind_send_target(ad, session_key)
 
         def _pick(*keys: str) -> str:
             for k in keys:
@@ -5472,7 +5771,7 @@ def _register_wechat_query_tools(ctx) -> None:
             sorted(str(k) for k in (merged or {}).keys()),
         )
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not items and not lines and not records:
             return {
                 "success": False,
@@ -5498,7 +5797,8 @@ def _register_wechat_query_tools(ctx) -> None:
 
     def _run_send_quote(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
         # 引用回复：桥 POST /send_quote 拼 type=57 XML（一期文本）。
-        chat_id = _prefer_session_chat_id(_chat_id_from_args(merged), merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_send_quote")
+        _bind_send_target(ad, session_key)
 
         def _pick(*keys: str) -> str:
             for k in keys:
@@ -5558,7 +5858,7 @@ def _register_wechat_query_tools(ctx) -> None:
             sorted(str(k) for k in (merged or {}).keys()),
         )
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not reply:
             return {
                 "success": False,
@@ -5594,7 +5894,8 @@ def _register_wechat_query_tools(ctx) -> None:
     _tool_send_quote = _make_query_handler("wechat_send_quote", _run_send_quote)
 
     def _run_send_voice(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_send_voice")
+        _bind_send_target(ad, session_key)
         audio_url = _url_from_args(merged)
         data_b64 = ""
         for k in ("data_b64", "data", "base64", "b64"):
@@ -5611,7 +5912,7 @@ def _register_wechat_query_tools(ctx) -> None:
             sorted(str(k) for k in (merged or {}).keys()),
         )
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not audio_url and not data_b64:
             return {
                 "success": False,
@@ -5670,12 +5971,13 @@ def _register_wechat_query_tools(ctx) -> None:
         return 0
 
     def _run_revoke(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_revoke")
+        _bind_send_target(ad, session_key)
         # _str_from_args 定义在下方表情库分组里；同一作用域，tool 触发时早已就绪
         message_id = _str_from_args(merged, "message_id", "msg_id", "id", "svrid")
         count = _count_from_args(merged, "count", "n", "last", "num")
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（当前会话 id）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         # message_id 必须是纯数字；模型有时把 media_ref / 昵称塞进来
         if message_id and not message_id.isdigit():
             message_id = ""
@@ -5748,7 +6050,8 @@ def _register_wechat_query_tools(ctx) -> None:
         )
 
     def _run_sticker_send(ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id, session_key, target_err = _send_target(merged, "wechat_sticker_send")
+        _bind_send_target(ad, session_key)
         md5 = _str_from_args(merged, "md5", "emoji_md5").lower()
         if md5 and not re.fullmatch(r"[0-9a-f]{32}", md5):
             md5 = ""
@@ -5756,7 +6059,7 @@ def _register_wechat_query_tools(ctx) -> None:
         tag = _str_from_args(merged, "tag", "category")
         query = _str_from_args(merged, "query", "q", "keyword")
         if not chat_id:
-            return {"success": False, "error": "chat_id 必填（可从当前会话推断）"}
+            return {"success": False, "error": target_err or OUTBOUND_TARGET_HINT}
         if not md5 and not mood and not tag and not query:
             return {
                 "success": False,
@@ -5783,7 +6086,7 @@ def _register_wechat_query_tools(ctx) -> None:
 
 
     def _run_member_profile_get(_ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id = _ctx_chat_id(merged, "wechat_member_profile_get")
         wxid = _str_from_args(merged, "wxid", "user_id", "member_id")
         name = _str_from_args(merged, "name", "display_name", "nickname")
         wid = _member_profile_resolve_wxid(chat_id=chat_id, wxid=wxid, name=name)
@@ -5807,7 +6110,7 @@ def _register_wechat_query_tools(ctx) -> None:
         }
 
     def _run_member_profile_upsert(_ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id = _ctx_chat_id(merged, "wechat_member_profile_upsert")
         wxid = _str_from_args(merged, "wxid", "user_id", "member_id")
         name = _str_from_args(merged, "name", "display_name", "nickname")
         wid = _member_profile_resolve_wxid(chat_id=chat_id, wxid=wxid, name=name)
@@ -5864,7 +6167,7 @@ def _register_wechat_query_tools(ctx) -> None:
         return result
 
     def _run_member_profile_list(_ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id = _ctx_chat_id(merged, "wechat_member_profile_list")
         query = _str_from_args(merged, "query", "q", "keyword")
         limit = 30
         v = (merged or {}).get("limit")
@@ -5875,7 +6178,7 @@ def _register_wechat_query_tools(ctx) -> None:
         return _member_profile_list(chat_id=chat_id, query=query, limit=limit)
 
     def _run_member_profile_delete(_ad: "WeChatGolemAdapter", merged: Dict[str, Any]) -> Any:
-        chat_id = _chat_id_from_args(merged)
+        chat_id = _ctx_chat_id(merged, "wechat_member_profile_delete")
         wxid = _str_from_args(merged, "wxid", "user_id", "member_id")
         name = _str_from_args(merged, "name", "display_name", "nickname")
         wid = _member_profile_resolve_wxid(chat_id=chat_id, wxid=wxid, name=name)
@@ -6232,6 +6535,25 @@ def _register_wechat_query_tools(ctx) -> None:
             flush=True,
         )
 
+    # 出站 tool 的目标参数。必填，且刻意不再承诺「省略即当前会话」——那句承诺
+    # 让模型集体不填 chat_id，全靠适配器猜会话，你在 A 群点的活儿就会因为你转头
+    # 在 B 群说了句话而发去 B 群。handler 侧仍有受闸兜底，这里只管把话说清。
+    _CHAT_ID_PROP = {
+        "type": "string",
+        "description": (
+            "目标会话，必填：照抄本轮消息前缀里 chat_id: 那一行"
+            "（群 xxx@chatroom / 私聊 wxid），不要凭记忆填别的会话"
+        ),
+    }
+    # 逃生门：主人明确要求「往 XX 群发」时才用，否则跨会话一律纠回本轮会话
+    _CROSS_CHAT_PROP = {
+        "type": "boolean",
+        "description": (
+            "仅当主人明确要求发到当前会话之外时传 true；"
+            "不传时与本轮会话不一致的 chat_id 会被自动纠正回本轮会话"
+        ),
+    }
+
     specs = [
         (
             "wechat_self_info",
@@ -6317,16 +6639,14 @@ def _register_wechat_query_tools(ctx) -> None:
             "三种来源：image_url（http/https，桥下载后压到 ~500KB）；"
             "path（VM 本地文件，如表情收藏库，默认 raw 原样发送）；data_b64。"
             "raw=true 跳过压缩、保住动图与原 md5——重发收藏的微信表情必须用它。"
-            "chat_id 可省略（从当前 session 推断）。"
+            "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。"
             "成功即表情已上屏：禁止再发「已发送…」「发了…」等旁白；本轮只需表情时最终回复输出 NO_REPLY。"
             "失败时桥可能降级发一条链接文本。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话（群 xxx@chatroom 或私聊 wxid）；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "image_url": {
                         "type": "string",
                         "description": "表情图 http/https 下载地址（任意网图，桥侧自动压缩）",
@@ -6344,8 +6664,9 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "true=跳过压缩原样发送（保动图与原 md5）；发收藏表情必开",
                     },
                 },
-                # image_url/path 业务上二选一；不写 required，避免 Hermes 吞参后模型拒调；handler 仍校验
-                "required": [],
+                # image_url/path 业务上二选一，故不进 required；chat_id 进，
+                # 让模型显式说清发给谁（handler 仍有受闸兜底，不会因此发不出）
+                "required": ["chat_id"],
             },
             _tool_send_emoji,
         ),
@@ -6356,14 +6677,12 @@ def _register_wechat_query_tools(ctx) -> None:
             "title=歌名、singer=歌手、audio_url=可下载/可播放的 http/https 直链（必填）；"
             "cover_url=封面、lyric=歌词（能拿 LRC 尽量用 LRC，含/不含时间戳都可传，但纯文本歌词微信面板可能不展示）、"
             "appid=可选（不传时桥随机选一个，决定卡片「来自…」的来源显示）、"
-            "caption=配文（卡片下另发一条文本，可选）。chat_id 可省略（从当前 session 推断）。",
+            "caption=配文（卡片下另发一条文本，可选）。chat_id 必填（照抄本轮消息前缀的 chat_id 行）。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话（群 xxx@chatroom 或私聊 wxid）；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "title": {
                         "type": "string",
                         "description": "歌曲名（卡片标题）",
@@ -6393,8 +6712,9 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "配文：卡片之外另发的一条文本（可选）",
                     },
                 },
-                # title/audio_url 业务必填；不写 required 以防 Hermes 吞参后模型拒调；handler 仍校验
-                "required": [],
+                # title/audio_url 业务必填但不进 required（防 Hermes 吞参后模型拒调，
+                # handler 仍校验）；chat_id 进 required，发错会话的代价比这大得多
+                "required": ["chat_id"],
             },
             _tool_send_music,
         ),
@@ -6407,14 +6727,12 @@ def _register_wechat_query_tools(ctx) -> None:
             "文本 {name,content}；图片示例 "
             "{type:image,name:助手,url:https://...} 或 {type:image,name:助手,media_ref:media_12}。"
             "生成图先变可达 url；入站图用 media_ref。禁止 data_b64。"
-            "lines/records 仅文本。title/desc/caption 可选。chat_id 可省略。",
+            "lines/records 仅文本。title/desc/caption 可选。chat_id 必填（照抄本轮消息前缀的 chat_id 行）。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话（群 xxx@chatroom 或私聊 wxid）；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "title": {
                         "type": "string",
                         "description": "卡片标题，如「插件列表 - 共 12 插件」",
@@ -6466,7 +6784,7 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "配文：卡片之外另发的一条文本（可选）",
                     },
                 },
-                "required": [],
+                "required": ["chat_id"],
             },
             _tool_send_record,
         ),
@@ -6478,15 +6796,13 @@ def _register_wechat_query_tools(ctx) -> None:
             "quote_content=被引用原文。"
             "【可选】displayname=展示名；chatusr=会话相关 id（默认可省，桥按私聊/群补全）；"
             "createtime=原消息 unix 秒；caption=气泡外另发文本。"
-            "chat_id 可省略（session 推断）。不要用手写 XML 或 /send_app 发引用。"
+            "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。不要用手写 XML 或 /send_app 发引用。"
             "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话（群 xxx@chatroom 或私聊 wxid）；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "reply": {
                         "type": "string",
                         "description": "自己的回复正文（出现在引用气泡标题）",
@@ -6520,7 +6836,7 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "引用气泡之外另发的一条文本（可选）",
                     },
                 },
-                "required": [],
+                "required": ["chat_id"],
             },
             _tool_send_quote,
         ),
@@ -6529,14 +6845,12 @@ def _register_wechat_query_tools(ctx) -> None:
             "下载音频 URL 并作为微信「语音消息」发送（TypeVoice，AMR-NB 格式）。"
             "桥侧自动用 ffmpeg 转码（mp3/wav/silk 均可），时长自动探测。"
             "适合文本转语音结果、短音频分享。参数 audio_url 必填（http/https）；"
-            "chat_id 可省略（从当前 session 推断）。",
+            "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话（群 xxx@chatroom 或私聊 wxid）；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "audio_url": {
                         "type": "string",
                         "description": "音频文件 http/https 下载地址（mp3/wav/silk/amr 等）",
@@ -6546,7 +6860,7 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "同 audio_url（别名）",
                     },
                 },
-                "required": [],
+                "required": ["chat_id"],
             },
             _tool_send_voice,
         ),
@@ -6581,14 +6895,12 @@ def _register_wechat_query_tools(ctx) -> None:
             "撤成功后微信自己会显示「撤回了一条消息」，**别再发一条「已撤回」的文字**——"
             "无话可说时最终回复只输出 NO_REPLY。失败时 error 里已是可直接转告用户的原因"
             "（如超过时限），照实说一句即可，不要重试第二次。"
-            "chat_id 省略时 handler 从当前 session 推断。",
+            "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "会话 ID（群 xxx@chatroom / 私聊 wxid）；省略则按当前会话推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "count": {
                         "type": "integer",
                         "description": "撤最近几条，默认 1；长回复被切成多段时传段数",
@@ -6599,8 +6911,9 @@ def _register_wechat_query_tools(ctx) -> None:
                         "一般不用填，留空即撤最近的",
                     },
                 },
-                # 不强制 required：Hermes 常见 args={}；无参就是「撤最近一条」
-                "required": [],
+                # count/message_id 可省（无参即「撤最近一条」）；chat_id 进 required，
+                # 免得撤到别的会话去
+                "required": ["chat_id"],
             },
             _tool_revoke,
         ),
@@ -6682,14 +6995,13 @@ def _register_wechat_query_tools(ctx) -> None:
             "应景：mood=情绪核词（无语/开心/嘲讽…）；"
             "指定标记：tag=题材/自定义（猫、吊带…，与情绪无关）；"
             "可 mood+tag 同时收窄；也可用 query 或 md5。"
-            "禁止盲抽。成功即上屏：禁止旁白「已发送…」；只需表情时最终 NO_REPLY。",
+            "禁止盲抽。成功即上屏：禁止旁白「已发送…」；只需表情时最终 NO_REPLY。"
+            "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。",
             {
                 "type": "object",
                 "properties": {
-                    "chat_id": {
-                        "type": "string",
-                        "description": "目标会话；可省略由 session 推断",
-                    },
+                    "chat_id": dict(_CHAT_ID_PROP),
+                    "allow_cross_chat": dict(_CROSS_CHAT_PROP),
                     "md5": {
                         "type": "string",
                         "description": "精确 md5（32 位 hex）",
@@ -6707,7 +7019,7 @@ def _register_wechat_query_tools(ctx) -> None:
                         "description": "画面/模糊词",
                     },
                 },
-                "required": [],
+                "required": ["chat_id"],
             },
             _tool_sticker_send,
         ),

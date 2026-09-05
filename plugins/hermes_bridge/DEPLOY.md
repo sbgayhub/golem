@@ -460,6 +460,13 @@ grep -aE "出站目标|拒发：目标与声明会话" ~/.hermes/profiles/wechat
 （默认 15s，`WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` 可调），多会话同时在途时不会兜底，
 而是让 tool 报错要求模型补 `chat_id`。
 
+**出站 tool 拒调 / 报 schema 缺 chat_id**
+
+上一条那次改动把出站 6 个 tool 的 `chat_id` 放进了 schema `required`。历史上这几个 tool
+刻意留空 `required`，就是怕 Hermes 某些 dispatch 形态吞掉参数后模型直接拒调。若真出现，
+把 `adapter.py` 里那 6 处 `"required": ["chat_id"]` 改回 `[]` 即可回退 —— handler 侧的
+受闸兜底仍在，不会因此发不出消息（代价只是模型又倾向不填，退回靠三层定位，串台防护不变）。
+
 **agent 隔几分钟就忘事**
 
 不是 session 问题，是 `session_reset.mode: none` 下自动压缩把细节摘掉了。让它落持久记忆，

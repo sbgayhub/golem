@@ -180,6 +180,11 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 日志：`grep -a "出站目标" gateway.log`，`source=ctx|session_map|inflight` 是可信定位，
 `recent` 是短窗兜底。
 
+> **回退开关**：`chat_id` 进 schema `required` 是 2026-09-05 新加的。历史上刻意留空
+> `required`，怕 Hermes 某些 dispatch 形态吞参后模型直接拒调。若出现拒调或 schema 报错，
+> 把 `adapter.py` 里那 6 处 `"required": ["chat_id"]` 改回 `[]` 即可 —— handler 侧的受闸
+> 兜底仍在，发送不会因此失败（代价只是模型又倾向不填，退回靠三层定位）。
+
 **表情库约定**（实现见 `adapter.py`）：
 
 - 工具：`wechat_sticker_save` / `list` / `send` / `delete`

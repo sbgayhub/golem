@@ -6538,6 +6538,10 @@ def _register_wechat_query_tools(ctx) -> None:
     # 出站 tool 的目标参数。必填，且刻意不再承诺「省略即当前会话」——那句承诺
     # 让模型集体不填 chat_id，全靠适配器猜会话，你在 A 群点的活儿就会因为你转头
     # 在 B 群说了句话而发去 B 群。handler 侧仍有受闸兜底，这里只管把话说清。
+    #
+    # 回退开关：各出站 tool 的 "required": ["chat_id"] 是本次新加的。历史上刻意
+    # 留空 required，怕 Hermes 某些 dispatch 形态吞参后模型直接拒调；若真复发，
+    # 把那几处改回 [] 即可，兜底链仍在、发送不会因此失败（代价是模型又倾向不填）。
     _CHAT_ID_PROP = {
         "type": "string",
         "description": (

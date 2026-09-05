@@ -33,9 +33,11 @@ WECHAT_GOLEM_ALLOW_ALL_USERS / WECHAT_GOLEM_ALLOWED_USERS。
     （$HERMES_HOME/wechat_member_profiles/<wxid>.json；跨 session 持久；
     入站自动注入发言人已知喜好/性格。官方 USER.md 只适合主人一人，装不下群成员）
   - 新开会话：主人整句「新开会话/新对话」（WECHAT_GOLEM_RESET_TOKENS 覆盖）→ 进程内 reset_session 清历史 → 桥回执；不投 agent，memory/成员档案不受影响
-  - 出站图：正文 MEDIA:<url> 在 VM 侧拦截本地下载 → POST /send_image(data_b64)，避免当纯文本、也避免桥拉不到 VM 临时 URL
-  - 出站视频：正文 VIDEO:<url> 同理拦截本地下载 → POST /send_video(data_b64)，避免 agent 退回去手动调裸桥接口发视频；
-    与 send_image / send() 一起构成「内容自动分流」，对齐 Hermes 平台适配器官方设计（普通回复只走 send，内部按内容类型分流）
+  - 出站媒体：正文 MEDIA:<url|绝对路径> 由 send() 全量抽取（一条回复几个就发几个），按
+    「扩展名 → magic bytes」判类型分流到 /send_image、/send_video、/send_voice；URL 分支归
+    适配器补——官方核心 extract_media 只认本地路径，视频 URL 官方更是零通道。VIDEO:<url> 退成
+    「URL 认不出类型时的显式提示」。顺序对齐官方 base.py：先发文字，再逐个发媒体（不塞 caption）。
+    图片也可走官方 extract_images（正文 markdown ![alt](url) → send_multiple_images → 本适配器 send_image）
   - logger：gateway.platforms.wechat_golem（挂到 gateway.* 下才易被 journal 看到）
 
 Install to: $HERMES_HOME/plugins/platforms/wechat_golem/
@@ -138,11 +140,90 @@ _SENDER_ID_RE = re.compile(r'"sender_id"\s*:\s*"((?:\\.|[^"\\])*)"')
 # 微信真 @ 正文尾：四分之一 em 空格（U+2005），不是普通 ASCII 空格
 _MENTION_SPACER = "\u2005"
 
-# Hermes 有时把媒体写成正文 MEDIA:<url>（图片）、VIDEO:<url>（视频），若不拦截会当纯文本发出。
-# 同时 URL 常是 VM 临时服务，Windows 桥侧拉不到 → 必须在适配器本机下载后用 data_b64。
-# 图片走 /send_image、视频走 /send_video；可附带剩余正文当 caption（桥侧再发一条文本）。
-_MEDIA_MARKER_RE = re.compile(r"(?i)\bMEDIA:\s*(https?://[^\s<>\"']+)")
-_VIDEO_MARKER_RE = re.compile(r"(?i)\bVIDEO:\s*(https?://[^\s<>\"']+)")
+# ---- 出站媒体标记：对齐 Hermes 官方 MEDIA: 约定 ----
+# 官方核心（gateway/platforms/base.py::extract_media）只认「MEDIA:<本地路径>」，路径锚点是
+# ~/ 、/ 、X:\ ；http(s) URL 一律穿过核心落到 send()，而视频 URL 官方压根没有通道
+# （extract_images 只抽图片 URL，send_video 只吃本地路径）。本项目的媒体源几乎全是资源
+# URL，所以 URL 分支必须由适配器补齐，并按官方同等鲁棒性实现：
+#   * finditer 全量抽取——官方支持一条回复里多个标记；旧版 .search() 只取第一个，其余标记
+#     留在剩余正文里被当 caption 发出去，就是「让它发多张图、微信只收到一段文字」的根因
+#   * 容忍 markdown 强调包裹：**MEDIA:https://…**（模型给用户展示文件时很爱加）
+#   * CJK 全角标点终结：MEDIA:https://x/a.jpg（第一张）
+#   * MEDIA:/VIDEO: 互为边界，防 MEDIA:aMEDIA:b 粘成一个非法 URL
+# 类型走「扩展名 → magic bytes」两级判定（_classify_media_src / _sniff_media_kind），
+# 所以模型只需记住一个 MEDIA:；VIDEO: 退化成「URL 看不出类型时的显式提示」，兼容旧输出。
+_MEDIA_CJK_TERMINATORS = "（）〈〉《》：，。；！？、“”‘’【】"
+# 起手不加 (?<![A-Za-z0-9]) 这类边界断言：官方同样没有，而加了会让粘连的第二个标记
+# （MEDIA:a.jpgMEDIA:b.jpg，前一字符是字母）整条抽不到——丢图比误匹配 SOMEMEDIA: 贵得多。
+# 误匹配面本来也很窄：标记后必须紧跟 http(s)://，URL 里出现的 ?media:foo 不会命中。
+_MEDIA_TAG_RE = re.compile(
+    r"[`\"'*_]{0,3}(?P<kind>MEDIA|VIDEO)\s*:\s*"
+    r"(?P<src>https?://(?:(?!MEDIA:|VIDEO:)[^\s<>\"'`"
+    + _MEDIA_CJK_TERMINATORS
+    + r"])+)",
+    re.IGNORECASE,
+)
+# URL 尾部常粘的强调符与标点，逐个剥掉；URL 内部的 _ / * 保留（官方同样只剥尾）
+_MEDIA_TAG_TRAILING = "`\"'*_,;:.!?)]}>，。；！？、）】"
+
+# 扩展名分流表照抄官方 base.py 的 _IMAGE_EXTS / _VIDEO_EXTS / _AUDIO_EXTS（多补 .bmp），
+# 官方加格式时好逐条对照；表外的一律交给 magic bytes 嗅探。
+_TAG_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"})
+_TAG_VIDEO_EXTS = frozenset({".mp4", ".mov", ".avi", ".mkv", ".webm", ".3gp"})
+_TAG_AUDIO_EXTS = frozenset({".mp3", ".m2a", ".wav", ".ogg", ".opus", ".m4a", ".flac"})
+
+
+def _media_ext_of(src: str) -> str:
+    """取 URL path 的扩展名（小写，含点）；先剥 ?query#frag，否则 a.jpg?token=x 认不出。"""
+    raw = (src or "").split("#", 1)[0].split("?", 1)[0]
+    tail = raw.rsplit("/", 1)[-1]
+    if "." not in tail:
+        return ""
+    return "." + tail.rsplit(".", 1)[-1].lower()
+
+
+def _classify_media_src(src: str) -> str:
+    """按扩展名判类型：image / video / audio；表外或无扩展名返回空串（交给嗅探）。"""
+    ext = _media_ext_of(src)
+    if ext in _TAG_IMAGE_EXTS:
+        return "image"
+    if ext in _TAG_VIDEO_EXTS:
+        return "video"
+    if ext in _TAG_AUDIO_EXTS:
+        return "audio"
+    return ""
+
+
+def _sniff_media_kind(raw: bytes) -> str:
+    """按文件头判类型：image / video / audio；认不出返回空串。
+
+    用于 URL 不带扩展名（签名直链、出图 API）的情形——比 HEAD 的 Content-Type 可信，
+    且我们本来就要把字节下下来走 data_b64，等于零额外开销。
+    """
+    if not raw or len(raw) < 12:
+        return ""
+    if raw.startswith(b"\x89PNG\r\n\x1a\n") or raw.startswith(b"\xff\xd8\xff"):
+        return "image"
+    if raw[:6] in (b"GIF87a", b"GIF89a") or raw.startswith(b"BM"):
+        return "image"
+    if raw.startswith(b"RIFF"):
+        sub = raw[8:12]
+        if sub == b"WEBP":
+            return "image"
+        if sub == b"AVI ":
+            return "video"
+        if sub == b"WAVE":
+            return "audio"
+    if raw[4:8] == b"ftyp":
+        # ftyp 家族既有 mp4/mov/3gp 也有 M4A：M4A/M4B 是音频，其余按视频
+        return "audio" if raw[8:11] in (b"M4A", b"M4B") else "video"
+    if raw.startswith(b"\x1a\x45\xdf\xa3"):  # EBML：webm / mkv
+        return "video"
+    if raw.startswith(b"OggS") or raw.startswith(b"fLaC") or raw.startswith(b"ID3"):
+        return "audio"
+    if raw[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):  # 裸 MP3 帧头
+        return "audio"
+    return ""
 
 # ---- 部署路径解析 ----
 # 所有落盘目录都从 $HERMES_HOME 派生，这样多 profile 部署天然隔离，
@@ -3289,65 +3370,117 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             )
             return SendResult(success=True, message_id=None)
 
-        # Hermes 有时把视频写成正文 VIDEO:<url>（或夹杂说明），与 MEDIA:<url> 同理。
-        # send() 按「内容自动分流」先看出视频，交给 send_video（→ POST /send_video），
-        # 否则会被当纯文本发出，或被误以图片通道发成错的类型；也避免 agent 为发视频
-        # 退回去手动调裸桥接口（不符平台适配器官方设计）。
-        video_url, rest_after_video = self._extract_video_marker(content)
-        if video_url:
+        # 出站媒体标记（MEDIA:/VIDEO: + 资源 URL）：官方核心只抽本地路径，URL 归适配器补，
+        # 缘由与鲁棒性要求见模块头部 _MEDIA_TAG_RE 注释。一条回复里有几个就发几个。
+        # 顺序对齐官方 base.py（_send_final_text → _deliver_attachments）：先文字、再附件；
+        # 不再把剩余正文塞 caption——多张图时 caption 会把说明黏在第一张后面，很怪。
+        tags, rest = self._extract_media_tags(content)
+        if tags:
             logger.info(
-                "[wechat_golem] outbound VIDEO → send_video chat=%s url=%s rest_len=%s",
+                "[wechat_golem] outbound media tags chat=%s n=%s kinds=%s rest_len=%s",
                 chat_id,
-                video_url[:120],
-                len(rest_after_video or ""),
+                len(tags),
+                [(_classify_media_src(s) or h or "auto") for h, s in tags[:6]],
+                len(rest or ""),
             )
-            video_result = await self._send_video_from_url(
-                chat_id,
-                video_url,
-                caption=rest_after_video or None,
-            )
-            if video_result.success:
-                return video_result
-            # 下载/发视频失败：只回退剩余文本（若有）；避免再吐出 VIDEO: 原文
-            logger.warning(
-                "[wechat_golem] VIDEO→video failed chat=%s err=%s",
-                chat_id,
-                video_result.error,
-            )
-            if rest_after_video.strip():
-                content = rest_after_video
-            else:
-                return video_result
-
-        # Hermes 有时把图片写成正文 MEDIA:<url>（或夹杂说明）。
-        # 必须先在 VM 侧下载 → /send_image(data_b64)，
-        # 否则：1) 当纯文本出；2) 只把 url 交给 Windows 桥拉不到 VM 临时地址。
-        media_url, rest_text = self._extract_media_marker(content)
-        if media_url:
-            logger.info(
-                "[wechat_golem] outbound MEDIA → send_image chat=%s url=%s rest_len=%s",
-                chat_id,
-                media_url[:120],
-                len(rest_text or ""),
-            )
-            media_result = await self._send_image_from_url(
-                chat_id,
-                media_url,
-                caption=rest_text or None,
-            )
-            if media_result.success:
+            text_result: Optional[SendResult] = None
+            if rest.strip():
+                text_result = await self._send_text_chunks(chat_id, rest, metadata)
+            media_result = await self._deliver_media_tags(chat_id, tags, metadata)
+            if media_result is not None:
                 return media_result
-            # 下载/发图失败：只回退剩余文本（若有）；避免再吐出 MEDIA: 原文
-            logger.warning(
-                "[wechat_golem] MEDIA→image failed chat=%s err=%s",
-                chat_id,
-                media_result.error,
-            )
-            if rest_text.strip():
-                content = rest_text
-            else:
-                return media_result
+            if text_result is not None:
+                # 文字已经发出去了：这里再回失败会让 Hermes 重试整条 send，把文字发第二遍。
+                # 媒体失败已记 warning，桥侧带 url 时还会降级补一条链接文本。
+                return text_result
+            return SendResult(success=False, error="媒体发送失败")
 
+        return await self._send_text_chunks(chat_id, content, metadata)
+
+    async def _deliver_media_tags(
+        self,
+        chat_id: str,
+        tags: List[tuple],
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[SendResult]:
+        """逐条发出媒体标记，返回最后一条成功结果；全失败返回 None。
+
+        等价于官方 send_multiple_images 的默认实现（它也是逐张循环调本适配器的 send_image），
+        但保留每条的 SendResult 以便回报失败、拿 message_id 记账。桥侧每条是独立 POST，
+        本身已串行；不额外插 sleep（图片 45s / 视频 120s 超时里已经有节奏）。
+        """
+        last_ok: Optional[SendResult] = None
+        for hint, src in tags:
+            kind = _classify_media_src(src) or hint
+            try:
+                result = await self._send_one_media_tag(chat_id, kind, src)
+            except Exception as e:
+                logger.warning(
+                    "[wechat_golem] media tag 发送异常 src=%s err=%s", src[:120], e
+                )
+                continue
+            if result.success:
+                last_ok = result
+            else:
+                logger.warning(
+                    "[wechat_golem] media tag 发送失败 kind=%s src=%s err=%s",
+                    kind or "auto",
+                    src[:120],
+                    result.error,
+                )
+        return last_ok
+
+    async def _send_one_media_tag(
+        self, chat_id: str, kind: str, src: str
+    ) -> SendResult:
+        """单条媒体标记 → 对应桥接口；kind 为空表示扩展名认不出，下载后嗅 magic bytes。"""
+        if kind == "video":
+            return await self._send_video_from_url(chat_id, src)
+        if kind == "audio":
+            return await self._send_media(
+                "send_voice", chat_id, source=src, caption=None, default_is_url=True
+            )
+        if kind == "image":
+            return await self._send_image_from_url(chat_id, src)
+
+        # 无扩展名（签名直链、出图 API）：本地下载后按文件头定型，字节复用走 data_b64。
+        # 嗅不出就按图片发——这是最常见的意图，也是旧版对 MEDIA: 的既有行为。
+        try:
+            raw = await self._download_bytes(src)
+        except Exception as e:
+            logger.warning(
+                "[wechat_golem] 媒体嗅探下载失败 src=%s err=%s", src[:120], e
+            )
+            return SendResult(
+                success=False, error=f"本地下载失败: {e}", retryable=True
+            )
+        sniffed = _sniff_media_kind(raw)
+        endpoint = {"video": "send_video", "audio": "send_voice"}.get(
+            sniffed, "send_image"
+        )
+        logger.info(
+            "[wechat_golem] 媒体类型嗅探 src=%s bytes=%s sniffed=%s → %s",
+            src[:120],
+            len(raw),
+            sniffed or "unknown",
+            endpoint,
+        )
+        return await self._send_media(
+            endpoint,
+            chat_id,
+            source=src,
+            caption=None,
+            default_is_url=True,
+            prefetched=raw,
+        )
+
+    async def _send_text_chunks(
+        self,
+        chat_id: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """纯文本出站：真 @ 解析 + 长文切段 → POST /send。"""
         mentions = self._extract_mentions_from_metadata(metadata)
         # Hermes 最终文本回复通常不会带 metadata.mentions。
         # 真 @ 可靠路径：正文 @ / [[mentions:wxid]] → 抽 wxid → 补「@显示名 + U+2005」。
@@ -3408,38 +3541,37 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=last_id)
 
     @staticmethod
-    def _extract_media_marker(content: str) -> tuple:
-        """解析 Hermes 正文里的 MEDIA:<url>。
+    def _extract_media_tags(content: str) -> tuple:
+        """抽出正文里**所有** MEDIA:/VIDEO: 标记，返回 ([(kind_hint, src), ...], 剩余正文)。
 
-        返回 (media_url, rest_text)；无标记时 ("", 原文)。
-        兼容整行 MEDIA:url、前后夹杂说明文字。
+        kind_hint 只是模型给的提示（写了 VIDEO: 才是 "video"，MEDIA: 一律空），真实类型由
+        _classify_media_src（扩展名）→ _sniff_media_kind（magic bytes）决定；标记按出现
+        顺序保留。无标记时返回 ([], 原文)。
         """
         text = content or ""
-        m = _MEDIA_MARKER_RE.search(text)
-        if not m:
-            return "", text
-        url = (m.group(1) or "").strip().rstrip(")}]>.,;，。；")
-        rest = (text[: m.start()] + text[m.end() :]).strip()
+        tags: List[tuple] = []
+        spans: List[tuple] = []
+        for m in _MEDIA_TAG_RE.finditer(text):
+            src = (m.group("src") or "").strip()
+            while src and src[-1] in _MEDIA_TAG_TRAILING:
+                src = src[:-1]
+            if not src:
+                continue
+            hint = "video" if (m.group("kind") or "").upper() == "VIDEO" else ""
+            tags.append((hint, src))
+            spans.append((m.start(), m.end()))
+        if not tags:
+            return [], text
+        parts: List[str] = []
+        cursor = 0
+        for start, end in spans:
+            parts.append(text[cursor:start])
+            cursor = end
+        parts.append(text[cursor:])
+        rest = "".join(parts).strip()
         rest = re.sub(r"[ \t]+\n", "\n", rest)
         rest = re.sub(r"\n{3,}", "\n\n", rest).strip()
-        return url, rest
-
-    @staticmethod
-    def _extract_video_marker(content: str) -> tuple:
-        """解析 Hermes 正文里的 VIDEO:<url>。
-
-        与 _extract_media_marker 同构。返回 (video_url, rest_text)；无标记时 ("", 原文)。
-        兼容整行 VIDEO:url、前后夹杂说明文字。
-        """
-        text = content or ""
-        m = _VIDEO_MARKER_RE.search(text)
-        if not m:
-            return "", text
-        url = (m.group(1) or "").strip().rstrip(")}]>.,;，。；")
-        rest = (text[: m.start()] + text[m.end() :]).strip()
-        rest = re.sub(r"[ \t]+\n", "\n", rest)
-        rest = re.sub(r"\n{3,}", "\n\n", rest).strip()
-        return url, rest
+        return tags, rest
 
     async def _download_bytes(
         self, url: str, *, max_bytes: int = _MAX_MEDIA_BYTES
@@ -3748,6 +3880,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         source: str,
         caption: Optional[str],
         default_is_url: bool,
+        prefetched: Optional[bytes] = None,
     ) -> SendResult:
         body: Dict[str, Any] = {"chat_id": chat_id}
         if caption:
@@ -3757,9 +3890,15 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         if not src:
             return SendResult(success=False, error="empty media source")
 
+        # prefetched：上游为嗅 magic bytes 已经把字节下下来了（URL 不带扩展名的情形），
+        # 直接复用，别再拉第二遍
+        if prefetched is not None:
+            if not prefetched:
+                return SendResult(success=False, error="媒体内容为空")
+            body["data_b64"] = base64.b64encode(prefetched).decode("ascii")
         # URL：公网交给桥下载；私网/本机 URL 在 VM 本地下载后用 data_b64
         # （Windows 桥经常拉不到 VM 的 192.168.x 临时服务）
-        if src.startswith("http://") or src.startswith("https://"):
+        elif src.startswith("http://") or src.startswith("https://"):
             if self._url_needs_local_download(src):
                 try:
                     raw = await self._download_bytes(src)
@@ -4884,8 +5023,8 @@ def _register_wechat_query_tools(ctx) -> None:
     斗图/表情必须 wechat_send_emoji（TypeEmoji）；勿用 send_image 冒充。
     """
     # 启动标记：确认本文件已被加载（无此行=改了没拷/拷错路径）
-    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target)")
-    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target)", flush=True)
+    logger.info("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target+media-tags)")
+    print("[wechat_golem] query tools bootstrap (body-mentions+send-emoji+member-profile+revoke+chat-target+media-tags)", flush=True)
 
     register_tool = getattr(ctx, "register_tool", None)
     if not callable(register_tool):
@@ -6639,7 +6778,9 @@ def _register_wechat_query_tools(ctx) -> None:
         ),
         (
             "wechat_send_emoji",
-            "发送微信「表情消息」（TypeEmoji，长按可添加到表情；勿用发图接口冒充）。"
+            "【只发表情包】发送微信「表情消息」（TypeEmoji，长按可添加到表情；勿用发图接口冒充）。"
+            "要发普通图片/截图/生成图/视频，不要调本工具——在最终回复正文写 "
+            "MEDIA:<直链或绝对路径>（一行一个，多个都会发），网关会发成微信原生图片/视频。"
             "三种来源：image_url（http/https，桥下载后压到 ~500KB）；"
             "path（VM 本地文件，如表情收藏库，默认 raw 原样发送）；data_b64。"
             "raw=true 跳过压缩、保住动图与原 md5——重发收藏的微信表情必须用它。"
@@ -6874,6 +7015,8 @@ def _register_wechat_query_tools(ctx) -> None:
             "入站消息标注 media_ref=media_N 时，仅在用户要求查看/描述/处理该图时才调用"
             "（懒下载，桥此刻才去微信 CDN 取）；拿到 path 后用图像/文件工具查看。"
             "同一 ref 重复调用直接复用缓存文件。"
+            "要把这张图（原样或处理后）发回聊天：不必再调发送工具，最终回复正文写 "
+            "MEDIA:<返回的 path> 即可。"
             "收藏表情：入站标注 emoji_md5 的是微信表情，fetch 后把文件复制进表情收藏库"
             "（以 md5 命名判重），重发走 wechat_send_emoji path+raw。",
             {
@@ -6995,7 +7138,9 @@ def _register_wechat_query_tools(ctx) -> None:
         ),
         (
             "wechat_sticker_send",
-            "从收藏库发贴切表情（保动图；同档少用优先）。"
+            "【只发表情包】从收藏库发贴切表情（保动图；同档少用优先）。"
+            "要发普通图片/截图/生成图/视频，不要调本工具——在最终回复正文写 "
+            "MEDIA:<直链或绝对路径>（一行一个，多个都会发）。"
             "应景：mood=情绪核词（无语/开心/嘲讽…）；"
             "指定标记：tag=题材/自定义（猫、吊带…，与情绪无关）；"
             "可 mood+tag 同时收窄；也可用 query 或 md5。"
@@ -7237,15 +7382,26 @@ def register(ctx) -> None:
                 "最终回复用一句完成，例如「@显示名 晚上好」，不要复述 wxid、不要再拆第二条。"
                 "正文写「@显示名 内容」；确需时可用「@wxid_xxx 内容」或 [[mentions:wxid_xxx]]（适配器会处理，用户侧尽量只见昵称）。"
                 "适配器/桥会转成系统真 @；不要依赖 metadata.mentions（文本最终回复通常带不上）。"
-                "斗图/表情包：优先 wechat_sticker_send（从收藏库按 md5/tag 发，保动图）；网图才用 wechat_send_emoji（image_url）；普通图片走平台发图（勿另写工具或文本 URL；hermes 会经 send_image 走 /send_image）。勿混用。"
+                "斗图/表情包：优先 wechat_sticker_send（从收藏库按 md5/tag 发，保动图）；网图当表情才用 wechat_send_emoji（image_url）。"
+                "普通图片/视频/音频不经任何工具——见下面【发媒体】，正文写 MEDIA: 标记即可。两类勿混用。"
                 "【闲聊应景表情】对方在找你（addressing=self/quoted_self 或私聊）时，情绪到位可偶尔发一个贴切表情："
                 "无语/翻白眼、好笑捧场、安慰鼓励、得意得意、收尾再见等——像真人群友，不是每句都贴。"
                 "多数回合仍纯文字；同一话题连续多轮最多一个表情；没把握贴切就只打字，千万别硬发。"
                 "选图：应景用 wechat_sticker_send 的 mood=情绪核词；要发特定标记（与情绪无关）用 tag=题材/自定义；"
                 "可 mood+tag 同时收窄；也可用 query。不确定先 list 看 moods_summary/tags_summary。"
                 "只靠表情就能表达时：sticker 成功后最终回复只输出 NO_REPLY；有话就短句+表情，禁止旁白「已发送…」「发了xxx」。"
-                "普通图片/视频默认走 hermes 附件通道发出，无需任何工具或文本标记（仅发送阶段不要写 MEDIA: 这种文本指令）。"
-                "若 hermes 把视频 URL 写进了最终回复正文，用 VIDEO:<url> 标记（与图片的 MEDIA:<url> 同理），适配器 send() 会自动分流到 /send_video，你必须像普通回复一样只调 send、不要手动 post 桥接口或拼裸桥路径发视频。"
+                "【发媒体：图片/视频/音频】不要找工具、不要 curl 桥、不要只把链接当文字发。"
+                "直接在最终回复正文里写 MEDIA: 标记，网关会抽出来发成微信原生消息："
+                "资源直链写 MEDIA:<https://…>（最常见）；本机文件写 MEDIA:/绝对路径。"
+                "**一行一个，写几个就发几个**——要发三张图就写三行 MEDIA:，别挤在一行、也别只写一个然后说「还有两张」。"
+                "类型自动判：.jpg/.jpeg/.png/.webp/.gif/.bmp→图片，.mp4/.mov/.webm/.mkv/.avi/.3gp→视频，"
+                ".mp3/.m4a/.wav/.ogg/.flac→语音；URL 不带扩展名时网关下载后按文件头嗅探，"
+                "仍认不出就按图片发——确知是视频却又拿不到扩展名时，才改写 VIDEO:<url>。"
+                "配文照常写在正文里（标记前后都行）：网关先发文字、再逐个发媒体，不要自己拼「图1/图2」旁白。"
+                "一次最多 4 个媒体（每个都是独立上传，多了明显变慢还可能触发发送限流）。"
+                "文档类（pdf/docx/zip…）微信这边没有文件通道：别写 MEDIA:/x.pdf（只会回一句发送失败），"
+                "改用 wechat_send_record 卡片或把链接写进正文。"
+                "图片也可以用 markdown ![alt](url)（Hermes 官方通道，多张同样逐张发）；同一张别两种写法各写一遍，会发两次。"
                 "表情收藏：save 时 moods=情绪、tags=题材/标记（字段已分离），desc 写画面；重复 save=补标。"
                 "list 看 moods_summary/tags_summary；清理用 wechat_sticker_delete（按 md5）。"
                 "收到好表情且合适时可主动问主人要不要收藏，或按主人授权的规则自动收藏。"

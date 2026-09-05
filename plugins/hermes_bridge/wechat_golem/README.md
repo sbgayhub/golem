@@ -158,6 +158,34 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 | `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群成员偏好档案目录（每成员一个 `<wxid>.json`） |
 | `WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` | `15` | 出站 `chat_id` 退到「最近入站会话」的窗口秒数（见下节） |
 
+## 出站媒体（MEDIA: 标记）
+
+**模型侧只需一个 `MEDIA:`**：一行一个、写几个发几个，类型自动判，不用记桥接口。
+
+| 形态 | 谁抽 | 结果 |
+|---|---|---|
+| `MEDIA:<https 直链>` | 适配器 `send()` | 按类型 → 桥 `/send_image`、`/send_video`、`/send_voice` |
+| `MEDIA:/绝对路径` | 官方核心 `extract_media` | 图片 → 本适配器 `send_image_file`；`.mp4` → `send_video` |
+| `![alt](url)` | 官方核心 `extract_images` | `send_multiple_images` → 本适配器 `send_image`（多张逐张） |
+| `VIDEO:<url>` | 适配器 `send()` | 仅当 URL 看不出类型时才需要，等价于「这是视频」的提示 |
+
+类型两级判定：**扩展名**（剥 `?query#frag` 后取后缀；表照抄官方 `_IMAGE_EXTS`/`_VIDEO_EXTS`/`_AUDIO_EXTS`）→ **magic bytes**（无扩展名时下载后嗅 PNG/JPEG/GIF/WebP/`ftyp`/EBML/OggS…，字节复用走 `data_b64`，不拉第二遍）。嗅不出按图片发。
+
+**URL 分支为什么必须自己写**：官方 `extract_media` 的路径锚点只有 `~/`、`/`、`X:\`，`MEDIA:<url>` 官方核心抽不到（实测匹配为空）；视频 URL 官方更是零通道（`extract_images` 只抽图片、`send_video` 只吃本地路径）。而官方 image_gen 文档明确教模型「拿到 URL 后 emit `MEDIA:<url>`」——这一半归适配器补。
+
+行为要点：
+
+- **多个标记全发**（`finditer`）。旧版 `.search()` 只取第一个，其余留在剩余正文里当 caption 发出去，就是「让它发多张图、微信只收到一段文字」的根因。
+- **先文字、再逐个媒体**，与官方 `_send_final_text` → `_deliver_attachments` 同序；不再把剩余正文塞 `caption`（多图时说明会黏在第一张后面）。
+- 正则鲁棒性对齐官方：容忍 `**MEDIA:…**` 强调包裹、CJK 全角标点终结（`（）：，。`）、`MEDIA:`/`VIDEO:` 互为边界防 `MEDIA:aMEDIA:b` 粘连。
+- 文字已发出后媒体失败**不回 failure**（否则 Hermes 重试整条 `send`，文字发第二遍），只记 warning；桥侧带 `url` 时还会降级补一条链接文本。
+- 微信没有文件通道：`MEDIA:/x.pdf` 会被官方核心路由到未实现的 `send_document`，基类回一句发送失败——文档走 `wechat_send_record` 或给链接。
+- 日志：`grep -a "outbound media tags" gateway.log` 看抽到几个、类型是什么；`媒体类型嗅探` 是走了 magic bytes 那一级。
+
+**模型以前为什么爱调表情包工具**：插件平台的 `platform_hint` 是**替代**官方 hint 而非追加——`agent/system_prompt.py::_platform_hint()` 先查 `PLATFORM_HINTS.get(platform_key)`，命中就用官方的，**没命中才**去 registry 取插件的。`wechat_golem` 不在官方表里，官方那句 “You can send files natively: write MEDIA:/absolute/path/to/file” 我们一个字都拿不到，而旧 hint 里唯一提到 `MEDIA:` 的地方是一句禁令。于是模型只剩「找工具」，而工具表里唯一能发图的就是 `wechat_send_emoji`。现在 `platform_hint` 有独立的【发媒体】块，`wechat_send_emoji` / `wechat_sticker_send` 描述开头也写明「只发表情包；普通图片写 MEDIA:」。
+
+> 调措辞不必每次重拷 adapter.py：`config.yaml` 支持 `platform_hints.<platform>` 覆盖（`replace` / `append`，裸字符串=append），可先 append 试效果、定稿再落回代码（读 `_resolve_platform_hint` 实现所得，未实测）。
+
 ## 出站目标（发给谁）
 
 `wechat_send_*` / `wechat_sticker_send` / `wechat_revoke` 的 `chat_id` **必填**，取消息前缀里

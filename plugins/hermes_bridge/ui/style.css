@@ -709,6 +709,7 @@ main {
 .k.pushed { color: var(--ok); }
 .k.dropped { color: var(--bad); }
 .k.cancelled { color: var(--accent-dark); }
+.k.revoked { color: var(--accent-dark); }
 
 /* Trace list */
 .trace-list {
@@ -807,6 +808,7 @@ main {
 .trace-item.context_only { border-left-color: var(--faint); }
 .trace-item.scheduled { border-left-color: var(--warn); background: linear-gradient(90deg, rgba(196, 136, 40, 0.04), transparent 60%); }
 .trace-item.cancelled { border-left-color: var(--accent); background: linear-gradient(90deg, rgba(59, 143, 96, 0.04), transparent 60%); }
+.trace-item.revoked { border-left-color: var(--accent-dark); background: linear-gradient(90deg, rgba(59, 143, 96, 0.06), transparent 60%); }
 
 /* ---- Log viewer (terminal style) ---- */
 .code-block {

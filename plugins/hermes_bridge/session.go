@@ -132,6 +132,7 @@ var (
 	defaultInterruptTokens    = []string{"打断"}
 	defaultSessionResetTokens = []string{"新开会话", "新对话"}
 	defaultArchiveTokens      = []string{"归档", "归档群友", "记群友", "记成员", "归档成员"}
+	defaultRevokeTokens       = []string{"撤回", "撤回吧", "撤回上一条"}
 	defaultApprovalTokens     = []string{
 		"yes", "y", "no", "n",
 		"always", "session", "once", "all",
@@ -191,6 +192,10 @@ func (p *BridgePlugin) approvalTokens() []string {
 	return normalizeTokens(p.configSnapshot().ApprovalTokens, defaultApprovalTokens)
 }
 
+func (p *BridgePlugin) revokeTokens() []string {
+	return normalizeTokens(p.configSnapshot().RevokeTokens, defaultRevokeTokens)
+}
+
 // isInterruptReplyText 与适配器 _is_interrupt_command 对齐：整句打断词（默认「打断」）。
 func (p *BridgePlugin) isInterruptReplyText(text string) bool {
 	return matchToken(text, p.interruptTokens())
@@ -206,6 +211,14 @@ func (p *BridgePlugin) isSessionResetText(text string) bool {
 // 必须立即透传（群门闩否则吞掉无 @ 的短词）；适配器再扩成完整 upsert 指令投给 agent。
 func (p *BridgePlugin) isMemberArchiveText(text string) bool {
 	return matchToken(text, p.archiveTokens())
+}
+
+// isRevokeText 撤回捷径：主人整句「撤回/撤回吧/撤回上一条」。
+// 与上面几个不同，这条**不透传**给适配器——撤回要抢微信 2 分钟窗口，绕开
+// SSE→LLM→工具一整圈最稳，桥自己撤完就结束（见 outbox.go）。
+// 因此适配器侧没有对应词表，改这组词不必同步 Hermes .env。
+func (p *BridgePlugin) isRevokeText(text string) bool {
+	return matchToken(text, p.revokeTokens())
 }
 
 // isApprovalReplyText 与适配器 _is_approval_reply 对齐的子集：整句审批捷径。

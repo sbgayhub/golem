@@ -468,6 +468,8 @@ func (p *BridgePlugin) flushRecordImageRevokes() {
 	// 稍等客户端落盘/同步，再撤（过早撤可能导致记录里 CDN 也挂）
 	time.Sleep(800 * time.Millisecond)
 	for _, job := range jobs {
+		// 这些临时图是记录卡片的副产物，不该再由用户的「撤回」重复撤一次
+		p.forgetOutbox(job.ChatID, job.IDs...)
 		for _, id := range job.IDs {
 			if _, err := p.message.Revoke(job.ChatID, id); err != nil {
 				slog.Warn("[hermes_bridge] 撤回记录临时图失败",
@@ -490,6 +492,7 @@ func (p *BridgePlugin) discardRecordImageRevokes(alsoRevoke bool) {
 		return
 	}
 	for _, job := range jobs {
+		p.forgetOutbox(job.ChatID, job.IDs...)
 		for _, id := range job.IDs {
 			_, _ = p.message.Revoke(job.ChatID, id)
 		}

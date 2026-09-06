@@ -16,8 +16,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.13.0",
-		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；管理台；可迁移配置（外部程序路径、捷径词表）。",
+		Version:     "0.15.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；管理台；可迁移配置（外部程序路径、捷径词表）。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,
@@ -303,6 +303,47 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		return false, nil
 	}
 
+	// 撤回捷径：仅主人整句「撤回/撤回吧/撤回上一条」，桥内闭环撤掉自己最近发的一条。
+	//
+	// 为什么不像其他捷径那样透传给 agent：微信撤回只有 2 分钟窗口，走
+	// SSE→LLM→工具一整圈可能就赶不上（agent 正忙时更甚），而「撤回刚才那条」
+	// 本身不需要任何理解。agent 主动撤（自己发错、或用户换个说法要求）仍走
+	// wechat_revoke 工具 → POST /revoke，同一套记账（见 outbox.go）。
+	//
+	// 只撤 1 条：多段回复要整轮撤时连发几次，或让 agent 带 count 调工具。
+	if in.SpeakerIsOwner && p.isRevokeText(in.Text) {
+		chatID := in.Receiver.GetUsername()
+		ct := "private"
+		if in.IsChatroom {
+			ct = "group"
+		}
+		done, failed, err := p.revokeOutbox(chatID, 1, 0)
+		reason := "revoke_shortcut"
+		switch {
+		case err != nil:
+			// 没有句柄可撤（桥重启 / 太久没发）：必须回一句，否则主人只看到「没反应」
+			reason = "revoke_none"
+			slog.Info("[hermes_bridge] 撤回捷径无可撤消息", "chat", chatID, "err", err)
+			_ = p.sendPlainTextUntracked(p.resolveReceiver(chatID), "撤不了："+err.Error())
+		case len(failed) > 0:
+			reason = "revoke_failed"
+			summary := revokeFailSummary(failed)
+			slog.Warn("[hermes_bridge] 撤回捷径失败", "chat", chatID, "detail", summary)
+			_ = p.sendPlainTextUntracked(p.resolveReceiver(chatID), "撤不了："+summary)
+		default:
+			// 成功不再回话：微信自己会显示「撤回了一条消息」，多一条提示反而吵
+			slog.Info("[hermes_bridge] 撤回捷径已执行",
+				"chat", chatID, "chat_type", ct, "revoked", len(done))
+		}
+		p.trace(adminTrace{
+			Kind: "revoked", Reason: reason,
+			SessionKey: in.SessionKey, ChatID: chatID, ChatName: chatName,
+			ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+			Text: singleLine(in.Text), MsgCount: len(done),
+		})
+		return false, nil
+	}
+
 	// ---- 私聊：立即推（连发排队收敛归适配器项 2）----
 	if !in.IsChatroom {
 		if p.hub.subscriberCount() == 0 {
@@ -536,7 +577,19 @@ func (p *BridgePlugin) resolveReceiver(id string) *contact.Contact {
 	return &contact.Contact{Username: id}
 }
 
+// sendPlainText 发文本并登记出站记账（caption、降级链接等都算 agent 的话，应可撤）。
 func (p *BridgePlugin) sendPlainText(receiver *contact.Contact, content string) error {
+	return p.sendPlainTextKind(receiver, content, "text")
+}
+
+// sendPlainTextUntracked 桥自己的系统话术（撤回回执等）：**不**记账。
+// 否则下一次「撤回」会先把这句提示撤掉，用户看着像什么都没发生。
+func (p *BridgePlugin) sendPlainTextUntracked(receiver *contact.Contact, content string) error {
+	return p.sendPlainTextKind(receiver, content, "")
+}
+
+// sendPlainTextKind kind 空 = 不记账（见 recordOutbox）。
+func (p *BridgePlugin) sendPlainTextKind(receiver *contact.Contact, content, kind string) error {
 	if p.message == nil || receiver == nil || strings.TrimSpace(receiver.GetUsername()) == "" {
 		return fmt.Errorf("消息能力未注入或接收方无效")
 	}
@@ -546,11 +599,14 @@ func (p *BridgePlugin) sendPlainText(receiver *contact.Contact, content string) 
 		Content:  content,
 		Data:     &message.Message_Text{Text: &message.TextData{Content: content}},
 	}
-	_, err := p.message.Send(msg)
+	resp, err := p.message.Send(msg)
+	if err == nil {
+		p.recordOutbox(receiver.GetUsername(), kind, content, resp.GetNewId())
+	}
 	return err
 }
 
-func (p *BridgePlugin) statusText() string {
+func (p *BridgePlugin) statusText(chatID string) string {
 	cfg := p.configSnapshot()
 	// 主人 / 业务 Listen 不写明文：status 可能在群里由主人触发，避免泄露 wxid 与对 LAN 地址。
 	ownerOK := "未识别"
@@ -585,6 +641,9 @@ func (p *BridgePlugin) statusText() string {
 		"捷径词: 打断=" + strings.Join(p.interruptTokens(), "/") +
 			" | 新开会话=" + strings.Join(p.sessionResetTokens(), "/") +
 			" | 归档=" + strings.Join(p.archiveTokens(), "/"),
+		fmt.Sprintf("撤回捷径(仅主人): %s | 时限 %ds | 本会话可撤 %d 条",
+			strings.Join(p.revokeTokens(), "/"), int(p.revokeWindow().Seconds()),
+			p.outboxCount(chatID)),
 		"媒体工具: " + p.mediaToolSummary(),
 		fmt.Sprintf("本地会话 %d | pending 去抖 %d | 未推送缓冲 %d 条", sessN, pendN, bufN),
 		"主人: " + ownerOK,

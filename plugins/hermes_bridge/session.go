@@ -133,11 +133,22 @@ var (
 	defaultSessionResetTokens = []string{"新开会话", "新对话"}
 	defaultArchiveTokens      = []string{"归档", "归档群友", "记群友", "记成员", "归档成员"}
 	defaultRevokeTokens       = []string{"撤回", "撤回吧", "撤回上一条"}
-	defaultApprovalTokens     = []string{
-		"yes", "y", "no", "n",
-		"always", "session", "once", "all",
-		"deny", "approve",
-		"是", "否", "同意", "拒绝", "允许", "取消",
+	// 与 Hermes gateway 的 approval.inputs（locales zh ∪ en）对齐：
+	// gateway 在审批挂起时按这组同义词拦截裸词回复。桥不认的词会被群门闩
+	// 吞掉，gateway 永远等不到回复。
+	defaultApprovalTokens = []string{
+		// 允许一次
+		"yes", "y", "ok", "okay", "confirm", "approve",
+		"是", "好", "确认", "同意", "可以", "批准", "允许",
+		// 拒绝
+		"no", "n", "deny", "reject", "cancel",
+		"否", "不", "取消", "拒绝", "不行",
+		// 本会话允许
+		"session", "会话", "本会话",
+		// 永久允许
+		"always", "始终", "总是",
+		// 双词组合引导词（all/approve/deny + session/always/once/all 由代码固定识别）
+		"once", "all",
 	}
 )
 

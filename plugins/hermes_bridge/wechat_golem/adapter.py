@@ -60,6 +60,7 @@ import re
 import tempfile
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
@@ -2166,27 +2167,23 @@ def _is_silent_outbound(text: str) -> bool:
     return bool(_SILENCE_PHRASE_RE.match(s))
 
 
-# Hermes gateway 在 pending 审批时识别的纯文本捷径（见 gateway/run.py）。
-# 注意：Golem host 会拦截所有以 / 开头的消息（未知命令：/approve），
-# 因此微信侧不能依赖 /approve、/deny，只能用 yes/no 等无斜杠回复。
+# 与 Hermes gateway 的 approval.inputs（locales zh ∪ en）及桥 defaultApprovalTokens 对齐。
+# gateway 在审批挂起时按这组同义词拦截裸词回复；桥不认的词会被群门闩吞掉。
+# Golem host 会拦截所有以 / 开头的消息，微信侧不能依赖 /approve、/deny。
 _APPROVAL_REPLY_TOKENS = frozenset(
     {
-        "yes",
-        "y",
-        "no",
-        "n",
-        "always",
-        "session",
-        "once",
-        "all",
-        "deny",
-        "approve",
-        "是",
-        "否",
-        "同意",
-        "拒绝",
-        "允许",
-        "取消",
+        # 允许一次
+        "yes", "y", "ok", "okay", "confirm", "approve",
+        "是", "好", "确认", "同意", "可以", "批准", "允许",
+        # 拒绝
+        "no", "n", "deny", "reject", "cancel",
+        "否", "不", "取消", "拒绝", "不行",
+        # 本会话允许
+        "session", "会话", "本会话",
+        # 永久允许
+        "always", "始终", "总是",
+        # 双词组合引导词（all/approve/deny + session/always/once/all）
+        "once", "all",
     }
 )
 
@@ -2859,8 +2856,23 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             message_type=MessageType.TEXT,
             source=source,
             message_id=str(kw.get("message_id") or int(time.time() * 1000)),
+            reply_expected=self._reply_expected_for(
+                kw["hermes_chat_type"], str(kw.get("addressing") or "")
+            ),
             metadata=meta,
         )
+
+    @staticmethod
+    def _reply_expected_for(hermes_chat_type: str, addressing: str):
+        """群里没人找它的消息（冒泡/点名别人）声明 reply_expected=False。
+
+        新版 gateway 只允许「内部任务」或 reply_expected is False 的轮次以纯
+        NO_REPLY 静默；否则会把沉默替换成「silence marker rejected」警告发出来。
+        被 @ / 引用、以及私聊不声明（None=按需要回复处理），沉默仍会触发警告。
+        """
+        if hermes_chat_type == "group" and addressing not in ("self", "quoted_self"):
+            return False
+        return None
 
     async def _deliver_immediate(self, event: MessageEvent) -> None:
         """审批等旁路：不经车道，直接 await handle_message（不等 session idle）。
@@ -3436,6 +3448,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 message_type=MessageType.TEXT,
                 source=source,
                 message_id=message_id,
+                reply_expected=self._reply_expected_for(
+                    hermes_chat_type, str(data.get("addressing") or "")
+                ),
                 metadata={**base_meta, "approval_reply": False, "interrupt": True},
             )
             logger.info(
@@ -4052,47 +4067,39 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             default_is_url=False,
         )
 
-    async def send_exec_approval(
-        self,
-        chat_id: str,
-        command: str,
-        session_key: str,
-        description: str = "dangerous command",
-        metadata: Optional[Dict[str, Any]] = None,
-        allow_permanent: bool = True,
-        smart_denied: bool = False,
-    ) -> SendResult:
-        """中文文本审批卡。
+    # 覆盖基类钩子而非 send_exec_approval：新版 gateway 用
+    # supports_exec_approval_buttons()（看本钩子是否被覆盖）决定走适配器卡片
+    # 还是 /approve 纯文本兜底。微信没有按钮，这里把 gateway 拼好的本地化正文
+    # 渲染成文本卡，回复词按 prompt.actions 动态给出（无斜杠，Golem 会拦截 / 命令）。
+    _EA_CMD_PREVIEW_LIMIT = 1500
 
-        Golem host 会拦截所有 / 开头消息（未知命令），因此微信侧
-        只能用无斜杠捷径：yes / no / always / session。
-        """
-        cmd_preview = command if len(command) <= 1500 else command[:1500] + "..."
+    # choice → 微信侧无斜杠回复词（gateway 裸词拦截与桥门闩都认这些词）
+    _EA_REPLY_WORDS = {
+        "once": "yes",
+        "session": "session",
+        "always": "always",
+        "deny": "no",
+    }
+
+    async def _send_exec_approval_prompt(self, prompt) -> SendResult:
+        """文本审批卡：gateway 的本地化正文 + 无斜杠回复说明。"""
+        text = prompt.text or ""
+        cmd = str(prompt.command or "")
+        if len(cmd) > self._EA_CMD_PREVIEW_LIMIT and cmd in text:
+            text = text.replace(
+                cmd, cmd[: self._EA_CMD_PREVIEW_LIMIT] + "...", 1
+            )
         lines = [
-            "⚠️ 危险命令待审批",
-            "",
-            "命令：",
-            "```",
-            cmd_preview,
-            "```",
-            f"原因：{description}",
-            f"会话：{session_key}",
+            text.rstrip(),
             "",
             "请主人直接回复（不要加 /，Golem 会拦截斜杠命令）：",
-            "  yes — 允许一次",
-            "  session — 本会话允许同类",
         ]
-        if allow_permanent and not smart_denied:
-            lines.append("  always — 永久允许（hardline 仍拦截）")
-        lines.extend(
-            [
-                "  no — 拒绝",
-            ]
+        for label, choice, _style in prompt.actions:
+            word = self._EA_REPLY_WORDS.get(choice, choice)
+            lines.append(f"  {word} — {label}")
+        return await self.send(
+            prompt.chat_id, "\n".join(lines), metadata=prompt.metadata
         )
-        if smart_denied:
-            lines.append("")
-            lines.append("（Smart DENY：主人覆盖仅对本操作一次有效）")
-        return await self.send(chat_id, "\n".join(lines), metadata=metadata)
 
     async def send_typing(
         self, chat_id: str, metadata: Optional[Dict[str, Any]] = None

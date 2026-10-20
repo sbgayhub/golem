@@ -254,7 +254,7 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 **表情库约定**（实现见 `adapter.py`）：
 
 - 工具：`wechat_sticker_save` / `list` / `send` / `delete`
-- **自主应景** → `send(mood=…)` 对齐 `moods`；**主人点名标签** → `send(tag=…)` 对齐 `tags`
+- **自主应景** → `send(mood=你想表达的核词)`，像群友甩反应，不是镜像对方情绪；不加载 `wechat-sticker-management`。斗图靠桥 `emoji_burst`。**主人点名标签** → `send(tag=…)`
 - 收藏时应带 `moods`（提示约束，非强制识图）；`tags` 留给题材/自定义标记
 - 成功发表情后勿旁白；只需表情时最终 `NO_REPLY`
 

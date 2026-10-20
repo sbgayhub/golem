@@ -96,7 +96,7 @@ type Config struct {
 	// ArchiveTokens 归档群友捷径整句词（仅主人）
 	ArchiveTokens []string `toml:"archive_tokens" comment:"归档捷径整句词；空=默认5词；须与适配器 WECHAT_GOLEM_ARCHIVE_TOKENS 一致"`
 	// ApprovalTokens 审批捷径整句词（仅主人）；两词组合 all/approve/deny + session/always/once/all 始终生效
-	ApprovalTokens []string `toml:"approval_tokens" comment:"审批捷径整句词；空=默认16词（yes/no/是/否/同意…）"`
+	ApprovalTokens []string `toml:"approval_tokens" comment:"审批捷径整句词；空=默认集（与 Hermes approval.inputs 对齐：yes/是/好/同意/no/拒绝/session/本会话/always/始终…）"`
 	// RevokeTokens 撤回捷径整句词（仅主人）。桥内闭环：命中即撤自己最近一条，
 	// 不推 SSE、不惊动 agent，故**无需**与适配器 env 同步（适配器侧没有对应词表）。
 	RevokeTokens []string `toml:"revoke_tokens" comment:"撤回捷径整句词（仅主人，桥内直接撤，不推 SSE）；空=默认[\"撤回\",\"撤回吧\",\"撤回上一条\"]"`

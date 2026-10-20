@@ -2167,6 +2167,66 @@ def _is_silent_outbound(text: str) -> bool:
     return bool(_SILENCE_PHRASE_RE.match(s))
 
 
+# ---- 引用气泡重复出站去重 ----
+# 模型常见行为：先调 wechat_send_quote 把回复塞进引用气泡，再把同一句当最终回复
+# 交给 send()，群里就是「引用气泡 + 重复一句」。tool 回包已提示别复述，这里再兜一层：
+# quote 成功后记账，同会话 30s 内整条最终回复与之相同就丢弃（不发、算成功）。
+# 只按会话 + 规范化后的整串精确比较，不做子串匹配——加了新词就不算重复。
+_QUOTE_SENT_TTL_S = 30.0
+_QUOTE_SENT_MAX = 8  # 每会话最多记几条（一轮里可能引用多人）
+_QUOTE_SENT: Dict[str, List[tuple]] = {}
+_QUOTE_SENT_LOCK = threading.Lock()
+
+
+def _dup_norm(text: str) -> str:
+    """去空白与标点后比较（模型复述时常补句号/换行）。"""
+    return re.sub(r"[\s\W_]+", "", (text or "").lower())
+
+
+def remember_quote_reply(chat_id: str, reply: str) -> None:
+    cid = str(chat_id or "").strip()
+    norm = _dup_norm(reply)
+    if not cid or not norm:
+        return
+    now = time.time()
+    with _QUOTE_SENT_LOCK:
+        items = [
+            (n, t)
+            for n, t in _QUOTE_SENT.get(cid, [])
+            if now - t <= _QUOTE_SENT_TTL_S
+        ]
+        items.append((norm, now))
+        _QUOTE_SENT[cid] = items[-_QUOTE_SENT_MAX:]
+
+
+def consume_quote_duplicate(chat_id: str, text: str) -> bool:
+    """本次出站是否就是刚发过的引用气泡正文；是则消费掉它并返 True。"""
+    cid = str(chat_id or "").strip()
+    norm = _dup_norm(text)
+    if not cid or not norm:
+        return False
+    now = time.time()
+    with _QUOTE_SENT_LOCK:
+        items = [
+            (n, t)
+            for n, t in _QUOTE_SENT.get(cid, [])
+            if now - t <= _QUOTE_SENT_TTL_S
+        ]
+        for i in range(len(items) - 1, -1, -1):
+            if items[i][0] == norm:
+                items.pop(i)
+                if items:
+                    _QUOTE_SENT[cid] = items
+                else:
+                    _QUOTE_SENT.pop(cid, None)
+                return True
+        if items:
+            _QUOTE_SENT[cid] = items
+        else:
+            _QUOTE_SENT.pop(cid, None)
+    return False
+
+
 # 与 Hermes gateway 的 approval.inputs（locales zh ∪ en）及桥 defaultApprovalTokens 对齐。
 # gateway 在审批挂起时按这组同义词拦截裸词回复；桥不认的词会被群门闩吞掉。
 # Golem host 会拦截所有以 / 开头的消息，微信侧不能依赖 /approve、/deny。
@@ -4227,6 +4287,16 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 "[wechat_golem] 丢弃沉默出站 chat=%s content=%r",
                 chat_id,
                 (content or "")[:40],
+            )
+            return SendResult(success=True, message_id=None)
+
+        # 引用气泡正文已经上屏，模型又把同一句当最终回复交过来时不再发第二遍。
+        # 回 success（视作已送达）——回失败会让 Hermes 重试整条 send，反而发第二次。
+        if consume_quote_duplicate(chat_id, content):
+            logger.info(
+                "[wechat_golem] 丢弃与引用气泡重复的出站 chat=%s content=%r",
+                chat_id,
+                (content or "")[:60],
             )
             return SendResult(success=True, message_id=None)
 
@@ -6919,7 +6989,7 @@ def _register_wechat_query_tools(ctx) -> None:
             }
         if not quote_content:
             return {"success": False, "error": "quote_content 必填（被引用原文）"}
-        return _run_coro(
+        result = _run_coro(
             ad.send_quote(
                 chat_id,
                 reply=reply,
@@ -6933,6 +7003,16 @@ def _register_wechat_query_tools(ctx) -> None:
                 caption=caption,
             )
         )
+        if isinstance(result, dict) and result.get("success"):
+            remember_quote_reply(chat_id, reply)
+            # 回包必须点明「已上屏」：否则模型常把同一句再当最终回复交一次，
+            # 群里就是「引用气泡 + 重复一句」。
+            result.setdefault(
+                "hint",
+                "引用气泡已上屏。这句回复已经发过了：最终回复不要再重复同一句；"
+                "没有别的话要说就只输出 NO_REPLY。",
+            )
+        return result
 
     _tool_send_quote = _make_query_handler("wechat_send_quote", _run_send_quote)
 
@@ -7846,7 +7926,9 @@ def _register_wechat_query_tools(ctx) -> None:
             "【可选】displayname=展示名；chatusr=会话相关 id（默认可省，桥按私聊/群补全）；"
             "createtime=原消息 unix 秒；caption=气泡外另发文本。"
             "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。不要用手写 XML 或 /send_app 发引用。"
-            "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。",
+            "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。"
+            "【发完就完】引用气泡本身就是你这轮的回复：最终回复不要再重复同一句（群里会连发两条一模一样的），"
+            "没有别的内容就只输出 NO_REPLY。",
             {
                 "type": "object",
                 "properties": {
@@ -8320,7 +8402,7 @@ def register(ctx) -> None:
                 "收到好表情且合适时可主动问主人要不要收藏，或按主人授权的规则自动收藏。"
                 "trigger_reason=emoji_burst 表示群里表情连发（斗图）：没人找你，可自行决定用收藏表情参战、收藏好表情或保持沉默；参战别刷屏，一两个表情足矣。"
                 "发语音：调 wechat_send_voice（audio_url）；支持 mp3/wav/silk/amr 等格式，桥侧自动转码。"
-                "点歌/分享音乐：先自己找资源（搜索接口、拦取页面、本地库），拿到可播放的 http/https mp3 、封面、歌词后，调 wechat_send_music（title/singer/audio_url 必填，cover_url/lyric/appid/caption 可选）发一张微信音乐卡片；这是对QQ音乐的那种。需要引用气泡回复某条消息：必须调 wechat_send_quote（不要用普通文字假装引用）。svrid=要回复的那条 msg_id（群批次看该条信封；对方 quoted_self 时用对方本条 msg_id，禁止用嵌套 quote_svrid）；fromusr=该条发言人 wxid；quote_content=该条对用户可见正文（若该条本身是引用气泡，用「对方回复」正文，不是被引用摘要）；reply=你的回复；displayname 可选。长列表/多段说明/伪对话/嵌图：调 wechat_send_record 发「聊天记录」卡片（items 可混 {name,content} 与 {type:image,url|media_ref}；生成图用 url，入站图用 media_ref；勿 data_b64），对齐 meme list 与 /pm list，避免刷屏。"
+                "点歌/分享音乐：先自己找资源（搜索接口、拦取页面、本地库），拿到可播放的 http/https mp3 、封面、歌词后，调 wechat_send_music（title/singer/audio_url 必填，cover_url/lyric/appid/caption 可选）发一张微信音乐卡片；这是对QQ音乐的那种。需要引用气泡回复某条消息：必须调 wechat_send_quote（不要用普通文字假装引用）。svrid=要回复的那条 msg_id（群批次看该条信封；对方 quoted_self 时用对方本条 msg_id，禁止用嵌套 quote_svrid）；fromusr=该条发言人 wxid；quote_content=该条对用户可见正文（若该条本身是引用气泡，用「对方回复」正文，不是被引用摘要）；reply=你的回复；displayname 可选。引用气泡发成功就**不要**再把同一句当最终回复发一遍（群里会重复），没别的话就只输出 NO_REPLY。长列表/多段说明/伪对话/嵌图：调 wechat_send_record 发「聊天记录」卡片（items 可混 {name,content} 与 {type:image,url|media_ref}；生成图用 url，入站图用 media_ref；勿 data_b64），对齐 meme list 与 /pm list，避免刷屏。"
                 "日常纯文字闲聊不必为了闲聊而调 tool；但应景表情、查询、点歌等该用就用。"
                 "【群成员偏好档案】官方 USER.md/MEMORY.md 是全局主人/环境笔记，装不下每个群友。"
                 "群友稳定的喜好、性格、说话风格、忌讳 → wechat_member_profile_upsert 按人持久化；"

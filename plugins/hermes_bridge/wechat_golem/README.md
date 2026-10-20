@@ -22,7 +22,7 @@
 Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
 
-**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice` / `wechat_fetch_media` / `wechat_revoke`（named schema + session-map 兜底 `chat_id`）。入站图/表情/视频/语音/文件走 `media_ref` + `wechat_fetch_media` 按需取。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`）。agent 验收勿 curl 桥。
+**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice` / `wechat_fetch_media` / `wechat_revoke`（named schema + session-map 兜底 `chat_id`）。入站图/表情/视频/语音/文件走 `media_ref` + `wechat_fetch_media` 按需取。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`；**发完即回复本身，最终回复别再重复同一句**，适配器会在 30s 内丢弃同会话的相同整串出站）。agent 验收勿 curl 桥。
 
 ## 安装
 
@@ -234,6 +234,8 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
   模型只回 NO_REPLY 时会发兜底文案。
 - 投递失败（handle_message 抛异常）整批回队、退避重试（5s 起、上限 60s），不丢消息。
 - 出站：字面 `\n` → 真换行。
+- **引用气泡去重**：`wechat_send_quote` 成功后记账，同会话 30s 内最终回复若与之整串相同（忽略空白与标点）
+  则丢弃并回 success——修掉「引用气泡 + 重复一句」；只做整串比较，回复里多加了内容就正常发出。
 - 细节与验收：`../DEPLOY.md`。
 - 入站媒体：`wechat_fetch_media` 按 `media_ref` 懒下载。图/表情/视频走桥 CDN；语音/文件临时打本机 core `127.0.0.1:8080`（见桥 `coreapi.go`）。文件正文为 `[文件] 文件名`。
 

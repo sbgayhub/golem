@@ -228,6 +228,10 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 - **单飞 + pending**：busy 时后续只入队；**idle 后**合并一批再送（防 ⚡）；投递前也先查同会话 busy（防 cron 等跨入口撞上 busy=interrupt）。
 - 合并批把前面消息的 `media_ref`/`msg_id`/引用内嵌进对应正文（防「先发图再补话」丢图）；`metadata.merged_media_refs` 带全量列表。
 - 审批 `yes/no/…`：**仅主人**且确有待审批项才旁路立即；否则群内忽略、私聊转普通消息。
+- **静默（NO_REPLY）与 reply_expected**：群里未被 @/引用、以及 `trigger_names` 子串软命中
+  （如「火」命中「火锅」「火了」）声明 `reply_expected=False`，agent 判断不相关时可静默，
+  不再触发 gateway 的「模型只返回了静默标记」兜底。真 @ / 引用与私聊仍按「需要回复」处理，
+  模型只回 NO_REPLY 时会发兜底文案。
 - 投递失败（handle_message 抛异常）整批回队、退避重试（5s 起、上限 60s），不丢消息。
 - 出站：字面 `\n` → 真换行。
 - 细节与验收：`../DEPLOY.md`。

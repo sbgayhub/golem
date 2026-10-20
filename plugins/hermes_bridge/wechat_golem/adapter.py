@@ -3173,20 +3173,30 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             source=source,
             message_id=str(kw.get("message_id") or int(time.time() * 1000)),
             reply_expected=self._reply_expected_for(
-                kw["hermes_chat_type"], str(kw.get("addressing") or "")
+                kw["hermes_chat_type"],
+                str(kw.get("addressing") or ""),
+                str(kw.get("trigger_reason") or ""),
             ),
             metadata=meta,
         )
 
     @staticmethod
-    def _reply_expected_for(hermes_chat_type: str, addressing: str):
-        """群里没人找它的消息（冒泡/点名别人）声明 reply_expected=False。
+    def _reply_expected_for(
+        hermes_chat_type: str, addressing: str, trigger_reason: str = ""
+    ):
+        """群里没人找它的消息（冒泡/点名别人/trigger_names 软命中）声明 reply_expected=False。
 
         新版 gateway 只允许「内部任务」或 reply_expected is False 的轮次以纯
         NO_REPLY 静默；否则会把沉默替换成「silence marker rejected」警告发出来。
-        被 @ / 引用、以及私聊不声明（None=按需要回复处理），沉默仍会触发警告。
+
+        trigger_name 是子串匹配（如「火」会命中「火锅」「火了」），不算硬点名；
+        由 agent 判断是否真的在叫它。agent 决定不相关时允许静默，避免网关弹
+        「模型只返回了静默标记」的兜底文案。真 @ / 引用与私聊仍不声明（None）。
         """
-        if hermes_chat_type == "group" and addressing not in ("self", "quoted_self"):
+        if hermes_chat_type == "group" and (
+            addressing not in ("self", "quoted_self")
+            or trigger_reason == "trigger_name"
+        ):
             return False
         return None
 
@@ -4037,7 +4047,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 source=source,
                 message_id=message_id,
                 reply_expected=self._reply_expected_for(
-                    hermes_chat_type, str(data.get("addressing") or "")
+                    hermes_chat_type,
+                    str(data.get("addressing") or ""),
+                    str(data.get("trigger_reason") or ""),
                 ),
                 metadata={**base_meta, "approval_reply": False, "interrupt": True},
             )

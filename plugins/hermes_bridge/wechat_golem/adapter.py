@@ -18,7 +18,7 @@ WECHAT_GOLEM_ALLOW_ALL_USERS / WECHAT_GOLEM_ALLOWED_USERS。
   - 执行中后续只进 pending；idle 后多句合并一次投递（--- 分隔）
   - 审批 yes/no 旁路立即（_deliver_immediate，不等 idle）
   - 群：桥侧已去抖；适配器 debounce=0，仍走单飞
-  - 整句「打断」：清 pending 并立即投递
+  - 整句「打断」（仅主人）：清 pending 并立即投递
   - 出站：字面 \\n → 真换行；正文 @显示名/@wxid/[[mentions:wxid]] → 桥 mentions 真 @（metadata.mentions 可选）
   - 查询：桥 /self /group_info /group_members /group_member_detail（+ tool；session-map 兜底 chat_id）
   - 出站目标：chat_id 必填，按「本轮 run 绑定 > session 登记表 > 唯一在途会话」定位；
@@ -2072,7 +2072,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _interrupt_tokens() -> frozenset[str]:
-    """特殊打断整句（小写比较）。默认「打断」；可用 WECHAT_GOLEM_INTERRUPT_TOKENS=a,b 覆盖。"""
+    """特殊打断整句（小写比较，仅主人）。默认「打断」；可用 WECHAT_GOLEM_INTERRUPT_TOKENS=a,b 覆盖。"""
     raw = _env("WECHAT_GOLEM_INTERRUPT_TOKENS", "打断")
     parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
     return frozenset(parts)
@@ -2186,6 +2186,320 @@ _APPROVAL_REPLY_TOKENS = frozenset(
         "once", "all",
     }
 )
+
+
+# ---- 用量捷径：上下文占用报告（仅主人） ----
+#
+# Hermes 自带 /usage，但 Golem host 会吞掉所有以 / 开头的消息
+# （host/plugin/command.go 的 parseCommand 未命中 commandIndex →「未知命令」并 continue），
+# 消息根本到不了 gateway。故这里做无斜杠整句捷径，绕过 host 的斜杠拦截。
+#
+# 数字来源两层（优先精确、失败降级）：
+#   1. gateway 缓存里有活/驻留 agent → 直调 /usage 的同一套私有件
+#      （_resident_agent_for → _session_context_breakdown），与微信外 /usage 完全一致；
+#   2. 没有 agent（桥路径常态：agent 只在处理消息那一瞬存在，闲时被 idle 清扫）
+#      → 从 state.db 的 _usage_anchor + 消息增量自行估算（见 _usage_report_from_db）。
+#
+# 估算口径对齐 agent/context_breakdown.py 与 agent/usage_anchor.py：
+#   context_used = 锚点.prompt_tokens + 锚点.completion_tokens
+#                  + estimate_messages_tokens_rough(锚点之后新增的消息)
+#   estimate_tokens_rough：CJK/日韩按码点各 1 token，其余 ceil(UTF-8 字节 / 4)。
+
+_USAGE_TOKENS_ENV = "WECHAT_GOLEM_USAGE_TOKENS"
+_USAGE_TOKENS_DEFAULT = "用量,看用量,上下文,看上下文,context,usage"
+
+
+def _usage_tokens() -> frozenset[str]:
+    """用量捷径整句（小写比较）；WECHAT_GOLEM_USAGE_TOKENS=a,b 覆盖。"""
+    raw = _env(_USAGE_TOKENS_ENV, _USAGE_TOKENS_DEFAULT)
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return frozenset(parts)
+
+
+def _is_usage_command(text: str) -> bool:
+    raw = (text or "").strip().lower()
+    return bool(raw) and raw in _usage_tokens()
+
+
+# CJK/日韩字符：与 agent/model_metadata._CJK_DENSE_RE 同口径（各按 1 token 计）
+_CJK_RE = re.compile(
+    r"[⺀-⻿　-〿぀-ヿ㄀-ㄯㆠ-ㆿ"
+    r"㈀-㋿㐀-䶿一-鿿豈-﫿가-힯]"
+)
+_CHARS_PER_TOKEN = 4  # 非 CJK：ceil(UTF-8 字节 / 4)
+
+
+def _estimate_tokens_rough(text: str) -> int:
+    """对齐 agent.model_metadata.estimate_tokens_rough（CJK 每码点 1，其余 UTF-8 字节 / 4 向上取整）。"""
+    if not text:
+        return 0
+    text = str(text)
+    if text.isascii():
+        return (len(text) + 3) // _CHARS_PER_TOKEN
+    stripped = _CJK_RE.sub("", text)
+    dense = len(text) - len(stripped)
+    return dense + ((len(stripped.encode("utf-8", "replace")) + 3) // _CHARS_PER_TOKEN)
+
+
+def _format_usage_report(
+    *,
+    used: int,
+    maximum: int,
+    categories: List[Dict[str, Any]] = (),
+    source: str = "",
+    model: str = "",
+    note: str = "",
+    note_lines: List[str] = (),
+) -> str:
+    """拼一条微信友好的用量报告。categories 为空时只出总量块。"""
+    lines: List[str] = ["📊 上下文用量", ""]
+    if model:
+        lines.append(f"模型：{model}")
+    if maximum > 0:
+        # 锚点可能过期（压缩/重置后 base_count 对不上），单次 prompt 不可能超过窗口
+        used = max(0, min(used, maximum))
+        pct = max(0, min(100, round(used / maximum * 100)))
+        mark = "~" if source and source != "provider_usage" else ""
+        lines.append(f"已用：{mark}{used:,} / {maximum:,} token（{mark}{pct}%）")
+    else:
+        lines.append(f"已用：{used:,} token")
+    if note:
+        lines.append(note)
+    rows = [(str(c.get("label") or c.get("id") or "?"), int(c.get("tokens") or 0)) for c in categories]
+    rows = [(label, tok) for label, tok in rows if tok > 0]
+    if rows:
+        total = sum(tok for _label, tok in rows) or 1
+        width = max(len(label) for label, _tok in rows)
+        lines += ["", "分类估算："]
+        for label, tok in sorted(rows, key=lambda r: -r[1]):
+            pct = round(tok / total * 100)
+            lines.append(f"  {label.ljust(width)}  {tok:>7,}  ~{pct}%")
+    for n in note_lines:
+        if n:
+            lines.append(n)
+    return "\n".join(lines)
+
+
+# 无法从库里单独拆出的类别（技能 / 规则 / MCP / 子 agent）：它们的量已含在
+# 系统提示正文里，只有 agent 在场时 _context_breakdown_lines 才能按块拆开。
+_USAGE_UNDIVIDED_NOTE = (
+    "技能/规则/MCP 未单独统计"
+    "（需 agent 在场才能拆分；其量已含在「系统提示」里）"
+)
+
+
+def _session_db_path() -> str:
+    """gateway state.db 路径。与 SessionDB 的落位保持一致（$HERMES_HOME/state.db）。"""
+    home = _hermes_home()
+    return os.path.join(home, "state.db") if home else ""
+
+
+def _read_session_row(session_key: str) -> Optional[Dict[str, Any]]:
+    """从 state.db 读该 session_key 当前未结束的会话行。只读，失败返回 None。"""
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return None
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        if session_key:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_key = ? AND ended_at IS NULL "
+                "ORDER BY started_at DESC LIMIT 1",
+                (session_key,),
+            ).fetchone()
+        else:
+            row = None
+        if row is None:
+            return None
+        return {k: row[k] for k in row.keys()}
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _estimate_delta_tokens(session_id: str, base_count: int) -> int:
+    """锚点之后新增消息的粗略 token（对齐 estimate_messages_tokens_rough 的逐条口径）。
+
+    只算会真的进 prompt 的部分：显式 reasoning / reasoning_content 排除
+    （它们在新回合不再回放，charge_stale_thinking=False 语义），api_content 优先。
+    """
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return 0
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return 0
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT role, content, api_content, tool_calls FROM messages "
+            "WHERE session_id = ? AND active = 1 ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    except Exception:
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    if not rows or base_count <= 0 or base_count >= len(rows):
+        return 0
+    delta = rows[int(base_count):]
+    # 锚点那条助手回复已在锚点的 completion_tokens 里，跳过开头的 assistant
+    if delta and str(delta[0]["role"]) == "assistant":
+        delta = delta[1:]
+    total = 0
+    for r in delta:
+        text = str(r["api_content"] or r["content"] or "")
+        total += _estimate_tokens_rough(text)
+        tc = r["tool_calls"]
+        if tc:
+            total += _estimate_tokens_rough(str(tc))
+    return total
+
+
+def _estimate_system_prompt_parts(session_row: Dict[str, Any]) -> Dict[str, Any]:
+    """降级路径的系统提示拆解：从 system_prompts 表的快照拿正文与工具 schema。
+
+    库里存两种形态，且分两个 hash 位：
+      - system_prompt_hash → 系统提示正文（多为纯文本分节）
+      - tool_names         → 工具 schema 快照（JSON，带 tools 数组）
+    旧版本可能把两者塞进同一行（JSON 里既有 tools 又有正文），这里两种都兼容。
+    返回 {'prompt_tokens','tool_tokens','tool_count','has_tools','chars'}。
+    """
+    out: Dict[str, Any] = {
+        "prompt_tokens": 0,
+        "tool_tokens": 0,
+        "tool_count": 0,
+        "has_tools": False,
+        "chars": 0,
+    }
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return out
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return out
+
+    def _load(h: str) -> Optional[str]:
+        if not h:
+            return None
+        try:
+            r = conn.execute("SELECT prompt FROM system_prompts WHERE hash = ?", (h,)).fetchone()
+            return r["prompt"] if r is not None else None
+        except Exception:
+            return None
+
+    def _split_tools(doc: Any) -> Optional[List[Any]]:
+        if isinstance(doc, dict) and isinstance(doc.get("tools"), list):
+            return doc["tools"]
+        return None
+
+    try:
+        conn.row_factory = sqlite3.Row
+        prompt = _load(str(session_row.get("system_prompt_hash") or ""))
+        if not prompt and session_row.get("system_prompt"):
+            prompt = session_row["system_prompt"]
+        tools = None
+        # 旧形态：system_prompt 那一行本身就是带 tools 的 JSON
+        doc = None
+        if isinstance(prompt, str) and prompt.lstrip().startswith("{"):
+            try:
+                doc = json.loads(prompt)
+            except Exception:
+                doc = None
+        tools = _split_tools(doc)
+        if tools is None:
+            # 现行形态：工具 schema 单挂在 tool_names 那个 hash 下
+            tdoc = None
+            raw_tools = _load(str(session_row.get("tool_names") or ""))
+            if raw_tools:
+                try:
+                    tdoc = json.loads(raw_tools)
+                except Exception:
+                    tdoc = None
+            tools = _split_tools(tdoc)
+        if not prompt:
+            return out
+        prompt = str(prompt)
+        out["chars"] = len(prompt)
+        body = prompt
+        if isinstance(doc, dict) and tools is not None:
+            # 旧形态：正文 = JSON 去掉 tools 后的其余部分
+            rest = {k: v for k, v in doc.items() if k != "tools"}
+            body = json.dumps(rest, ensure_ascii=False) if rest else ""
+        if tools is not None:
+            out["tool_count"] = len(tools)
+            out["has_tools"] = True
+            out["tool_tokens"] = _estimate_tokens_rough(
+                json.dumps(tools, ensure_ascii=False)
+            )
+        out["prompt_tokens"] = _estimate_tokens_rough(body)
+    except Exception:
+        return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return out
+
+
+def _base_window_from_row(session_row: Dict[str, Any]) -> int:
+    """只读配置里的窗口（不发网络请求）；取不到返回 0，交给 _probe_window 兜底。"""
+    try:
+        mc = json.loads(session_row.get("model_config") or "{}")
+    except Exception:
+        mc = {}
+    if isinstance(mc, dict):
+        for k in ("context_length", "context_window"):
+            try:
+                v = int(mc.get(k) or 0)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
+def _probe_window(session_row: Dict[str, Any]) -> int:
+    """线程里调用 Hermes 的窗口探测（会发 HTTP，可能几秒）。失败返回 0。"""
+    try:
+        from agent.model_metadata import get_model_context_length  # type: ignore
+
+        mc = {}
+        try:
+            mc = json.loads(session_row.get("model_config") or "{}") or {}
+        except Exception:
+            mc = {}
+        rt = mc.get("gateway_runtime") or {} if isinstance(mc, dict) else {}
+        return int(
+            get_model_context_length(
+                str(session_row.get("model") or ""),
+                base_url=str(rt.get("base_url") or ""),
+                provider=str(rt.get("provider") or ""),
+            )
+            or 0
+        )
+    except Exception:
+        return 0
 
 
 def _is_approval_reply(text: str) -> bool:
@@ -2522,12 +2836,14 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             "interrupt": _interrupt_tokens(),
             "session_reset": _reset_tokens(),
             "archive": _archive_tokens(),
+            "usage": _usage_tokens(),
             "approval": _APPROVAL_REPLY_TOKENS,
         }
         env_hint = {
             "interrupt": "WECHAT_GOLEM_INTERRUPT_TOKENS / 桥 interrupt_tokens",
             "session_reset": "WECHAT_GOLEM_RESET_TOKENS / 桥 session_reset_tokens",
             "archive": "WECHAT_GOLEM_ARCHIVE_TOKENS / 桥 archive_tokens",
+            "usage": "WECHAT_GOLEM_USAGE_TOKENS / 桥 usage_tokens",
             "approval": "桥 approval_tokens（适配器侧无 env）",
         }
         for key, local in mine.items():
@@ -2914,6 +3230,209 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             ),
         )
 
+    # ---- 用量捷径：取数（先试私有路径，失败降级自算） ----
+
+    def _session_key_for_chat(self, chat_id: str, chat_type: str = "group") -> str:
+        """由 chat_id 反推 gateway 的 session key（本适配器的 key 算法）。
+
+        优先复用基类对当前 source 的解析，拿不到时按 build_session_key 的口径手拼。
+        """
+        cid = str(chat_id or "").strip()
+        if not cid:
+            return ""
+        if cid.endswith("@chatroom"):
+            chat_type = "group"
+        try:
+            source = self.build_source(
+                chat_id=cid, chat_name=cid, chat_type=chat_type,
+                user_id="", user_name="",
+            )
+            return self._hermes_session_key(MessageEvent(text="", source=source))
+        except Exception:
+            logger.debug("[wechat_golem] derive session_key failed", exc_info=True)
+        # 手拼兜底：agent:main:<platform>:<chat_type>:<chat_id>
+        try:
+            from gateway.session import _session_key_namespace  # type: ignore
+
+            ns = _session_key_namespace(None)
+        except Exception:
+            ns = "agent:main"
+        return f"{ns}:{_PLATFORM_NAME}:{chat_type}:{cid}"
+
+    def _usage_report_via_agent(self, session_key: str) -> Optional[str]:
+        """有驻留 agent 时走 /usage 的同一套私有件；任何一步失败返回 None 交给降级。"""
+        runner = getattr(self, "gateway_runner", None)
+        if runner is None or not session_key:
+            return None
+        resident = getattr(runner, "_resident_agent_for", None)
+        if not callable(resident):
+            return None
+        try:
+            agent = resident(session_key)
+        except Exception:
+            logger.debug("[wechat_golem] _resident_agent_for failed", exc_info=True)
+            return None
+        if agent is None:
+            return None
+        comp = getattr(agent, "context_compressor", None)
+        if comp is None:
+            return None
+        used = int(getattr(comp, "last_prompt_tokens", 0) or 0)
+        maximum = int(getattr(comp, "context_length", 0) or 0)
+        if used <= 0:
+            return None  # 还没跑过一轮，没有真实占用，交给降级
+        model = str(getattr(agent, "model", "") or "")
+        # 走 /usage 的同一套分类拆解（含工具/技能/MCP 的精确拆分）。
+        # 不用 gateway 的 _session_context_breakdown：它内部走
+        # store.get_or_create_session(source)，传合成 source 会触碰路由表、
+        # 极端情况下还会建出空会话。这里直接调它的底层纯函数，只做计算。
+        payload = None
+        try:
+            from agent.context_breakdown import compute_session_context_breakdown  # type: ignore
+
+            history = []
+            store = getattr(self, "_session_store", None)
+            row_for_history = _read_session_row(session_key)
+            sid = str((row_for_history or {}).get("id") or "")
+            loader = getattr(store, "load_transcript", None)
+            if sid and callable(loader):
+                try:
+                    history = loader(sid) or []
+                except Exception:
+                    history = []
+            payload = compute_session_context_breakdown(agent, history)
+        except Exception:
+            logger.debug("[wechat_golem] context breakdown failed", exc_info=True)
+            payload = None
+        cats: List[Dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for c in payload.get("categories") or []:
+                cats.append({
+                    "label": str(c.get("label") or c.get("id") or "?"),
+                    "tokens": int(c.get("tokens") or 0),
+                })
+            try:
+                used = int(payload.get("context_used") or used)
+                maximum = int(payload.get("context_max") or maximum)
+            except (TypeError, ValueError):
+                pass
+        src = ""
+        if isinstance(payload, dict):
+            src = str(payload.get("context_source") or "")
+        if not src:
+            real = getattr(comp, "last_real_prompt_tokens", None)
+            src = "provider_usage" if real and used == real else "local_estimate"
+        note_lines: List[str] = []
+        if not cats:
+            # 私有件没给出分类（旧版本或异常）：退回自算分类
+            row = _read_session_row(session_key)
+            sp = _estimate_system_prompt_parts(row) if row else {}
+            if sp.get("prompt_tokens"):
+                cats.append({"label": "系统提示", "tokens": sp["prompt_tokens"]})
+            if sp.get("tool_tokens"):
+                cats.append({"label": "工具", "tokens": sp["tool_tokens"]})
+            note_lines = [_USAGE_UNDIVIDED_NOTE]
+        return _format_usage_report(
+            used=used, maximum=maximum, categories=cats,
+            source=src, model=model, note_lines=note_lines,
+        )
+
+    def _usage_report_from_db(
+        self,
+        session_key: str,
+        *,
+        row: Optional[Dict[str, Any]] = None,
+        maximum: int = 0,
+    ) -> str:
+        """降级路径：从 state.db 的锚点 + 系统提示快照算。数字以真实锚点为基准。"""
+        if row is None:
+            row = _read_session_row(session_key)
+        if not row:
+            return "读不到本会话信息（state.db 无记录或不可读）"
+        model = str(row.get("model") or "")
+        if maximum <= 0:
+            maximum = _base_window_from_row(row)
+        try:
+            mc = json.loads(row.get("model_config") or "{}")
+        except Exception:
+            mc = {}
+        anchor = (mc or {}).get("_usage_anchor") if isinstance(mc, dict) else None
+        delta = 0
+        if isinstance(anchor, dict):
+            try:
+                delta = _estimate_delta_tokens(
+                    str(row.get("id") or ""), int(anchor.get("base_count") or 0)
+                )
+            except (TypeError, ValueError):
+                delta = 0
+        used = 0
+        source = ""
+        if isinstance(anchor, dict):
+            try:
+                used = int(anchor.get("prompt_tokens") or 0) + int(anchor.get("completion_tokens") or 0)
+                source = "provider_usage_plus_estimate"
+            except (TypeError, ValueError):
+                used = 0
+            used += delta
+        if used <= 0:
+            # 无锚点（新会话或刚压缩）：只报系统提示 + 消息粗估
+            sp0 = _estimate_system_prompt_parts(row)
+            used = sp0["prompt_tokens"] + sp0["tool_tokens"]
+            source = "local_estimate"
+        cats: List[Dict[str, Any]] = []
+        sp = _estimate_system_prompt_parts(row)
+        if sp["prompt_tokens"]:
+            cats.append({"label": "系统提示", "tokens": sp["prompt_tokens"]})
+        if sp["tool_tokens"]:
+            cats.append({"label": "工具", "tokens": sp["tool_tokens"]})
+        if delta:
+            cats.append({"label": "对话增量", "tokens": delta})
+        note_lines = [_USAGE_UNDIVIDED_NOTE]
+        if not sp["has_tools"]:
+            note_lines = ["工具 schema 未在快照中（旧形态系统提示）", _USAGE_UNDIVIDED_NOTE]
+        return _format_usage_report(
+            used=used, maximum=maximum, categories=cats,
+            source=source, model=model, note_lines=note_lines,
+        )
+
+    async def _resolve_window(self, row: Dict[str, Any]) -> int:
+        """窗口大小：先读配置，再线程探测（有缓存，超时 5s，失败不阻塞）。"""
+        n = _base_window_from_row(row)
+        if n > 0:
+            return n
+        key = str(row.get("model") or "")
+        cache = getattr(self, "_usage_window_cache", None)
+        if cache is None:
+            cache = {}
+            self._usage_window_cache = cache
+        if key in cache:
+            return cache[key]
+        try:
+            n = await asyncio.wait_for(asyncio.to_thread(_probe_window, row), timeout=5)
+        except Exception:
+            logger.debug("[wechat_golem] window probe failed", exc_info=True)
+            n = 0
+        if n > 0:
+            cache[key] = n
+        return n
+
+    async def _usage_report(self, chat_id: str, chat_type: str = "group") -> str:
+        """用量报告：有 agent 走私有件，否则从 state.db 降级估算。"""
+        session_key = self._session_key_for_chat(chat_id, chat_type)
+        try:
+            via = self._usage_report_via_agent(session_key)
+            if via:
+                return via
+        except Exception:
+            logger.debug("[wechat_golem] usage via agent failed", exc_info=True)
+        try:
+            row = _read_session_row(session_key)
+            maximum = await self._resolve_window(row) if row else 0
+            return self._usage_report_from_db(session_key, row=row, maximum=maximum)
+        except Exception as e:
+            logger.exception("[wechat_golem] usage report failed")
+            return f"用量查询失败：{e}"
+
     @staticmethod
     def _key_matches_chat(key: Any, chat_id: str) -> bool:
         """busy 判定的会话归属：chat_id 空 = 整 adapter 级（旧行为兜底）。
@@ -3269,6 +3788,30 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 logger.exception("[wechat_golem] 人格命令回执发送失败 chat=%s", chat_id)
             return
 
+        # ---- 用量捷径：仅主人整句触发；直接回执，不进 lane/agent ----
+        # Hermes 的 /usage 到不了这里（host 吞斜杠），故用无斜杠整句替代。
+        if is_owner and _is_usage_command(text):
+            try:
+                reply = await self._usage_report(
+                    chat_id,
+                    "group" if hermes_chat_type == "group" else "dm",
+                )
+            except Exception as e:
+                logger.exception("[wechat_golem] 用量查询失败 chat=%s", chat_id)
+                reply = f"用量查询失败：{e}"
+            metadata = {"session_key": session_key} if session_key else {}
+            try:
+                send_result = await self._send_text_chunks(chat_id, reply, metadata)
+                if not send_result.success:
+                    logger.warning(
+                        "[wechat_golem] 用量回执发送失败 chat=%s err=%s",
+                        chat_id,
+                        send_result.error,
+                    )
+            except Exception:
+                logger.exception("[wechat_golem] 用量回执发送失败 chat=%s", chat_id)
+            return
+
         # 主人整句「归档」等短词：扩成完整 upsert 指令（须在审批/打断判定前，短词不会撞那些词表）
         raw_user_text = text
         archive_cmd = is_owner and _is_member_archive_command(text)
@@ -3282,7 +3825,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         # 审批捷径仅主人有效：审批本来只有主人能答，非主人的整句 yes/是/同意
         # 不应享受旁路（设计如此，此前两端都漏了校验，群里闲聊会误唤醒 agent）。
         approval = is_owner and _is_approval_reply(text)
-        interrupt_cmd = (not approval) and _is_interrupt_command(raw_user_text)
+        # 打断捷径仅主人：清 pending / 中断 agent run 属于运行控制权。
+        # 桥已对群友拦截；这里再判一次，防非主人 @ 机器人发「打断」绕过桥的捷径分支后被此处接住。
+        interrupt_cmd = (not approval) and is_owner and _is_interrupt_command(raw_user_text)
 
         base_meta = {
             "is_owner": is_owner,

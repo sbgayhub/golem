@@ -568,6 +568,7 @@ type adminConfigView struct {
 	InterruptTokens    []string `json:"interrupt_tokens"`
 	SessionResetTokens []string `json:"session_reset_tokens"`
 	ArchiveTokens      []string `json:"archive_tokens"`
+	UsageTokens        []string `json:"usage_tokens"`
 	ApprovalTokens     []string `json:"approval_tokens"`
 	// 撤回捷径（仅主人，桥内闭环撤自己最近一条）；适配器侧无对应 env
 	RevokeTokens    []string `json:"revoke_tokens"`
@@ -593,6 +594,7 @@ func (p *BridgePlugin) adminConfigView() adminConfigView {
 		InterruptTokens:       p.interruptTokens(),
 		SessionResetTokens:    p.sessionResetTokens(),
 		ArchiveTokens:         p.archiveTokens(),
+		UsageTokens:           p.usageTokens(),
 		ApprovalTokens:        p.approvalTokens(),
 		RevokeTokens:          p.revokeTokens(),
 		RevokeWindowSec:       int(p.revokeWindow().Seconds()),
@@ -734,6 +736,7 @@ func (p *BridgePlugin) adminPatchConfig(w http.ResponseWriter, r *http.Request) 
 		{"interrupt_tokens", &p.Config.InterruptTokens},
 		{"session_reset_tokens", &p.Config.SessionResetTokens},
 		{"archive_tokens", &p.Config.ArchiveTokens},
+		{"usage_tokens", &p.Config.UsageTokens},
 		{"approval_tokens", &p.Config.ApprovalTokens},
 		// revoke 是桥内闭环，适配器无对应 env，改它不必同步 Hermes 侧
 		{"revoke_tokens", &p.Config.RevokeTokens},

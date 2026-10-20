@@ -4,7 +4,7 @@
 //   - 群聊：本地滚动上下文；仅 @/引用 bot / trigger_names / bubble 才去抖后一批 SSE；
 //     白名单群可单独覆盖这些门闩字段（省略 = 沿用全局，不改默认行为）；
 //   - 私聊：逐条立即 SSE（连发排队见适配器项 2）；
-//   - 审批捷径 yes/no、打断捷径「打断」始终立即透传（打断另作废该会话未推去抖批）。
+//   - 审批捷径 yes/no、打断捷径「打断」均仅主人、始终立即透传（打断另作废该会话未推去抖批）。
 //
 // 出站：适配器 HTTP POST /send /send_image /send_video /send_voice /send_emoji 等，
 // 本插件代为发到微信（图片/视频/语音/表情走 message.Send；表情 TypeEmoji 且过大自动压到约 500KB；视频带 Thumb+Duration；不做 MCP/agent run）。
@@ -89,12 +89,15 @@ type Config struct {
 	// 症状是「改了 env 完全没反应」。桥的生效词表由 GET /health 暴露，
 	// 适配器连上后会比对并告警。留空 = 用内置默认集（见 session.go）。
 	//
-	// InterruptTokens 打断捷径整句词（不限主人）
-	InterruptTokens []string `toml:"interrupt_tokens" comment:"打断捷径整句词；空=默认[\"打断\"]；须与适配器 WECHAT_GOLEM_INTERRUPT_TOKENS 一致"`
+	// InterruptTokens 打断捷径整句词（仅主人）
+	InterruptTokens []string `toml:"interrupt_tokens" comment:"打断捷径整句词；空=默认[\"打断\"]；仅主人；须与适配器 WECHAT_GOLEM_INTERRUPT_TOKENS 一致"`
 	// SessionResetTokens 新开会话捷径整句词（仅主人）
 	SessionResetTokens []string `toml:"session_reset_tokens" comment:"新开会话整句词；空=默认[\"新开会话\",\"新对话\"]；须与适配器 WECHAT_GOLEM_RESET_TOKENS 一致"`
 	// ArchiveTokens 归档群友捷径整句词（仅主人）
 	ArchiveTokens []string `toml:"archive_tokens" comment:"归档捷径整句词；空=默认5词；须与适配器 WECHAT_GOLEM_ARCHIVE_TOKENS 一致"`
+	// UsageTokens 用量捷径整句词（仅主人）。桥命中后立即透传（绕过群门闩），
+	// 由适配器回上下文报告、不进 agent。须与适配器 WECHAT_GOLEM_USAGE_TOKENS 一致。
+	UsageTokens []string `toml:"usage_tokens" comment:"用量捷径整句词；空=默认[\"用量\",\"看用量\",\"上下文\",\"看上下文\",\"context\",\"usage\"]；须与适配器 WECHAT_GOLEM_USAGE_TOKENS 一致"`
 	// ApprovalTokens 审批捷径整句词（仅主人）；两词组合 all/approve/deny + session/always/once/all 始终生效
 	ApprovalTokens []string `toml:"approval_tokens" comment:"审批捷径整句词；空=默认集（与 Hermes approval.inputs 对齐：yes/是/好/同意/no/拒绝/session/本会话/always/始终…）"`
 	// RevokeTokens 撤回捷径整句词（仅主人）。桥内闭环：命中即撤自己最近一条，
@@ -232,6 +235,7 @@ func main() {
 				InterruptTokens:    []string{},
 				SessionResetTokens: []string{},
 				ArchiveTokens:      []string{},
+				UsageTokens:        []string{},
 				ApprovalTokens:     []string{},
 				// 撤回捷径：桥内闭环，无适配器侧 env 需要同步
 				RevokeTokens:    []string{},

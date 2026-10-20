@@ -145,15 +145,17 @@ hermes -p wechat gateway install   # systemd user 服务
 
 | 命令 | 说明 |
 |---|---|
-| `/hermes status` | 桥状态、SSE 订阅数、白名单 |
+| `/hermes status` | 桥状态、群门闩、白名单，以及全部生效捷径词（标注「默认/已配置」） |
 | `/hermes enable [名称]` | 当前会话进路由白名单 |
 | `/hermes disable` | 移出白名单 |
 | `/hermes image <url>` | 诊断直发图片 |
 | `/hermes video <url>` | 诊断直发视频 |
 | `/hermes voice <url>` | 诊断直发语音（需 ffmpeg/ffprobe） |
-| `/hermes help` | 帮助 |
+| `/hermes emoji <url\|md5>` | 诊断直发表情（URL 下载压缩 / md5 引用不压） |
+| `/hermes help` | 管理命令 + 全部捷径词（含审批回复全表） |
 
 Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未知命令」且不会进 Hermes**。
+需要走 Hermes 的指令要么在 Golem 注册命令，要么改用无斜杠整句（如主人「用量」捷径，见下文）。
 
 ## 撤回
 
@@ -169,6 +171,32 @@ Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未
 - 主人回复 **`yes` / `no` / `session` / `always`**（**不要加 `/`**）
   - Golem 会拦截 `/approve`、`/deny`（未知命令）
 - hardline 永不放行
+
+## 用量（上下文占用）
+
+Hermes 自带 `/usage`，但 **Golem host 会吞掉所有 `/` 开头的消息**（`host/plugin/command.go`
+未命中注册表就回「未知命令」并 continue，消息到不了 gateway）。故适配器提供**无斜杠整句捷径**：
+
+- **仅主人**（`is_owner`）整句触发；默认词：`用量` / `看用量` / `上下文` / `看上下文` / `context` / `usage`
+  （`WECHAT_GOLEM_USAGE_TOKENS=a,b` 覆盖）
+- **群聊也可直接发**：桥新增同名旁路（`usage_tokens`，主人整句命中即立即透传，不作废去抖批），
+  不再要求 @/引用。桥与适配器词表须同步：桥 `usage_tokens` ↔ 适配器 `WECHAT_GOLEM_USAGE_TOKENS`
+  （两边默认值一致，改一边记得改另一边；`/hermes status` 会标出桥侧是「默认/已配置」）
+- 命中后**直接回执，不进 lane / agent**，不占上下文、不打断在途任务
+- 报告：总量（已用 / 窗口，百分比）+ 分类估算（系统提示、工具定义、规则、技能、MCP、记忆、对话）
+- 取数两层：
+  1. **有驻留 agent**（该会话的 agent 还在 gateway 缓存里）→ 调 `/usage` 的同一套私有件
+     （`runner._resident_agent_for` → `agent.context_breakdown.compute_session_context_breakdown`），
+     与微信外 `/usage` 一致
+  2. **没有 agent**（桥路径常态：处理完一轮就被 idle 清扫）→ 降级读 `state.db`：
+     `model_config._usage_anchor` 的 provider 真实 prompt+completion，加锚点之后新增消息的估算；
+     窗口先读 `model_config`，读不到再线程内调用 `get_model_context_length` 探测（5s 超时，按模型缓存）
+- 降级路径**拆不出技能 / 规则 / MCP**（它们已含在系统提示正文里），报告会标注「未单独统计」
+- 估算口径对齐 Hermes `estimate_tokens_rough`：CJK/日韩每码点 1 token，其余 `ceil(UTF-8 字节 / 4)`
+- 只读 `state.db`（`file:...?mode=ro`），不写库、不建会话
+
+> 不要改用 gateway 的 `_session_context_breakdown`：它内部走 `store.get_or_create_session(source)`，
+> 传合成 source 会触碰路由表、极端情况建出空会话。适配器只调底层纯函数 `compute_session_context_breakdown`。
 
 ## 入站交付（单飞，项 2 已验收）
 
@@ -190,11 +218,12 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 |---|---|---|
 | `WECHAT_GOLEM_DEBOUNCE_MS` | `0` | 私聊去抖；一般保持 0 |
 | `WECHAT_GOLEM_GROUP_DEBOUNCE_MS` | `0` | 群去抖；桥侧已合并 |
-| `WECHAT_GOLEM_INTERRUPT_TOKENS` | `打断` | 整句打断词（逗号分隔） |
+| `WECHAT_GOLEM_INTERRUPT_TOKENS` | `打断` | 整句打断词（逗号分隔；**仅主人**） |
 | `WECHAT_GOLEM_RESET_TOKENS` | `新开会话,新对话` | 整句新开会话词（仅主人；CLI prune --chat-id 清历史后桥回执，不投 agent） |
 | `WECHAT_GOLEM_STICKER_DIR` | `~/.hermes/wechat_stickers` | 表情收藏库目录（`<md5>.<ext>` + `index.json`：`moods` 情绪 / `tags` 题材标记 / desc…） |
 | `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群成员偏好档案目录（每成员一个 `<wxid>.json`） |
 | `WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` | `15` | 出站 `chat_id` 退到「最近入站会话」的窗口秒数（见下节） |
+| `WECHAT_GOLEM_USAGE_TOKENS` | `用量,看用量,上下文,看上下文,context,usage` | 主人「用量」捷径整句词表（回上下文占用报告；须与桥 `usage_tokens` 同步） |
 
 ## 出站媒体（MEDIA: 标记）
 

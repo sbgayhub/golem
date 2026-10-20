@@ -203,6 +203,30 @@ func matchToken(text string, tokens []string) bool {
 	return false
 }
 
+// gatewayCommandEscape 主人执行 Hermes 原生斜杠命令的转义前缀。
+//
+// Golem host 只拦 ASCII "/" 开头的消息（未注册命令直接回「未知命令」并吞掉），
+// 所以主人用 "~~" 开头绕过 host：桥上剥离 "~~" 后把 "/usage" 原样推给 Hermes。
+const gatewayCommandEscape = "~~"
+
+// gatewayCommandFromText 识别 "~~/cmd" 并返回 "/cmd"；余额必须以 "/" 开头。
+// 允许 "~~ /cmd" 这种中间空格；"~~cmd" 不算命令（避免误伤普通聊天）。
+func gatewayCommandFromText(text string) (string, bool) {
+	raw := strings.TrimSpace(text)
+	if !strings.HasPrefix(raw, gatewayCommandEscape) {
+		return "", false
+	}
+	rest := strings.TrimSpace(raw[len(gatewayCommandEscape):])
+	if !strings.HasPrefix(rest, "/") || len(rest) < 2 {
+		return "", false
+	}
+	// "/" 后面必须紧跟命令名（不能只是空白），否则不是有效命令。
+	if strings.TrimSpace(rest[1:2]) == "" {
+		return "", false
+	}
+	return rest, true
+}
+
 func (p *BridgePlugin) interruptTokens() []string {
 	return normalizeTokens(p.configSnapshot().InterruptTokens, defaultInterruptTokens)
 }

@@ -125,6 +125,13 @@ func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
 		"· 打断：" + strings.Join(p.interruptTokens(), " / ") +
 			"（" + tokenSourceLabel(cfg.InterruptTokens) + "）— 立即透传，并作废该会话未推送的去抖批",
 		"",
+		"Hermes 原生命令（仅主人；群里不要 @ 机器人）：",
+		"· 发 " + gatewayCommandEscape + "/usage、" + gatewayCommandEscape + "/model gpt-5 … → " +
+			"桥剥掉 " + gatewayCommandEscape + " 后把 /usage 交给 Hermes gateway；",
+		"  群聊不 @ 也生效；@ 了机器人按普通聊天处理；非主人不处理。",
+		"· `用量` 是适配器的估算报告；" + gatewayCommandEscape + "/usage 才是 Hermes 原生 /usage；" +
+			gatewayCommandEscape + "/help 看命令表。",
+		"",
 		"审批回复（仅主人；危险命令挂起时有效，整句；不要 /approve）：",
 	}
 	if tokensConfigured(cfg.ApprovalTokens) {

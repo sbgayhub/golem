@@ -3357,34 +3357,44 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         except Exception:
             mc = {}
         anchor = (mc or {}).get("_usage_anchor") if isinstance(mc, dict) else None
+        sp = _estimate_system_prompt_parts(row)
         delta = 0
+        hist_tokens = 0
+        used = 0
+        source = ""
         if isinstance(anchor, dict):
+            try:
+                prompt_tokens = int(anchor.get("prompt_tokens") or 0)
+                completion_tokens = int(anchor.get("completion_tokens") or 0)
+                used = prompt_tokens + completion_tokens
+                # 锚点 prompt 已含系统提示、工具和锚点前的历史对话；
+                # 扣掉前两项，余额归入「历史对话」，让分类加总与总量对齐。
+                hist_tokens = max(
+                    0, prompt_tokens - sp["prompt_tokens"] - sp["tool_tokens"]
+                ) + completion_tokens
+                source = "provider_usage_plus_estimate"
+            except (TypeError, ValueError):
+                used = 0
+                hist_tokens = 0
             try:
                 delta = _estimate_delta_tokens(
                     str(row.get("id") or ""), int(anchor.get("base_count") or 0)
                 )
             except (TypeError, ValueError):
                 delta = 0
-        used = 0
-        source = ""
-        if isinstance(anchor, dict):
-            try:
-                used = int(anchor.get("prompt_tokens") or 0) + int(anchor.get("completion_tokens") or 0)
-                source = "provider_usage_plus_estimate"
-            except (TypeError, ValueError):
-                used = 0
             used += delta
         if used <= 0:
             # 无锚点（新会话或刚压缩）：只报系统提示 + 消息粗估
-            sp0 = _estimate_system_prompt_parts(row)
-            used = sp0["prompt_tokens"] + sp0["tool_tokens"]
+            used = sp["prompt_tokens"] + sp["tool_tokens"]
+            hist_tokens = 0
             source = "local_estimate"
         cats: List[Dict[str, Any]] = []
-        sp = _estimate_system_prompt_parts(row)
         if sp["prompt_tokens"]:
             cats.append({"label": "系统提示", "tokens": sp["prompt_tokens"]})
         if sp["tool_tokens"]:
             cats.append({"label": "工具", "tokens": sp["tool_tokens"]})
+        if hist_tokens > 0:
+            cats.append({"label": "历史对话", "tokens": hist_tokens})
         if delta:
             cats.append({"label": "对话增量", "tokens": delta})
         note_lines = [_USAGE_UNDIVIDED_NOTE]
@@ -3925,6 +3935,39 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
         lane_key = self._lane_key(data)
         lane = self._get_lane(lane_key)
+
+        # ---- Hermes 原生斜杠命令：桥已把主人的 ~~/cmd 改写成 /cmd ----
+        # 不能走 _compose_event_text（否则正文被套上发送者信封，Hermes 不再按命令解析），
+        # 也不进普通聊天车道：直接以裸 /cmd 投给 gateway，由它按原生斜杠命令处理。
+        if (
+            is_owner
+            and str(data.get("trigger_reason") or "") == "gateway_command"
+            and text.startswith("/")
+        ):
+            source = self.build_source(
+                chat_id=chat_id,
+                chat_name=chat_name,
+                chat_type=hermes_chat_type,
+                user_id=user_id,
+                user_name=user_name,
+            )
+            event = MessageEvent(
+                text=text,
+                message_type=MessageType.TEXT,
+                source=source,
+                message_id=message_id,
+                reply_expected=True,
+                allow_gateway_control=True,
+                metadata={**base_meta, "gateway_command": True, "approval_reply": False},
+            )
+            logger.info(
+                "[wechat_golem] gateway command session=%s cmd=%s",
+                lane_key,
+                text[:80],
+            )
+            await self._deliver_immediate(event)
+            return
+
         media_data_b64 = str(data.get("media_data_b64") or "")
         media_ref = str(data.get("media_ref") or "")
         emoji_md5 = str(data.get("emoji_md5") or "")

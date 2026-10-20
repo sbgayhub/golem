@@ -5,6 +5,8 @@
 //     白名单群可单独覆盖这些门闩字段（省略 = 沿用全局，不改默认行为）；
 //   - 私聊：逐条立即 SSE（连发排队见适配器项 2）；
 //   - 审批捷径 yes/no、打断捷径「打断」均仅主人、始终立即透传（打断另作废该会话未推去抖批）。
+//   - 主人发 ~~/cmd（如 ~~/usage）→ 剥离 ~~ 后把 /cmd 透传，交给 Hermes gateway 原生斜杠命令；
+//     群聊不 @ 生效，@ 了机器人按普通聊天，非主人不处理。
 //
 // 出站：适配器 HTTP POST /send /send_image /send_video /send_voice /send_emoji 等，
 // 本插件代为发到微信（图片/视频/语音/表情走 message.Send；表情 TypeEmoji 且过大自动压到约 500KB；视频带 Thumb+Duration；不做 MCP/agent run）。

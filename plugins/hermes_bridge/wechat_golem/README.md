@@ -192,11 +192,30 @@ Hermes 自带 `/usage`，但 **Golem host 会吞掉所有 `/` 开头的消息**�
      `model_config._usage_anchor` 的 provider 真实 prompt+completion，加锚点之后新增消息的估算；
      窗口先读 `model_config`，读不到再线程内调用 `get_model_context_length` 探测（5s 超时，按模型缓存）
 - 降级路径**拆不出技能 / 规则 / MCP**（它们已含在系统提示正文里），报告会标注「未单独统计」
+- 降级路径的分类是：**系统提示 / 工具 / 历史对话 / 对话增量**。其中「历史对话」= 锚点
+  `prompt_tokens` − 系统提示估算 − 工具估算 + 锚点回复 `completion_tokens`，用来吸收
+  锚点前的对话量，保证分类加总与总量对齐（估算误差会落在这个类别里）
 - 估算口径对齐 Hermes `estimate_tokens_rough`：CJK/日韩每码点 1 token，其余 `ceil(UTF-8 字节 / 4)`
 - 只读 `state.db`（`file:...?mode=ro`），不写库、不建会话
 
 > 不要改用 gateway 的 `_session_context_breakdown`：它内部走 `store.get_or_create_session(source)`，
 > 传合成 source 会触碰路由表、极端情况建出空会话。适配器只调底层纯函数 `compute_session_context_breakdown`。
+
+## Hermes 原生命令（`~~/cmd`）
+
+Golem host 会拦下所有 `/` 开头且**未在 Golem 注册**的命令（回「未知命令」并 `continue`），
+Hermes 的 `/usage`、`/model`、`/compact` 等原生命令到不了 gateway。主人用 `~~` 转义绕过：
+
+- 微信发 `~~/usage` → 桥校验主人、剥掉 `~~`，把 `/usage` 透传给适配器
+- 适配器**不套发送者信封、不进聊天车道**，直接以裸 `/usage` 投给 gateway，按原生斜杠命令执行
+- 群聊**不 @ 也生效**；**@ 了机器人则按普通聊天处理**（与「@新对话」一致）
+- 非主人发 `~~/...` 按普通消息处理，不做任何命令动作
+- `~~` 后必须再有 `/`；`~~ /usage`（中间空格）也接受，`~~usage` 不处理
+- `用量` 是适配器的估算报告；`~~/usage` 才是 Hermes 原生 `/usage`
+- 可用 `~~/help` 查看 Hermes 命令表
+
+> 原生命令直接操作 gateway，包含 `/new`、`/stop`、`/restart`、`/compact` 等有副作用的命令，
+> 主人按需使用；`/new` 与适配器的「新开会话」不是同一条路径（前者走 gateway 标准重置）。
 
 ## 入站交付（单飞，项 2 已验收）
 

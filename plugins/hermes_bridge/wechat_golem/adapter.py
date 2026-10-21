@@ -1488,6 +1488,174 @@ def inflight_targets() -> Dict[str, str]:
         return {cid: slot[1] for cid, slot in _INFLIGHT.items()}
 
 
+# ---- 本轮已由工具出站的登记 ----
+# 模型常见行为：先用 wechat_send_quote / send_record / send_emoji 把回答发出去，
+# 然后只回一个 NO_REPLY。gateway 仅对 reply_expected is False 的轮次放行纯静默
+# 标记；真 @ / 引用 / 私聊传的是 None，会被判成「用户轮次不许静默」，于是打出
+# `silence marker rejected on a user turn` 并把沉默替换成 ⚠️ 兜底文案再发一遍
+# ——用户看到的就是「工具已经发完了，又多冒一句莫名其妙的客套话」。
+#
+# 事实已经答复，就在出站成功那一刻把该轮 event 改判成 False。gateway 是
+# handle_message → create_task(_process_message_background(event)) → ...
+# → _hmwa_shape_agent_response(reply_expected=event.reply_expected)，全程同一个
+# event 对象，且读值发生在 run 结束之后，所以工具执行期间的修改一定生效。
+# 只放宽静默许可、不禁言：模型照常可以给最终回复。
+#
+# 记账只做「最近 N 条」而不是全量：正常情况下车道在 finally 里注销，能留在表里的
+# 都是旁路投递（打断 / 审批 / 命令）或还没跑完的轮次。gateway 真正读的是
+# queued_terminal_reply_expected（链上最后一条事件），所以旧条目过期丢掉不影响判定。
+_ACTIVE_EVENT_TTL_S = 3 * 3600.0  # 兜底清理：旁路投递没有 idle 可等，只能靠时间与条数收敛
+_ACTIVE_EVENT_MAX_PER_CHAT = 6  # 每会话最多留几条；打断/审批连发时也不让记账无限长，留余量给「正在跑的那轮」
+_ACTIVE_EVENTS: Dict[str, List[tuple]] = {}  # chat_id -> [(event, ts), ...]，末尾最新
+_ACTIVE_EVENTS_LOCK = threading.Lock()
+
+
+def _prune_active_events(now: float) -> None:
+    """调用方需持有 _ACTIVE_EVENTS_LOCK；清掉过期与超量的旧轮次。
+
+    TTL 给得足够长：正常车道在 finally 里注销，落到这里的基本是旁路投递。
+    若按短 TTL 清，超过该时长仍在跑的一轮会丢掉登记，工具出站就改判不到，
+    静默警告会在「一次跑很久」的轮次上复现——所以保底靠条数上限收敛。
+    """
+    for cid in list(_ACTIVE_EVENTS):
+        items = [
+            (e, t) for e, t in _ACTIVE_EVENTS.get(cid, []) if now - t <= _ACTIVE_EVENT_TTL_S
+        ]
+        if len(items) > _ACTIVE_EVENT_MAX_PER_CHAT:
+            items = items[-_ACTIVE_EVENT_MAX_PER_CHAT:]
+        if items:
+            _ACTIVE_EVENTS[cid] = items
+        else:
+            _ACTIVE_EVENTS.pop(cid, None)
+
+
+def register_active_event(chat_id: str, event: Any) -> None:
+    """登记该会话当前在途的入站事件，供出站成功后改判静默许可。
+
+    自身绝不抛异常：调用点在投递关键路径上，记账失败只该少一次静默放宽，
+    不能把一条正常消息的投递带崩。
+    """
+    try:
+        cid = str(chat_id or "").strip()
+        if not cid or event is None:
+            return
+        now = time.time()
+        with _ACTIVE_EVENTS_LOCK:
+            _prune_active_events(now)
+            _ACTIVE_EVENTS.setdefault(cid, []).append((event, now))
+    except Exception:
+        logger.debug("[wechat_golem] register active event failed", exc_info=True)
+
+
+def unregister_active_event(chat_id: str, event: Any) -> None:
+    """run 结束（idle 或被放弃）时注销；按对象身份删，避免误删同会话的新一轮。"""
+    try:
+        cid = str(chat_id or "").strip()
+        if not cid or event is None:
+            return
+        with _ACTIVE_EVENTS_LOCK:
+            items = [it for it in (_ACTIVE_EVENTS.get(cid) or []) if it[0] is not event]
+            if items:
+                _ACTIVE_EVENTS[cid] = items
+            else:
+                _ACTIVE_EVENTS.pop(cid, None)
+    except Exception:
+        logger.debug("[wechat_golem] unregister active event failed", exc_info=True)
+
+
+def mark_inbound_replied(chat_id: str, why: str = "") -> bool:
+    """工具已把内容发到微信：允许该会话的轮次以纯静默标记收尾。返回是否有改判。
+
+    逐条标记该会话**所有**未注销的事件，而不是只挑一条。原因在打断/审批链上：
+    网关对链式的最终回复取 `queued_terminal_reply_expected`，也就是最后投递进来
+    那条事件的声明，最早那条不再是判定依据；只标最早一条会让真正被读的那条
+    仍是 None，警告照旧。列表里有几条就说明这几条都已交到 gateway 手上——能走到
+    「工具已出站」这步，就没有哪条还需要靠兜底文案来提醒用户「模型沉默了」。
+
+    同会话单飞（正常路径）时列表里只有一条，等价于「标正在跑的那轮」。
+    返回值只表示「是否真的把某条从 None 改成了 False」，供日志/测试判断。
+    """
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return False
+    now = time.time()
+    with _ACTIVE_EVENTS_LOCK:
+        _prune_active_events(now)
+        events = [e for e, _t in (_ACTIVE_EVENTS.get(cid) or [])]
+    marked = 0
+    for event in events:
+        if getattr(event, "reply_expected", None) is False:
+            continue
+        try:
+            event.reply_expected = False
+        except Exception:
+            logger.debug("[wechat_golem] 改判 reply_expected 失败", exc_info=True)
+            continue
+        marked += 1
+    if marked:
+        logger.info(
+            "[wechat_golem] 本轮已由工具出站，允许以静默收尾 chat=%s why=%s marked=%s",
+            cid,
+            why or "-",
+            marked,
+        )
+    return marked > 0
+
+
+# 只认 tool 出站接口：quote / record / emoji / 音乐卡片 / 语音。
+# 刻意不含 "send"/"send_image"/"send_video"——那是 gateway 最终回复与 MEDIA 的投递，
+# 发生在静默判定之后，标了没有意义；而且这些路径会带 chat_id 重试，在打断场景
+# 容易把刚投进来的新轮次一并放行静默。
+_REPLY_BEARING_PATHS = frozenset({
+    "send_quote",
+    "send_record",
+    "send_emoji",
+    "send_app",
+    "send_voice",
+})
+
+
+def _note_outbound_delivery(path: str, body: Dict[str, Any], result: Any) -> None:
+    """出站成功后把相关轮次标记为「已答复」。
+
+    挂在 _post_json 上而不是逐个 tool handler：发送路径有 8 条，漏一条就会
+    在对应工具上复现同一个警告。
+
+    标两个会话：
+      - body.chat_id —— 真正收到内容的那边；同会话发送时它就是本轮。
+      - 本轮会话 —— 跨会话发送（allow_cross_chat）时对方 chat_id 与本轮不同，
+        但本轮同样已经用工具把话说完了，最终回 NO_REPLY 不该再被补一句兜底
+        文案。取值优先 contextvar；工具 handler 跑在线程池里时拿不到它
+        （run_in_executor 不传 contextvars），退回「只有一个在途会话」，
+        与 resolve_outbound_target 的第三层判据一致。多会话并发且取不到
+        contextvar 时不猜，只标 body.chat_id——宁可少标，不可误标。
+
+    改判的代价上限是「少一句兜底提示」：既不阻止模型正常回复，也不会多发消息。
+    """
+    p = str(path or "").strip().strip("/").split("?", 1)[0]
+    if p not in _REPLY_BEARING_PATHS:
+        return
+    if not isinstance(result, dict) or not result.get("success"):
+        return
+    try:
+        targets: List[str] = []
+        chat_id = str(body.get("chat_id") or "").strip()
+        if chat_id:
+            targets.append(chat_id)
+        origin, _origin_sk = current_outbound_target()
+        if not origin:
+            flying = inflight_targets()
+            if len(flying) == 1:
+                origin = next(iter(flying))
+        if origin and origin not in targets:
+            targets.append(origin)
+        for cid in targets:
+            mark_inbound_replied(cid, why=p)
+    except Exception:
+        # 记账是附加值：任何异常都不该让一次已经成功的发送被当成失败返回。
+        logger.debug("[wechat_golem] note outbound delivery failed", exc_info=True)
+
+
 # 出站目标的来源标记，进日志便于事后判责
 OUTBOUND_SRC_CTX = "ctx"  # contextvar，本 run 绑定（最准）
 OUTBOUND_SRC_MAP = "session_map"  # 登记表精确命中
@@ -3252,6 +3420,11 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         trigger_name 是子串匹配（如「火」会命中「火锅」「火了」），不算硬点名；
         由 agent 判断是否真的在叫它。agent 决定不相关时允许静默，避免网关弹
         「模型只返回了静默标记」的兜底文案。真 @ / 引用与私聊仍不声明（None）。
+
+        另有运行期改判：工具（引用气泡 / 聊天记录卡片 / 表情 / 音乐卡 / 语音）
+        已经成功把内容发上屏时，mark_inbound_replied() 会把本轮 event 的
+        reply_expected 置 False——这一轮已经答复过了，最终只回 NO_REPLY 属于正常
+        收尾，不该被判成沉默错误再补一句兜底。
         """
         if hermes_chat_type == "group" and (
             addressing not in ("self", "quoted_self")
@@ -3268,6 +3441,10 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         同样要在 handle_message 前绑好出站目标（gateway 在里面 create_task，
         新 task 拿的是此刻的 context 快照）。不记 in-flight：这条路径不等
         session idle，无从知道 run 何时结束，记了就会永久占位。
+
+        active event 要登记：审批词本身不会让模型发工具，但**打断**也走这条路，
+        打断后模型在新回合里完全可能先发引用气泡再静默收尾——不登记的话那次
+        出站找不到可改判的事件，静默警告会从打断链上复现。
         """
         chat_id = self._event_chat_id(event)
         try:
@@ -3276,11 +3453,13 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             logger.debug("[wechat_golem] immediate session_key failed", exc_info=True)
             sk = ""
         token = bind_outbound_target(chat_id, sk)
+        register_active_event(chat_id, event)
         try:
             try:
                 await self.handle_message(event)
             except Exception:
                 logger.exception("[wechat_golem] immediate handle_message failed")
+                unregister_active_event(chat_id, event)
                 return
             self._remember_event_session(event, chat_id, sk)
         finally:
@@ -3754,11 +3933,13 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
         token = bind_outbound_target(chat_id, session_key)
         inflight_enter(chat_id, session_key)
+        register_active_event(chat_id, event)
         try:
             try:
                 await self.handle_message(event)
             except Exception:
                 logger.exception("[wechat_golem] handle_message failed")
+                unregister_active_event(chat_id, event)
                 return False
             self._remember_event_session(event, chat_id, session_key)
             try:
@@ -3775,6 +3956,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 logger.exception("[wechat_golem] post-handle wait failed")
             return True
         finally:
+            unregister_active_event(chat_id, event)
             inflight_leave(chat_id)
             unbind_outbound_target(token)
 
@@ -4989,6 +5171,11 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
     async def _post_json(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         body = self._outbound_body(path, body)
+        result = await self._post_json_raw(path, body)
+        _note_outbound_delivery(path, body, result)
+        return result
+
+    async def _post_json_raw(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if not self._session or self._session.closed:
             if aiohttp is None:
                 return {"error": "aiohttp not installed"}
@@ -7010,7 +7197,7 @@ def _register_wechat_query_tools(ctx) -> None:
             result.setdefault(
                 "hint",
                 "引用气泡已上屏。这句回复已经发过了：最终回复不要再重复同一句；"
-                "没有别的话要说就只输出 NO_REPLY。",
+                "没有别的话要说就只输出 NO_REPLY（此时静默是允许的，不会再补发兜底文案）。",
             )
         return result
 
@@ -7928,7 +8115,7 @@ def _register_wechat_query_tools(ctx) -> None:
             "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。不要用手写 XML 或 /send_app 发引用。"
             "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。"
             "【发完就完】引用气泡本身就是你这轮的回复：最终回复不要再重复同一句（群里会连发两条一模一样的），"
-            "没有别的内容就只输出 NO_REPLY。",
+            "没有别的内容就只输出 NO_REPLY（工具已出站的轮次允许静默，不会再补发兜底文案）。",
             {
                 "type": "object",
                 "properties": {

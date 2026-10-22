@@ -321,6 +321,16 @@ class Game:
             p = new_player(self.player_id, self.player_name or self.player_id)
             players[self.player_id] = p
         if self.player_name and p.get("name") != self.player_name:
+            # 数据按人存，同一个人在 A 群叫「坦哥」、B 群叫「钓鱼协会会长钓炸天」，
+            # 后说话的群会覆盖显示名。旧名进 aliases，按旧名点名（偷菜/打劫）仍然找得到。
+            old = p.get("name")
+            if old and old != self.player_id:
+                aliases = p.get("aliases")
+                if not isinstance(aliases, list):
+                    aliases = p["aliases"] = []
+                if old not in aliases:
+                    aliases.append(old)
+                    del aliases[:-5]  # 只留最近 5 个旧名，别让存档无限长
             p["name"] = self.player_name
         members = self.world["members"]
         if self.player_id not in members:

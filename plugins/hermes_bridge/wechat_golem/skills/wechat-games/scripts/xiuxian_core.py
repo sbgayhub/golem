@@ -1068,7 +1068,7 @@ def act_use(g: Game, args) -> None:
 
 
 def act_rank(g: Game, args) -> None:
-    players = [p for p in g.world["players"].values() if p.get("root")]
+    players = [p for p in g.world_players() if p.get("root")]
     if not players:
         g.say("还没有人踏上仙途。")
         return

@@ -13,7 +13,8 @@ import os
 import sys
 import time
 
-STATE_VERSION = 2          # v1=只有农场；v2=加修仙字段（迁移是幂等的，见 migrate_player）
+# v1=只有农场；v2=加修仙字段；v3=玩家存档按 wxid 提到顶层（换群数据还在）
+STATE_VERSION = 3
 DEFAULT_WORLD = "default"
 
 # 两个玩法共用的一笔钱。农场叫「阳光」、修仙叫「灵石」，是同一枚硬币的两面。
@@ -81,7 +82,56 @@ except ImportError:  # Windows
 # ---------------------------------------------------------------- 存档
 
 def _empty_state() -> dict:
-    return {"version": STATE_VERSION, "worlds": {}}
+    return {"version": STATE_VERSION, "players": {}, "worlds": {}}
+
+
+def _migrate_state(data: dict) -> dict:
+    """v2 → v3：玩家从「群 → 人」提到顶层「人」，群退化成成员名单。
+
+    以前换群就是一个新号，同一个 wxid 可能在多个群各有一份存档（这正是要修的 bug）。
+    合并规则：**先扫到的那份做底**（通常是在老群里玩起来的主号），后面的只补空字段，
+    不覆盖进度、也不合并冷却时间戳——否则「换个群就重置冷却」会重新冒出来。
+    """
+    worlds = data.get("worlds")
+    if not isinstance(worlds, dict):
+        worlds = {}
+    if isinstance(data.get("players"), dict):
+        # 已经是 v3，只需保证每个群有 members 列表
+        for w in worlds.values():
+            if isinstance(w, dict) and not isinstance(w.get("members"), list):
+                w["members"] = []
+        data["worlds"] = worlds
+        return data
+
+    players = {}
+    for wname, w in worlds.items():
+        if not isinstance(w, dict):
+            continue
+        old = w.get("players") or {}
+        for pid, p in old.items():
+            if not isinstance(p, dict):
+                continue
+            p.setdefault("id", pid)
+            kept = players.get(pid)
+            if kept is None:
+                players[pid] = p
+                continue
+            for k, v in p.items():
+                if kept.get(k) in ("", None, [], {}):
+                    kept[k] = v
+    data["players"] = players
+    # 群历史数据不再按人存，清掉旧的 players 键，只留成员与画图队列
+    for w in worlds.values():
+        if not isinstance(w, dict):
+            continue
+        members = w.get("members")
+        if not isinstance(members, list):
+            members = list((w.get("players") or {}).keys())
+        w.pop("players", None)
+        w["members"] = members
+    data["worlds"] = worlds
+    data["version"] = STATE_VERSION
+    return data
 
 
 def load_state() -> dict:
@@ -101,7 +151,7 @@ def load_state() -> dict:
     if not isinstance(data, dict) or not isinstance(data.get("worlds"), dict):
         return _empty_state()
     data.setdefault("version", 1)
-    return data
+    return _migrate_state(data)
 
 
 def save_state(state: dict) -> None:
@@ -251,45 +301,82 @@ class Game:
 
     @property
     def world(self) -> dict:
-        w = self.state["worlds"].setdefault(self.world_id, {"players": {}})
-        w.setdefault("players", {})
+        """当前会话（群）的场地：只存成员名单与画图队列，玩家数据在 state["players"]。"""
+        w = self.state["worlds"].setdefault(self.world_id, {})
+        if not isinstance(w.get("members"), list):
+            w["members"] = []
         return w
 
+    def _players(self) -> dict:
+        self.state.setdefault("players", {})
+        return self.state["players"]
+
     def player(self) -> dict:
+        """按 wxid 取人；不挂在群下，所以换群、换私聊都是同一个号。"""
         if not self.player_id:
             raise SystemExit("缺少 --player（需要说话人 wxid）")
-        players = self.world["players"]
+        players = self._players()
         p = players.get(self.player_id)
         if p is None:
             p = new_player(self.player_id, self.player_name or self.player_id)
             players[self.player_id] = p
         if self.player_name and p.get("name") != self.player_name:
             p["name"] = self.player_name
+        members = self.world["members"]
+        if self.player_id not in members:
+            members.append(self.player_id)
         return migrate_player(p)
 
     def find(self, target: str):
-        """按 wxid / 名字找人；返回 (player, 候选列表)。歧义时 player 为 None。"""
+        """按 wxid / 名字找人；返回 (player, 候选列表)。歧义时 player 为 None。
+
+        先在当前群找；找不到再查全服（数据按人存，别处玩过的人也能被点名）。
+        """
         t = (target or "").strip().lstrip("@")
         if not t:
             return None, []
-        players = self.world["players"]
+        players = self._players()
         for p in players.values():
             migrate_player(p)
         if t in players:
+            self._join_member(t)
             return players[t], []
-        hits = [p for p in players.values()
-                if p.get("name") == t or t in (p.get("aliases") or [])]
+        pool = self._in_world(players)
+        hits = self._match(pool, t)
         if not hits:
-            low = t.lower()
-            hits = [p for p in players.values()
-                    if str(p.get("name", "")).lower() == low]
+            hits = self._match(list(players.values()), t)
         if len(hits) == 1:
+            self._join_member(hits[0].get("id", ""))
             return hits[0], []
         return None, hits
 
+    @staticmethod
+    def _match(pool, t: str) -> list:
+        hits = [p for p in pool
+                if p.get("name") == t or t in (p.get("aliases") or [])]
+        if not hits:
+            low = t.lower()
+            hits = [p for p in pool if str(p.get("name", "")).lower() == low]
+        return hits
+
+    def _in_world(self, players: dict) -> list:
+        return [players[pid] for pid in self.world["members"] if pid in players]
+
+    def _join_member(self, pid: str) -> None:
+        if pid and pid not in self.world["members"]:
+            self.world["members"].append(pid)
+
     def others(self, exclude_id: str) -> list:
-        return [p for p in self.world["players"].values()
+        players = self._players()
+        return [p for p in self._in_world(players)
                 if p.get("id") != exclude_id and p.get("alive", True)]
+
+    def world_players(self) -> list:
+        """本群成员（打过照面的）；打劫、排行榜这类社群动作只用这批人。"""
+        players = self._players()
+        for p in players.values():
+            migrate_player(p)
+        return self._in_world(players)
 
     # -- 输出 --
 

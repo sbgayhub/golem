@@ -657,7 +657,7 @@ def act_rob(g: Game, args) -> None:
             g.say("%s 现在没有可抢的东西。" % target["name"])
             return
     else:
-        pool = [p for p in g.world["players"].values()
+        pool = [p for p in g.world_players()
                 if p["id"] != me["id"] and p.get("jail_turns", 0) <= 0 and p["coins"] > 0]
         if not pool:
             g.say("现在没有可以打劫的目标~")
@@ -750,9 +750,9 @@ def act_welfare(g: Game, args) -> None:
 
 
 def act_rank(g: Game, args) -> None:
-    players = list(g.world["players"].values())
+    players = g.world_players()
     if not players:
-        g.say("这个场地还没有玩家数据~")
+        g.say("本群还没有人玩过农场~")
         return
     players.sort(key=lambda x: (-int(x.get("coins", 0)), -int(x.get("exp", 0))))
     g.say("🏆 财富排行榜")

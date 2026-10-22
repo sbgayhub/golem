@@ -81,9 +81,14 @@
 `$HERMES_HOME/wechat_games/state.json`（`HERMES_GAMES_DATA` 可覆盖，旧变量 `HERMES_FARM_DATA` 仍兼容）
 
 ```json
-{"version":2,"worlds":{"群名":{"players":{"wxid_x":{ ... }}}}}
+{"version":3,
+ "players":{"wxid_x":{ ... }},
+ "worlds":{"群名":{"members":["wxid_x"],"draw_jobs":[]}}}
 ```
 
-`version:1` 是只有农场的旧档，`migrate_player()` 会自动补齐修仙字段；幂等，可反复跑。
+玩家数据**按 wxid 全局一份**（`players`），群只记成员名单和画图队列——换群、私聊、群改名都是同一个号。
+打劫 / 偷菜 / 排行榜在 `worlds[群].members` 里选人；点名的人不在本群时按名字跨群查，查到就把对方补进本群成员。
+`version:1` 是只有农场的旧档、`version:2` 是玩家挂在群下的档，加载时自动迁到 3；
+同一 wxid 多群各有一份时，先扫到的那份做底，其余只补空字段（不覆盖进度、不合并冷却时间戳）。
 写入是「锁文件 + 临时文件 + `os.replace`」原子替换；解析失败会把原文件改名成
 `state.json.corrupt-<ts>` 再重开，不静默丢数据。

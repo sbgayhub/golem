@@ -111,20 +111,26 @@ SECTS = {
 SECT_LIST = list(SECTS)
 SECT_RANKS = ["外门弟子", "内门弟子", "真传弟子", "长老", "副宗主", "宗主"]
 
-# 敌人：按境界分段
+# 敌人：按境界分段。hp/atk 不再是绝对值——玩家气血与战力按境界线性增长，
+# 而旧版敌人的绝对值是指数增长，筑基以上必输。现在改成相对境界基准的倍率，
+# 由 act_fight 用玩家当前境界的基准值现算，任何境界都可打。
+# hp_k = 敌人气血 / 境界基准战力；atk_k = 敌人每击 / 境界基准气血
+# 精英（同池第二个）更高；再乘 ±FIGHT_VARIANCE 的浮动，胜负才有真实概率分布。
 ENEMIES = [
-    {"name": "野狼",     "realm": 1,  "hp": 40,   "atk": 6,    "reward": 15},
-    {"name": "山匪",     "realm": 1,  "hp": 70,   "atk": 9,    "reward": 30},
-    {"name": "妖狐",     "realm": 2,  "hp": 140,  "atk": 16,   "reward": 70},
-    {"name": "黑山妖兽", "realm": 2,  "hp": 220,  "atk": 24,   "reward": 120},
-    {"name": "血蝠",     "realm": 3,  "hp": 400,  "atk": 45,   "reward": 260},
-    {"name": "魔修",     "realm": 3,  "hp": 650,  "atk": 70,   "reward": 450},
-    {"name": "妖将",     "realm": 4,  "hp": 1400, "atk": 150,  "reward": 900},
-    {"name": "血河分身", "realm": 5,  "hp": 3200, "atk": 320,  "reward": 2000},
-    {"name": "天机傀儡", "realm": 6,  "hp": 7000, "atk": 700,  "reward": 5000},
-    {"name": "上古凶兽", "realm": 7,  "hp": 16000, "atk": 1600, "reward": 12000},
-    {"name": "血河老祖", "realm": 9,  "hp": 60000, "atk": 6000, "reward": 40000},
+    {"name": "野狼",     "realm": 1, "hp_k": 8.5, "atk_k": 0.11, "reward": 15},
+    {"name": "山匪",     "realm": 1, "hp_k": 9.5, "atk_k": 0.13, "reward": 30},
+    {"name": "妖狐",     "realm": 2, "hp_k": 8.5, "atk_k": 0.11, "reward": 70},
+    {"name": "黑山妖兽", "realm": 2, "hp_k": 9.5, "atk_k": 0.13, "reward": 120},
+    {"name": "血蝠",     "realm": 3, "hp_k": 8.5, "atk_k": 0.11, "reward": 260},
+    {"name": "魔修",     "realm": 3, "hp_k": 9.5, "atk_k": 0.13, "reward": 450},
+    {"name": "妖将",     "realm": 4, "hp_k": 9.0, "atk_k": 0.12, "reward": 900},
+    {"name": "血河分身", "realm": 5, "hp_k": 9.0, "atk_k": 0.12, "reward": 2000},
+    {"name": "天机傀儡", "realm": 6, "hp_k": 9.5, "atk_k": 0.13, "reward": 5000},
+    {"name": "上古凶兽", "realm": 7, "hp_k": 10.0, "atk_k": 0.14, "reward": 12000},
+    {"name": "血河老祖", "realm": 9, "hp_k": 10.5, "atk_k": 0.14, "reward": 40000},
 ]
+FIGHT_ROUNDS = 10          # 战斗回合上限
+FIGHT_VARIANCE = 0.22      # 遭遇时敌人强弱浮动 ±22%，避免胜负变成 0/1 台阶
 
 # 奇遇：类型 / 权重 / 文案由函数生成
 ADVENTURES = [
@@ -139,7 +145,11 @@ ADVENTURES = [
 ]
 
 # 常量
-TUINA_COOLDOWN = 120         # 秒；吐纳是碎片时间的小收益，闭关才是主要途径
+# 吐纳：挂机累积。离线也照算，玩家每隔几小时回来收一次功，不需要守着点。
+# 想要更慢/更快的节奏，只改这两个数即可。
+IDLE_SECONDS_PER_CHARGE = 300   # 每 5 分钟积 1 次吐纳
+IDLE_MAX_CHARGES = 12           # 灵池最多攒 12 次（1 小时）；攒满后不再累积
+TUINA_COOLDOWN = 120            # 旧版的冷却；现在只用于兼容旧存档，不再参与判定
 RETREAT_LIFESPAN_COST = 1    # 每闭关 1 年，消耗 1 年寿元
 ADVENTURE_COOLDOWN = 300     # 秒
 FIGHT_COOLDOWN = 120         # 秒；没有冷却就能无限刷灵石，必须限
@@ -251,6 +261,41 @@ def next_qi(p: dict) -> int:
     if idx >= MAX_REALM:
         return 0
     return REALMS[idx + 1]["qi"]
+
+
+def per_tuina(p: dict) -> float:
+    """单次吐纳的原始收益（未乘灵根/功法倍率）。
+
+    低境界按固定值，高境界按下一境界所需的比例，避免后期吐纳完全无感。
+    """
+    return max(8 + int(p.get("realm") or 0) * 6, int(next_qi(p) * 0.01))
+
+
+def settle_tuina(p: dict) -> int:
+    """把「离线到现在」的时间结算进灵池，返回当前可收次数。
+
+    只读+写 p，不碰存档；act_status / act_tuina 都可反复调，结果一致（幂等）。
+    零头会保留在 tuina_ts 里，不会因为频繁查看状态而丢掉。
+    灵池顶满后 tuina_ts 直接推到 now——否则挂着不收的玩家会无限积压。
+    """
+    now = now_ts()
+    charges = max(0, int(p.get("tuina_charges") or 0))
+    since = int(p.get("tuina_ts") or 0) or now
+    if since > now:          # 系统时间被回拨，别让玩家倒欠
+        since = now
+    elapsed = now - since
+    gained = elapsed // IDLE_SECONDS_PER_CHARGE
+    if gained <= 0:
+        p["tuina_charges"] = charges
+        p["tuina_ts"] = since
+        return charges
+    charges = min(IDLE_MAX_CHARGES, charges + gained)
+    if charges >= IDLE_MAX_CHARGES:
+        p["tuina_ts"] = now
+    else:
+        p["tuina_ts"] = since + gained * IDLE_SECONDS_PER_CHARGE
+    p["tuina_charges"] = charges
+    return charges
 
 
 def age_line(p: dict) -> str:
@@ -393,6 +438,9 @@ def act_init(g: Game, args) -> None:
     p["lifespan_max"] = p["lifespan"]
     p["alive"] = True
     p["daoxiang"] = []
+    # 入道即开灵池，别让新玩家看着「0 次、5 分钟后」干等
+    p["tuina_charges"] = 1
+    p["tuina_ts"] = now_ts()
 
     r = ROOTS[root]
     g.say("🌌 灵根觉醒")
@@ -401,7 +449,7 @@ def act_init(g: Game, args) -> None:
     g.say("修炼效率 ×%.1f　悟性 %d" % (r["mult"], p["enlighten"]))
     g.say("")
     g.say("寿元 %d 年，境界：凡人" % p["lifespan"])
-    g.say("凡人一生不过百年。先「吐纳」积攒修为，够了就「突破」。")
+    g.say("灵气会随时间自动累积，离线也算。想修炼就发「吐纳」收功。")
 
 
 def act_status(g: Game, args) -> None:
@@ -436,6 +484,15 @@ def act_status(g: Game, args) -> None:
 
     g.say("灵根　%s（×%.1f）　悟性 %d" % (
         p.get("root", "无"), root_of(p)["mult"], p.get("enlighten", 0)))
+    charges = settle_tuina(p)
+    if charges >= IDLE_MAX_CHARGES:
+        pool = "灵池　%d/%d　已满，可收功" % (charges, IDLE_MAX_CHARGES)
+    elif charges:
+        pool = "灵池　%d/%d　可收功" % (charges, IDLE_MAX_CHARGES)
+    else:
+        left = IDLE_SECONDS_PER_CHARGE - (now_ts() - int(p.get("tuina_ts") or 0))
+        pool = "灵池　0/%d　%s后有灵气" % (IDLE_MAX_CHARGES, fmt_duration(left))
+    g.say(pool)
     g.say(age_line(p))
     g.say("💰 灵石　%d　🌱 农场等级 %d" % (
         p.get("coins", 0), _farm_level(p)))
@@ -469,6 +526,11 @@ def _farm_level(p: dict) -> int:
 
 
 def act_tuina(g: Game, args) -> None:
+    """收功：把挂机攒下的灵池一次性收掉。
+
+    吐纳不再是「点一次冷却 2 分钟」的高频动作——那样玩家得守着，模型会自己
+    写循环去刷。现在灵气随时间自动累积（离线也算），玩家什么时候回来收都行。
+    """
     p = g.player()
     if not _require_alive(g, p):
         return
@@ -476,20 +538,21 @@ def act_tuina(g: Game, args) -> None:
         g.say("你还没觉醒灵根。先发「修仙」。")
         return
 
-    now = now_ts()
-    elapsed = now - int(p.get("last_tuina") or 0)
-    if elapsed < TUINA_COOLDOWN:
-        g.say("⏳ 气息未平，还需 %s 才能再次吐纳。" % fmt_duration(TUINA_COOLDOWN - elapsed))
+    charges = settle_tuina(p)
+    if charges <= 0:
+        left = IDLE_SECONDS_PER_CHARGE - (now_ts() - int(p.get("tuina_ts") or 0))
+        g.say("🌬️ 灵池还没攒满，还需 %s 才能收功。" % fmt_duration(left))
+        g.say("（挂机自动累积，离线也算；最多攒 %d 次，不用守着。）"
+              % IDLE_MAX_CHARGES)
         return
 
     realm = realm_of(p)
-    # 低境界按固定值，高境界按下一境界所需的比例，避免后期吐纳完全无感
-    base = max(8 + int(p["realm"]) * 6, int(next_qi(p) * 0.01))
-    gain = int(base * cultivate_mult(p) * random.uniform(0.85, 1.15))
-    gain = max(1, gain)
-    p["last_tuina"] = now
+    gain = int(charges * per_tuina(p) * cultivate_mult(p)
+               * random.uniform(0.85, 1.15))
+    gain = max(charges, gain)
+    p["tuina_charges"] = 0
 
-    # 灵根越差，越容易耗寿元；天灵根以上不耗
+    # 灵根越差，越容易耗寿元；一次收功只判一次，避免攒满一次收掉半个寿元
     cost = 0
     if root_of(p)["mult"] <= 1.0:
         cost = random.choice([0, 0, 0, 1])
@@ -503,6 +566,7 @@ def act_tuina(g: Game, args) -> None:
 
     gain_qi(p, gain)
     g.say("🧘 %s 吐纳周天" % p["name"])
+    g.say("灵池收功 ×%d" % charges)
     g.say("修为 +%d → %d" % (gain, p["qi"]))
     if cost:
         g.say("寿元 -%d → %d 年（灵根不够，只能以命换道）" % (cost, p["lifespan"]))
@@ -550,6 +614,8 @@ def act_retreat(g: Game, args) -> None:
     if not alive:
         g.say("")
         g.say("💀 出关时已是枯骨。道途终绝于%s。" % realm_name(p))
+        maybe_draw(g, p, "death",
+                   "修士闭关千年，出关时洞府唯余枯骨与一盏将尽的孤灯")
         return
     if can_break(p):
         g.say("")
@@ -658,7 +724,7 @@ def act_adventure(g: Game, args) -> None:
     sect = SECTS.get(p.get("sect") or "")
     bonus = sect.get("adventure_bonus", 0) if sect else 0
     kinds = [k for k, _ in ADVENTURES]
-    weights = [w * (1 + bonus if k not in ("injure", "nothing") else 1)
+    weights = [w * (1 + bonus if k not in ("injury", "nothing") else 1)
                for k, w in ADVENTURES]
     kind = random.choices(kinds, weights=weights, k=1)[0]
 
@@ -730,22 +796,29 @@ def act_fight(g: Game, args) -> None:
     p["last_fight"] = now
 
     my_power = power_of(p)
-    my_hp = 50 + realm_idx * 40 + int(p.get("enlighten") or 0) * 5
+    # 敌人属性按「境界基准」现算，不按玩家完整战力——否则买了功法敌人也跟着变强，
+    # 变强没有任何正反馈。基准取自 REALMS[realm]["power"] 与 50+境界×40。
+    base_power = realm_of(p)["power"]
+    base_hp = 50 + realm_idx * 40
+    my_hp = base_hp + int(p.get("enlighten") or 0) * 5
     my_hp_max = my_hp
-    enemy_hp = enemy["hp"]
+    # 遭遇强度浮动：不加这一层，8~10 回合的固定结算会让胜负变成 0% 或 100% 的台阶
+    swing = random.uniform(1 - FIGHT_VARIANCE, 1 + FIGHT_VARIANCE)
+    enemy_hp = max(1, int(base_power * enemy["hp_k"] * swing))
+    enemy_atk = max(1, int(base_hp * enemy["atk_k"] * swing))
 
     # 疗伤丹：战斗中自动救命（有就用，没用完不消耗）
     heal_left = int((p.get("pills") or {}).get("疗伤丹") or 0)
     healed = 0
     rounds = []
 
-    for r in range(1, 9):
+    for r in range(1, FIGHT_ROUNDS + 1):
         my_hit = max(1, int(my_power * random.uniform(0.8, 1.2)))
         enemy_hp -= my_hit
         if enemy_hp <= 0:
             rounds.append("第%d回合：你一击命中，%s 当场毙命。" % (r, enemy["name"]))
             break
-        e_hit = max(1, int(enemy["atk"] * random.uniform(0.7, 1.3)))
+        e_hit = max(1, int(enemy_atk * random.uniform(0.7, 1.3)))
         my_hp -= e_hit
         rounds.append("第%d回合：你造成 %d 伤害，%s 反击 %d。" % (r, my_hit, enemy["name"], e_hit))
         if my_hp <= 0:
@@ -757,7 +830,7 @@ def act_fight(g: Game, args) -> None:
                 continue
             break
 
-    g.say("⚔️ 遭遇【%s】（战力约 %d）" % (enemy["name"], enemy["atk"] * 3))
+    g.say("⚔️ 遭遇【%s】（战力约 %d）" % (enemy["name"], enemy_atk * 3))
     g.say("")
     for line in rounds:
         g.say(line)
@@ -817,6 +890,8 @@ def act_sect(g: Game, args) -> None:
     if name not in SECTS:
         g.say("没有「%s」这个宗门。" % name)
         return
+    if not _require_alive(g, p):
+        return
     s = SECTS[name]
     if int(p["realm"]) < s["req"]:
         g.say("拜入%s需 %s 境，你在 %s。" % (
@@ -845,6 +920,8 @@ def act_learn(g: Game, args) -> None:
         learned = p.get("techniques") or []
         g.say("📖 已学功法：%s" % ("、".join(learned) if learned else "无"))
         g.say("看可学的发「功法」；学会后「学 <功法名>」运功。")
+        return
+    if not _require_alive(g, p):
         return
     if name not in TECHNIQUES:
         g.say("没有《%s》。发「功法」查看。" % name)
@@ -888,6 +965,8 @@ def act_buy(g: Game, args) -> None:
     count = max(1, int(args.count or 1))
     if not name:
         g.say("要买什么？例如「买破境丹」「买 青元剑诀」。")
+        return
+    if not _require_alive(g, p):
         return
 
     if name in PILLS:
@@ -934,6 +1013,19 @@ def act_use(g: Game, args) -> None:
     have = int((p.get("pills") or {}).get(name) or 0)
     if have <= 0:
         g.say("你没有%s。可在「丹药」里购买。" % name)
+        return
+    if not _require_alive(g, p):
+        return
+
+    # 药力叠加型丹药：已经挂着效果时再嗑一枚只会覆盖，纯属白扔
+    if name == "破境丹" and p.get("break_pill"):
+        g.say("💊 破境丹药力还在，等这次突破用完再服。")
+        return
+    if name == "渡厄丹" and p.get("ward_pill"):
+        g.say("💊 渡厄丹药力还在，等这次突破用完再服。")
+        return
+    if name == "疗伤丹" and int(p.get("lifespan") or 0) >= int(p.get("lifespan_max") or 0):
+        g.say("💊 你气血充盈，现在用疗伤丹不划算。（战斗危急时会自动服用）")
         return
 
     if name == "回气丹":
@@ -1017,6 +1109,8 @@ def act_rebirth(g: Game, args) -> None:
         "pills": {},
         "tribulation_fails": 0,
         "last_tuina": 0,
+        "tuina_charges": 0,
+        "tuina_ts": now_ts(),
         "last_retreat": 0,
         "last_adventure": 0,
         "last_fight": 0,
@@ -1046,7 +1140,7 @@ def act_menu(g: Game, args) -> None:
     g.say("")
     g.say("🌌【修仙】")
     g.say("　起步　　　「修仙」（觉醒灵根，随机六品）")
-    g.say("　积累修为　「吐纳」「闭关 10 年」（闭关耗寿元）")
+    g.say("　积累修为　「吐纳」（挂机攒灵气，回来收功）「闭关 10 年」（耗寿元）")
     g.say("　突破境界　「突破」（有成功率，失败损修为与寿元）")
     g.say("　机缘历练　「游历」「打一场」")
     g.say("　宗门功法　「宗门」「加入青云宗」「功法」「学 青元剑诀」")

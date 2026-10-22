@@ -157,7 +157,9 @@ def new_player(pid: str, name: str) -> dict:
         "pills": {},              # 丹药名 -> 数量
         "tribulation_fails": 0,   # 连续突破失败次数（影响下次成功率）
         "enlighten": 0,           # 悟性（影响奇遇与突破）
-        "last_tuina": 0,          # 上次吐纳时间戳
+        "last_tuina": 0,          # 上次吐纳时间戳（v1 遗留，仅供迁移，吐纳已改灵池）
+        "tuina_charges": 0,       # 灵池里攒下的吐纳次数（挂机累积，见 xiuxian_core.settle_tuina）
+        "tuina_ts": 0,            # 上次结算灵池的时间戳；0 表示还没开始攒
         "last_retreat": 0,        # 上次闭关时间戳
         "last_adventure": 0,      # 上次奇遇时间戳
         "last_fight": 0,          # 上次战斗时间戳（没有冷却就能无限刷，必须限）
@@ -191,6 +193,13 @@ def migrate_player(p: dict) -> dict:
     else:
         p["lifespan"] = int(p["lifespan"])
     p.setdefault("alive", True)
+    # 吐纳从「冷却点一次」改成「灵池挂机累积」：老档没 tuina_ts 的，用上次吐纳时间起算，
+    # 这样升级当天老玩家立刻有一池可收（符合直觉），不会被重置成 0。
+    p["tuina_charges"] = max(0, int(p.get("tuina_charges") or 0))
+    if not int(p.get("tuina_ts") or 0):
+        p["tuina_ts"] = int(p.get("last_tuina") or 0) or int(time.time())
+    else:
+        p["tuina_ts"] = int(p["tuina_ts"])
     return p
 
 

@@ -48,7 +48,7 @@ metadata:
 |---|---|
 | 「修仙」「开始修仙」「觉醒灵根」「我要修真」 | `init`（已觉醒会提示当前境界） |
 | 「修仙状态」「我什么境界」「修为多少」 | `status` |
-| 「吐纳」「打坐」「修炼一下」 | `tuina` |
+| 「吐纳」「打坐」「修炼一下」 | `tuina`（**收功**：把挂机攒的灵气一次收掉） |
 | 「闭关 10 年」「闭死关 30 年」 | `retreat --years 10` |
 | 「突破」「冲击筑基」「渡劫」 | `breakthrough` |
 | 「游历」「出去走走」「找点机缘」 | `adventure` |
@@ -68,6 +68,16 @@ metadata:
 
 **拿不准就先跑 `status`**；完全看不出意图就跑 `menu`。
 用户没提玩法时**不要主动起头**（会刷屏）。
+
+### 吐纳是「收功」，不是连点
+
+灵气随真实时间自动累积（**离线也算**），每 5 分钟攒 1 次、最多 12 次。
+`tuina` 一次把攒下的全部收掉，收益按次数累计。
+
+- 玩家说「吐纳」就**执行一次**，把结果原样转告。
+- 如果回「灵池还没攒满」，**这就是最终答复**，把倒计时告诉他就行；
+  **绝对不要**为了攒满而循环、`sleep`、反复重试——玩家该干嘛干嘛，过几小时回来再收。
+- 不要替玩家计算「还差几次」「多久能满」，脚本的倒计时就是准的。
 
 ### 脚本的引导语：原样转告，不要替用户做决定
 
@@ -150,6 +160,41 @@ Windows 本地调试另说：`%LOCALAPPDATA%\hermes\venv\Scripts\python.exe`，�
 
 **不要用 `execute_code` 跑这些脚本**：消息平台的 `execute_code` 每次都要整段脚本审批，群里会卡住。
 
+## 一次一条：禁止循环、sleep 与自动重试
+
+**一条用户消息 = 一个 action = 一次 `terminal` 调用。** 这条没有例外。
+
+| 禁止 | 说明 |
+|---|---|
+| `for` / `while` / `seq` / `xargs` 批量跑同一个 action | 一次消息只对应一次游戏动作 |
+| `sleep`、`timeout`、定时轮询 | 脚本里的冷却/灵池是**玩法**，不是需要你等过去的障碍 |
+| 被拒后自动重跑 | 「修为不足」「灵池未满」「冷却中」就是最终答复，转告后停手 |
+| 连续多条命令拼在一次调用里刷次数 | 每个动作单独一次调用，不要用 `;` / `&&` 串多个游戏动作 |
+
+**错误示范**（线上真实发生过，被 Tirith 判 HIGH 且最后 `terminal timed out after 420s`）：
+
+```bash
+# ❌ 禁止：循环刷吐纳、sleep 等冷却
+for i in $(seq 1 10); do
+  "$PY" xiuxian_core.py tuina --world '...' --player '...'
+  sleep 130
+done
+
+# ❌ 禁止：解释器放进变量再执行（Tirith 判「nested executable body could not be resolved」）
+PY=""; [ -x "$VIRTUAL_ENV/bin/python" ] && PY="$VIRTUAL_ENV/bin/python"; "$PY" xiuxian_core.py …
+```
+
+**正确写法**（解释器写死绝对路径，一次一个动作）：
+
+```bash
+# ✅
+/usr/local/lib/hermes-agent/venv/bin/python ${HERMES_SKILL_DIR}/scripts/xiuxian_core.py tuina \
+  --world '<world>' --player '<wxid>' --player-name '<昵称>'
+```
+
+一条用户消息里明确要了多件事（「先吐纳再突破」）时，按顺序**分多次独立调用**，每次一个 action，
+不要塞进一个 shell 脚本里连跑——脚本里连跑会绕过每次调用的存档锁与提示，且一旦某步失败整串都失控。
+
 ## 现画：DRAW 标记怎么处理
 
 脚本自己不画图——它只在大事发生时吐一行 `DRAW:<提示词>`，**出图靠 Hermes 的 `image_generate` 工具**。
@@ -210,7 +255,8 @@ Windows 本地调试另说：`%LOCALAPPDATA%\hermes\venv\Scripts\python.exe`，�
 - **别把昵称当 wxid**：只在拿不到 `sender_id` 时退让，别默认用昵称。
 - **一次一个 action**：用户连发多个请求就按顺序逐个执行，别把多个动作塞进一条命令。
 - **坐牢时只有查看类放行**：农场侧的 `status` / `shop` / `level` / `rank` / `help` 正常，其他会被拦。
-- **要突破先看修为**：`breakthrough` 修为不足只会提示还差多少，不要反复重试；先让用户 `retreat` 或 `tuina`。
+- **要突破先看修为**：`breakthrough` 修为不足只会提示还差多少，不要反复重试；先让用户 `retreat` 或等灵池收功。
+- **吐纳一次就够**：`tuina` 是收功，连点第二次只会回「灵池还没攒满」，不要循环刷。
 - **闭关必须有年数**：漏了 `--years` 脚本会提示；用户说「闭关十年」就传 `--years 10`。
 - **重新投胎要确认**：用户只说「重新投胎」时**不要**加 `--force`；他说「确认」「确定」「是真的」再加。
 - **群友没玩过**：`--target` 会报「没有找到」，让他先发一句「我的资产」建号，别替他建。

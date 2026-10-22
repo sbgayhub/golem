@@ -466,7 +466,13 @@ def act_water(g: Game, args) -> None:
 
     now = now_ts()
     exp_gain = 0
-    g.say("%s的农场" % target["name"] if target["id"] != me["id"] else "浇水@一个人可以给群友浇水")
+    watered = 0
+    # 标题按对象区分：给自己浇水不该把「@别人」的用法提示塞进成功输出，
+    # 那会被模型原样转发或擅自删改，两种都不对。
+    if target["id"] != me["id"]:
+        g.say("%s的农场" % target["name"])
+    else:
+        g.say("🌱 我的农场")
 
     for i in range(int(target["fields"])):
         key = str(i)
@@ -485,12 +491,18 @@ def act_water(g: Game, args) -> None:
             continue
         land.setdefault("watered", {})[skey] = me["id"]
         exp_gain += crop["fruit_exp"]
+        watered += 1
         g.say("土地(%d) %s🌧 %s 浇水成功" % (i + 1, emoji, crop["name"]))
 
     if exp_gain:
         me["exp"] += exp_gain
         g.say("")
         g.say("📒 +%d → %d" % (exp_gain, me["exp"]))
+
+    # 自己一滴没浇成时再提一次用法，避免白跑一趟还一头雾水。
+    if not watered and target["id"] == me["id"]:
+        g.say("")
+        g.say("自己的地这会儿没得浇；想帮群友浇水说「浇水@昵称」。")
 
 
 def act_steal(g: Game, args) -> None:

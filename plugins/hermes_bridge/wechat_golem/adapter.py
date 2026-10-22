@@ -3412,14 +3412,20 @@ class WeChatGolemAdapter(BasePlatformAdapter):
     def _reply_expected_for(
         hermes_chat_type: str, addressing: str, trigger_reason: str = ""
     ):
-        """群里没人找它的消息（冒泡/点名别人/trigger_names 软命中）声明 reply_expected=False。
+        """群里没人找它的消息（冒泡/点名别人/引用它/trigger_names 软命中）声明 reply_expected=False。
 
         新版 gateway 只允许「内部任务」或 reply_expected is False 的轮次以纯
         NO_REPLY 静默；否则会把沉默替换成「silence marker rejected」警告发出来。
 
         trigger_name 是子串匹配（如「火」会命中「火锅」「火了」），不算硬点名；
         由 agent 判断是否真的在叫它。agent 决定不相关时允许静默，避免网关弹
-        「模型只返回了静默标记」的兜底文案。真 @ / 引用与私聊仍不声明（None）。
+        「模型只返回了静默标记」的兜底文案。
+
+        quoted_self 同理不算硬点名：它只说明这条消息引用了 bot 说过的一句，
+        不代表在跟 bot 说话。群里别的机器人、群友经常引用一句来接自己的话茬
+        （实测一个晚上 8 次全是不相关的引用），agent 判断不相关时应当允许静默。
+        这一点是「许可」不是「禁令」——真在问它时模型照样会正常回复。
+        真 @（addressing=self）与私聊仍不声明（None），保留兜底。
 
         另有运行期改判：工具（引用气泡 / 聊天记录卡片 / 表情 / 音乐卡 / 语音）
         已经成功把内容发上屏时，mark_inbound_replied() 会把本轮 event 的
@@ -3427,8 +3433,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         收尾，不该被判成沉默错误再补一句兜底。
         """
         if hermes_chat_type == "group" and (
-            addressing not in ("self", "quoted_self")
-            or trigger_reason == "trigger_name"
+            addressing != "self" or trigger_reason == "trigger_name"
         ):
             return False
         return None

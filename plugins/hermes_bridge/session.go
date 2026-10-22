@@ -124,20 +124,34 @@ func markFlushedLocked(st *sessionState, seqs []int64) {
 
 // 控制捷径的内置默认词表。配置留空时用这里的值。
 //
-// 这四组词必须与适配器侧保持一致（适配器读 WECHAT_GOLEM_INTERRUPT_TOKENS /
-// _RESET_TOKENS / _ARCHIVE_TOKENS）。桥承担群门闩：桥不认的词会被门闩吞掉，
-// 适配器根本收不到，症状是「改了 env 完全没反应」。GET /health 暴露桥的生效
-// 词表，适配器连上后比对并告警，让这类分叉可见。
+// 这几组词必须与适配器侧保持一致（适配器读 WECHAT_GOLEM_INTERRUPT_TOKENS /
+// _RESET_TOKENS / _ARCHIVE_TOKENS / _USAGE_TOKENS）。桥承担群门闩：桥不认的词会被
+// 门闩吞掉，适配器根本收不到，症状是「改了 env 完全没反应」。GET /health 暴露桥的
+// 生效词表，适配器连上后比对并告警，让这类分叉可见。
 var (
 	defaultInterruptTokens    = []string{"打断"}
 	defaultSessionResetTokens = []string{"新开会话", "新对话"}
 	defaultArchiveTokens      = []string{"归档", "归档群友", "记群友", "记成员", "归档成员"}
 	defaultRevokeTokens       = []string{"撤回", "撤回吧", "撤回上一条"}
-	defaultApprovalTokens     = []string{
-		"yes", "y", "no", "n",
-		"always", "session", "once", "all",
-		"deny", "approve",
-		"是", "否", "同意", "拒绝", "允许", "取消",
+	// 适配器侧「用量」捷径默认词表。桥命中后立即透传（绕过群门闩），
+	// 由适配器回上下文报告、不进 agent。须与 adapter.py 的 _USAGE_TOKENS_DEFAULT 同步。
+	defaultUsageTokens = []string{"用量", "看用量", "上下文", "看上下文", "context", "usage"}
+	// 与 Hermes gateway 的 approval.inputs（locales zh ∪ en）对齐：
+	// gateway 在审批挂起时按这组同义词拦截裸词回复。桥不认的词会被群门闩
+	// 吞掉，gateway 永远等不到回复。
+	defaultApprovalTokens = []string{
+		// 允许一次
+		"yes", "y", "ok", "okay", "confirm", "approve",
+		"是", "好", "确认", "同意", "可以", "批准", "允许",
+		// 拒绝
+		"no", "n", "deny", "reject", "cancel",
+		"否", "不", "取消", "拒绝", "不行",
+		// 本会话允许
+		"session", "会话", "本会话",
+		// 永久允许
+		"always", "始终", "总是",
+		// 双词组合引导词（all/approve/deny + session/always/once/all 由代码固定识别）
+		"once", "all",
 	}
 )
 
@@ -162,6 +176,19 @@ func normalizeTokens(configured, fallback []string) []string {
 	return out
 }
 
+// tokensConfigured 配置里是否显式给了词表（空/全空白=沿用内置默认）。
+func tokensConfigured(configured []string) bool {
+	return len(normalizeTokens(configured, nil)) > 0
+}
+
+// tokenSourceLabel 词表来源，供 status/help 标注「默认」还是「已配置」。
+func tokenSourceLabel(configured []string) string {
+	if tokensConfigured(configured) {
+		return "已配置"
+	}
+	return "默认"
+}
+
 // matchToken 整句匹配（大小写无关）。不用 Contains，避免「别打断我」之类误触。
 func matchToken(text string, tokens []string) bool {
 	raw := strings.ToLower(strings.TrimSpace(text))
@@ -176,6 +203,30 @@ func matchToken(text string, tokens []string) bool {
 	return false
 }
 
+// gatewayCommandEscape 主人执行 Hermes 原生斜杠命令的转义前缀。
+//
+// Golem host 只拦 ASCII "/" 开头的消息（未注册命令直接回「未知命令」并吞掉），
+// 所以主人用 "~~" 开头绕过 host：桥上剥离 "~~" 后把 "/usage" 原样推给 Hermes。
+const gatewayCommandEscape = "~~"
+
+// gatewayCommandFromText 识别 "~~/cmd" 并返回 "/cmd"；余额必须以 "/" 开头。
+// 允许 "~~ /cmd" 这种中间空格；"~~cmd" 不算命令（避免误伤普通聊天）。
+func gatewayCommandFromText(text string) (string, bool) {
+	raw := strings.TrimSpace(text)
+	if !strings.HasPrefix(raw, gatewayCommandEscape) {
+		return "", false
+	}
+	rest := strings.TrimSpace(raw[len(gatewayCommandEscape):])
+	if !strings.HasPrefix(rest, "/") || len(rest) < 2 {
+		return "", false
+	}
+	// "/" 后面必须紧跟命令名（不能只是空白），否则不是有效命令。
+	if strings.TrimSpace(rest[1:2]) == "" {
+		return "", false
+	}
+	return rest, true
+}
+
 func (p *BridgePlugin) interruptTokens() []string {
 	return normalizeTokens(p.configSnapshot().InterruptTokens, defaultInterruptTokens)
 }
@@ -188,6 +239,10 @@ func (p *BridgePlugin) archiveTokens() []string {
 	return normalizeTokens(p.configSnapshot().ArchiveTokens, defaultArchiveTokens)
 }
 
+func (p *BridgePlugin) usageTokens() []string {
+	return normalizeTokens(p.configSnapshot().UsageTokens, defaultUsageTokens)
+}
+
 func (p *BridgePlugin) approvalTokens() []string {
 	return normalizeTokens(p.configSnapshot().ApprovalTokens, defaultApprovalTokens)
 }
@@ -197,6 +252,7 @@ func (p *BridgePlugin) revokeTokens() []string {
 }
 
 // isInterruptReplyText 与适配器 _is_interrupt_command 对齐：整句打断词（默认「打断」）。
+// 仅主人（桥与适配器双重校验）：能否清 pending / 中断 run 属于运行控制权。
 func (p *BridgePlugin) isInterruptReplyText(text string) bool {
 	return matchToken(text, p.interruptTokens())
 }
@@ -211,6 +267,12 @@ func (p *BridgePlugin) isSessionResetText(text string) bool {
 // 必须立即透传（群门闩否则吞掉无 @ 的短词）；适配器再扩成完整 upsert 指令投给 agent。
 func (p *BridgePlugin) isMemberArchiveText(text string) bool {
 	return matchToken(text, p.archiveTokens())
+}
+
+// isUsageText 与适配器 _is_usage_command 对齐：主人整句「用量/上下文/…」。
+// 群门闩会吞无 @ 短词；必须立即透传，由适配器回上下文报告（不进 agent）。
+func (p *BridgePlugin) isUsageText(text string) bool {
+	return matchToken(text, p.usageTokens())
 }
 
 // isPersonaCommandText 只识别固定命令外形，供主人消息旁路群门闩。

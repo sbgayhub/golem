@@ -12,7 +12,7 @@ import (
 // 命令由 host 层校验主人权限；群聊里 member.Username == owner 也放行。
 
 type hermesStatusCommand struct {
-	_       struct{} `cmd:"hermes status" help:"查看 hermes_bridge 状态与白名单" usage:"/hermes status" example:"/hermes status"`
+	_       struct{} `cmd:"hermes status" help:"查看桥状态、群门闩、白名单与生效捷径词" usage:"/hermes status" example:"/hermes status"`
 	Command *plugin.Command
 }
 
@@ -46,13 +46,13 @@ type hermesVoiceCommand struct {
 }
 
 type hermesEmojiCommand struct {
-	_       struct{} `cmd:"hermes emoji" help:"诊断：下载 URL 并直发表情（TypeEmoji）" usage:"/hermes emoji <url>" example:"/hermes emoji https://example.com/a.png"`
-	URL     string   `arg:"url" help:"表情图 http/https 地址" required:"true" variadic:"true"`
+	_       struct{} `cmd:"hermes emoji" help:"诊断：下载 URL 或按 md5 引用直发表情（TypeEmoji）" usage:"/hermes emoji <url|32位md5>" example:"/hermes emoji https://example.com/a.png\n/hermes emoji 0123456789abcdef0123456789abcdef"`
+	URL     string   `arg:"url" help:"表情图 http/https 地址，或 32 位 md5 收藏引用（不压缩）" required:"true" variadic:"true"`
 	Command *plugin.Command
 }
 
 type hermesHelpCommand struct {
-	_ struct{} `cmd:"hermes help" help:"显示 hermes_bridge 管理命令" usage:"/hermes help" example:"/hermes help"`
+	_ struct{} `cmd:"hermes help" help:"显示管理命令与全部捷径词" usage:"/hermes help" example:"/hermes help"`
 }
 
 func registerCommands(p *BridgePlugin) error {
@@ -95,30 +95,68 @@ func (p *BridgePlugin) handleHelp(hermesHelpCommand) (string, error) {
 	if addr := strings.TrimSpace(cfg.AdminListen); addr != "" {
 		adminHint = "本机管理台 http://" + addr + "/ui/ （需配置 admin_token，与业务 token 分离）"
 	}
-	return strings.Join([]string{
+	lines := []string{
 		"hermes_bridge 管理命令（仅主人，host 层已校验）：",
-		"/hermes status — 查看桥状态、群门闩与白名单",
+		"/hermes status — 桥状态、群门闩、白名单与生效捷径词",
 		"/hermes enable [名称] — 当前会话加入路由白名单",
 		"/hermes disable — 当前会话移出白名单",
 		"/hermes image <url> — 诊断直发图片",
 		"/hermes video <url> — 诊断直发视频",
 		"/hermes voice <url> — 诊断直发语音（需要 ffmpeg/ffprobe）",
-		"/hermes emoji <url|md5> — 诊断直发表情（URL下载压缩 / md5引用原图不压）",
+		"/hermes emoji <url|md5> — 诊断直发表情（URL 下载压缩 / md5 引用原图不压）",
 		"/hermes help — 本说明",
 		"",
 		adminHint,
 		"也可在管理台远程加白名单/调门闩，不必人在群里发 enable。",
 		"",
+		"捷径词：整句发送，不要加 /（加了会被 Golem host 当未知命令吞掉）。",
+		"主人捷径：",
+		"· 新开会话：" + strings.Join(p.sessionResetTokens(), " / ") +
+			"（" + tokenSourceLabel(cfg.SessionResetTokens) + "）— 清空本会话上下文；长期记忆、群友档案保留",
+		"· 归档：" + strings.Join(p.archiveTokens(), " / ") +
+			"（" + tokenSourceLabel(cfg.ArchiveTokens) + "）— 立即透传，适配器扩成批量写群友档案，不清会话",
+		"· 撤回：" + strings.Join(p.revokeTokens(), " / ") +
+			"（" + tokenSourceLabel(cfg.RevokeTokens) + "）" +
+			fmt.Sprintf("— 桥直接撤自己最近一条（%ds 内，不走 agent）；多段回复可连发或让 agent 调 wechat_revoke",
+				int(p.revokeWindow().Seconds())),
+		"· 用量：" + strings.Join(p.usageTokens(), " / ") +
+			"（" + tokenSourceLabel(cfg.UsageTokens) + "；适配器回上下文报告，不进 agent）",
+		"· 人格：人格列表 / 当前人格 / 恢复默认人格 / 切换人格 <id>（或「人格 切换 <id>」）",
+		"· 打断：" + strings.Join(p.interruptTokens(), " / ") +
+			"（" + tokenSourceLabel(cfg.InterruptTokens) + "）— 立即透传，并作废该会话未推送的去抖批",
+		"",
+		"Hermes 原生命令（仅主人；群里不要 @ 机器人）：",
+		"· 发 " + gatewayCommandEscape + "/usage、" + gatewayCommandEscape + "/model gpt-5 … → " +
+			"桥剥掉 " + gatewayCommandEscape + " 后把 /usage 交给 Hermes gateway；",
+		"  群聊不 @ 也生效；@ 了机器人按普通聊天处理；非主人不处理。",
+		"· `用量` 是适配器的估算报告；" + gatewayCommandEscape + "/usage 才是 Hermes 原生 /usage；" +
+			gatewayCommandEscape + "/help 看命令表。",
+		"",
+		"审批回复（仅主人；危险命令挂起时有效，整句；不要 /approve）：",
+	}
+	if tokensConfigured(cfg.ApprovalTokens) {
+		lines = append(lines,
+			"· 生效词表（已配置）："+strings.Join(p.approvalTokens(), " / "),
+			"· 组合：all|approve|deny + session|always|once|all（固定识别，不受配置影响）",
+		)
+	} else {
+		lines = append(lines,
+			"· 允许一次：yes / y / ok / okay / confirm / approve / 是 / 好 / 确认 / 同意 / 可以 / 批准 / 允许",
+			"· 拒绝：no / n / deny / reject / cancel / 否 / 不 / 取消 / 拒绝 / 不行",
+			"· 本会话允许：session / 会话 / 本会话",
+			"· 永久允许：always / 始终 / 总是",
+			"· 组合：all|approve|deny + session|always|once|all（固定识别，不受配置影响）",
+		)
+	}
+	lines = append(lines,
+		"",
+		"白名单：群聊与非主人私聊须加入白名单（/hermes enable 或管理台）；主人私聊自动放行。",
 		"群聊：闲聊进本地上下文；@ / 引用机器人 / trigger_names / 冒泡 才去抖一批推 SSE。",
 		"　　　以上是全局默认；白名单里的群可单独覆盖（省略=沿用全局，例如某群 trigger_names=[] 就不吃点名词）。",
-		"私聊：白名单或主人会话逐条推。审批回复用 yes/no（不要 /approve）。",
-		"打断：群/私聊整句发「打断」（不限主人）立即透传，并取消该会话未推去抖批。",
-		"归档：主人整句「归档/归档群友/记群友」立即透传，适配器扩成批量写群友档案（不清会话）。",
-		"撤回：主人整句「" + strings.Join(p.revokeTokens(), "/") + "」由桥直接撤掉自己最近发的一条" +
-			fmt.Sprintf("（不经 agent；微信 %ds 时限内有效）。", int(p.revokeWindow().Seconds())),
-		"　　　agent 也可自己撤（wechat_revoke 工具 → 桥 /revoke，可带 count 撤多条）。",
+		"私聊：白名单或主人会话逐条推。",
 		"危险终端命令由 Hermes approvals 审批，不在本插件裁决。",
-	}, "\n"), nil
+	)
+	return strings.Join(lines, "\n"), nil
 }
 
 func (p *BridgePlugin) handleEnable(cmd hermesEnableCommand) (string, error) {

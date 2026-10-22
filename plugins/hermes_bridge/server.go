@@ -188,10 +188,13 @@ func (p *BridgePlugin) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		"service":     "golem-hermes-bridge",
 		"version":     p.GetMetadata().GetVersion(),
 		"subscribers": p.hub.subscriberCount(),
+		// 主人执行 Hermes 原生斜杠命令的转义前缀（~~/usage → /usage）
+		"command_escape": gatewayCommandEscape,
 		"tokens": map[string]any{
 			"interrupt":     p.interruptTokens(),
 			"session_reset": p.sessionResetTokens(),
 			"archive":       p.archiveTokens(),
+			"usage":         p.usageTokens(),
 			"approval":      p.approvalTokens(),
 			// revoke 桥内闭环处理，适配器无对应词表，只报出来便于排障与管理台展示
 			"revoke": p.revokeTokens(),

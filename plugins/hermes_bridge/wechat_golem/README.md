@@ -22,7 +22,7 @@
 Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
 
-**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice` / `wechat_fetch_media` / `wechat_revoke`（named schema + session-map 兜底 `chat_id`）。入站图/表情/视频/语音/文件走 `media_ref` + `wechat_fetch_media` 按需取。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`）。agent 验收勿 curl 桥。
+**真 @**：可靠路径是最终回复正文写 `@显示名` / `@wxid` / `[[mentions:wxid]]`，适配器解析后 POST 桥 `mentions`（`metadata.mentions` 可选但文本路径通常带不上）。模型应先 `wechat_group_members` 查 wxid（对用户勿念 wxid）。**查询/发送 tool**：`wechat_self_info` / `wechat_group_info` / `wechat_group_members` / `wechat_group_member_detail` / `wechat_send_emoji` / `wechat_send_music` / `wechat_send_record` / `wechat_send_quote` / `wechat_send_voice` / `wechat_fetch_media` / `wechat_revoke`（named schema + session-map 兜底 `chat_id`）。入站图/表情/视频/语音/文件走 `media_ref` + `wechat_fetch_media` 按需取。斗图必须 `wechat_send_emoji`（TypeEmoji），勿用发图冒充。长列表/嵌图用 `wechat_send_record`（聊天记录卡片 type=19；图片 `type=image`+`url`/`media_ref`，勿 data_b64）。引用气泡用 `wechat_send_quote`（type=57；`svrid`=入站 `msg_id`；**发完即回复本身，最终回复别再重复同一句**，适配器会在 30s 内丢弃同会话的相同整串出站）。agent 验收勿 curl 桥。
 
 ## 安装
 
@@ -145,15 +145,17 @@ hermes -p wechat gateway install   # systemd user 服务
 
 | 命令 | 说明 |
 |---|---|
-| `/hermes status` | 桥状态、SSE 订阅数、白名单 |
+| `/hermes status` | 桥状态、群门闩、白名单，以及全部生效捷径词（标注「默认/已配置」） |
 | `/hermes enable [名称]` | 当前会话进路由白名单 |
 | `/hermes disable` | 移出白名单 |
 | `/hermes image <url>` | 诊断直发图片 |
 | `/hermes video <url>` | 诊断直发视频 |
 | `/hermes voice <url>` | 诊断直发语音（需 ffmpeg/ffprobe） |
-| `/hermes help` | 帮助 |
+| `/hermes emoji <url\|md5>` | 诊断直发表情（URL 下载压缩 / md5 引用不压） |
+| `/hermes help` | 管理命令 + 全部捷径词（含审批回复全表） |
 
 Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未知命令」且不会进 Hermes**。
+需要走 Hermes 的指令要么在 Golem 注册命令，要么改用无斜杠整句（如主人「用量」捷径，见下文）。
 
 ## 撤回
 
@@ -170,6 +172,51 @@ Host 层限制：仅主人可跑 `/` 命令；**未注册的 `/xxx` 会回「未
   - Golem 会拦截 `/approve`、`/deny`（未知命令）
 - hardline 永不放行
 
+## 用量（上下文占用）
+
+Hermes 自带 `/usage`，但 **Golem host 会吞掉所有 `/` 开头的消息**（`host/plugin/command.go`
+未命中注册表就回「未知命令」并 continue，消息到不了 gateway）。故适配器提供**无斜杠整句捷径**：
+
+- **仅主人**（`is_owner`）整句触发；默认词：`用量` / `看用量` / `上下文` / `看上下文` / `context` / `usage`
+  （`WECHAT_GOLEM_USAGE_TOKENS=a,b` 覆盖）
+- **群聊也可直接发**：桥新增同名旁路（`usage_tokens`，主人整句命中即立即透传，不作废去抖批），
+  不再要求 @/引用。桥与适配器词表须同步：桥 `usage_tokens` ↔ 适配器 `WECHAT_GOLEM_USAGE_TOKENS`
+  （两边默认值一致，改一边记得改另一边；`/hermes status` 会标出桥侧是「默认/已配置」）
+- 命中后**直接回执，不进 lane / agent**，不占上下文、不打断在途任务
+- 报告：总量（已用 / 窗口，百分比）+ 分类估算（系统提示、工具定义、规则、技能、MCP、记忆、对话）
+- 取数两层：
+  1. **有驻留 agent**（该会话的 agent 还在 gateway 缓存里）→ 调 `/usage` 的同一套私有件
+     （`runner._resident_agent_for` → `agent.context_breakdown.compute_session_context_breakdown`），
+     与微信外 `/usage` 一致
+  2. **没有 agent**（桥路径常态：处理完一轮就被 idle 清扫）→ 降级读 `state.db`：
+     `model_config._usage_anchor` 的 provider 真实 prompt+completion，加锚点之后新增消息的估算；
+     窗口先读 `model_config`，读不到再线程内调用 `get_model_context_length` 探测（5s 超时，按模型缓存）
+- 降级路径**拆不出技能 / 规则 / MCP**（它们已含在系统提示正文里），报告会标注「未单独统计」
+- 降级路径的分类是：**系统提示 / 工具 / 历史对话 / 对话增量**。其中「历史对话」= 锚点
+  `prompt_tokens` − 系统提示估算 − 工具估算 + 锚点回复 `completion_tokens`，用来吸收
+  锚点前的对话量，保证分类加总与总量对齐（估算误差会落在这个类别里）
+- 估算口径对齐 Hermes `estimate_tokens_rough`：CJK/日韩每码点 1 token，其余 `ceil(UTF-8 字节 / 4)`
+- 只读 `state.db`（`file:...?mode=ro`），不写库、不建会话
+
+> 不要改用 gateway 的 `_session_context_breakdown`：它内部走 `store.get_or_create_session(source)`，
+> 传合成 source 会触碰路由表、极端情况建出空会话。适配器只调底层纯函数 `compute_session_context_breakdown`。
+
+## Hermes 原生命令（`~~/cmd`）
+
+Golem host 会拦下所有 `/` 开头且**未在 Golem 注册**的命令（回「未知命令」并 `continue`），
+Hermes 的 `/usage`、`/model`、`/compact` 等原生命令到不了 gateway。主人用 `~~` 转义绕过：
+
+- 微信发 `~~/usage` → 桥校验主人、剥掉 `~~`，把 `/usage` 透传给适配器
+- 适配器**不套发送者信封、不进聊天车道**，直接以裸 `/usage` 投给 gateway，按原生斜杠命令执行
+- 群聊**不 @ 也生效**；**@ 了机器人则按普通聊天处理**（与「@新对话」一致）
+- 非主人发 `~~/...` 按普通消息处理，不做任何命令动作
+- `~~` 后必须再有 `/`；`~~ /usage`（中间空格）也接受，`~~usage` 不处理
+- `用量` 是适配器的估算报告；`~~/usage` 才是 Hermes 原生 `/usage`
+- 可用 `~~/help` 查看 Hermes 命令表
+
+> 原生命令直接操作 gateway，包含 `/new`、`/stop`、`/restart`、`/compact` 等有副作用的命令，
+> 主人按需使用；`/new` 与适配器的「新开会话」不是同一条路径（前者走 gateway 标准重置）。
+
 ## 入站交付（单飞，项 2 已验收）
 
 Hermes `handle_message` 是 fire-and-forget。适配器对同会话串行 **整轮 agent**
@@ -181,8 +228,14 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 - **单飞 + pending**：busy 时后续只入队；**idle 后**合并一批再送（防 ⚡）；投递前也先查同会话 busy（防 cron 等跨入口撞上 busy=interrupt）。
 - 合并批把前面消息的 `media_ref`/`msg_id`/引用内嵌进对应正文（防「先发图再补话」丢图）；`metadata.merged_media_refs` 带全量列表。
 - 审批 `yes/no/…`：**仅主人**且确有待审批项才旁路立即；否则群内忽略、私聊转普通消息。
+- **静默（NO_REPLY）与 reply_expected**：群里未被 @/引用、以及 `trigger_names` 子串软命中
+  （如「火」命中「火锅」「火了」）声明 `reply_expected=False`，agent 判断不相关时可静默，
+  不再触发 gateway 的「模型只返回了静默标记」兜底。真 @ / 引用与私聊仍按「需要回复」处理，
+  模型只回 NO_REPLY 时会发兜底文案。
 - 投递失败（handle_message 抛异常）整批回队、退避重试（5s 起、上限 60s），不丢消息。
 - 出站：字面 `\n` → 真换行。
+- **引用气泡去重**：`wechat_send_quote` 成功后记账，同会话 30s 内最终回复若与之整串相同（忽略空白与标点）
+  则丢弃并回 success——修掉「引用气泡 + 重复一句」；只做整串比较，回复里多加了内容就正常发出。
 - 细节与验收：`../DEPLOY.md`。
 - 入站媒体：`wechat_fetch_media` 按 `media_ref` 懒下载。图/表情/视频走桥 CDN；语音/文件临时打本机 core `127.0.0.1:8080`（见桥 `coreapi.go`）。文件正文为 `[文件] 文件名`。
 
@@ -190,11 +243,12 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 |---|---|---|
 | `WECHAT_GOLEM_DEBOUNCE_MS` | `0` | 私聊去抖；一般保持 0 |
 | `WECHAT_GOLEM_GROUP_DEBOUNCE_MS` | `0` | 群去抖；桥侧已合并 |
-| `WECHAT_GOLEM_INTERRUPT_TOKENS` | `打断` | 整句打断词（逗号分隔） |
+| `WECHAT_GOLEM_INTERRUPT_TOKENS` | `打断` | 整句打断词（逗号分隔；**仅主人**） |
 | `WECHAT_GOLEM_RESET_TOKENS` | `新开会话,新对话` | 整句新开会话词（仅主人；CLI prune --chat-id 清历史后桥回执，不投 agent） |
 | `WECHAT_GOLEM_STICKER_DIR` | `~/.hermes/wechat_stickers` | 表情收藏库目录（`<md5>.<ext>` + `index.json`：`moods` 情绪 / `tags` 题材标记 / desc…） |
 | `WECHAT_GOLEM_MEMBER_PROFILE_DIR` | `$HERMES_HOME/wechat_member_profiles` | 群成员偏好档案目录（每成员一个 `<wxid>.json`） |
 | `WECHAT_GOLEM_CHAT_FALLBACK_TTL_S` | `15` | 出站 `chat_id` 退到「最近入站会话」的窗口秒数（见下节） |
+| `WECHAT_GOLEM_USAGE_TOKENS` | `用量,看用量,上下文,看上下文,context,usage` | 主人「用量」捷径整句词表（回上下文占用报告；须与桥 `usage_tokens` 同步） |
 
 ## 出站媒体（MEDIA: 标记）
 
@@ -254,7 +308,7 @@ running_agents 的 key 均含 chat_id，命中才算忙；chat_id 空时退回�
 **表情库约定**（实现见 `adapter.py`）：
 
 - 工具：`wechat_sticker_save` / `list` / `send` / `delete`
-- **自主应景** → `send(mood=…)` 对齐 `moods`；**主人点名标签** → `send(tag=…)` 对齐 `tags`
+- **自主应景** → `send(mood=你想表达的核词)`，像群友甩反应，不是镜像对方情绪；不加载 `wechat-sticker-management`。斗图靠桥 `emoji_burst`。**主人点名标签** → `send(tag=…)`
 - 收藏时应带 `moods`（提示约束，非强制识图）；`tags` 留给题材/自定义标记
 - 成功发表情后勿旁白；只需表情时最终 `NO_REPLY`
 

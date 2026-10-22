@@ -18,7 +18,7 @@ WECHAT_GOLEM_ALLOW_ALL_USERS / WECHAT_GOLEM_ALLOWED_USERS。
   - 执行中后续只进 pending；idle 后多句合并一次投递（--- 分隔）
   - 审批 yes/no 旁路立即（_deliver_immediate，不等 idle）
   - 群：桥侧已去抖；适配器 debounce=0，仍走单飞
-  - 整句「打断」：清 pending 并立即投递
+  - 整句「打断」（仅主人）：清 pending 并立即投递
   - 出站：字面 \\n → 真换行；正文 @显示名/@wxid/[[mentions:wxid]] → 桥 mentions 真 @（metadata.mentions 可选）
   - 查询：桥 /self /group_info /group_members /group_member_detail（+ tool；session-map 兜底 chat_id）
   - 出站目标：chat_id 必填，按「本轮 run 绑定 > session 登记表 > 唯一在途会话」定位；
@@ -60,6 +60,7 @@ import re
 import tempfile
 import threading
 import time
+import types
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
@@ -1487,6 +1488,174 @@ def inflight_targets() -> Dict[str, str]:
         return {cid: slot[1] for cid, slot in _INFLIGHT.items()}
 
 
+# ---- 本轮已由工具出站的登记 ----
+# 模型常见行为：先用 wechat_send_quote / send_record / send_emoji 把回答发出去，
+# 然后只回一个 NO_REPLY。gateway 仅对 reply_expected is False 的轮次放行纯静默
+# 标记；真 @ / 引用 / 私聊传的是 None，会被判成「用户轮次不许静默」，于是打出
+# `silence marker rejected on a user turn` 并把沉默替换成 ⚠️ 兜底文案再发一遍
+# ——用户看到的就是「工具已经发完了，又多冒一句莫名其妙的客套话」。
+#
+# 事实已经答复，就在出站成功那一刻把该轮 event 改判成 False。gateway 是
+# handle_message → create_task(_process_message_background(event)) → ...
+# → _hmwa_shape_agent_response(reply_expected=event.reply_expected)，全程同一个
+# event 对象，且读值发生在 run 结束之后，所以工具执行期间的修改一定生效。
+# 只放宽静默许可、不禁言：模型照常可以给最终回复。
+#
+# 记账只做「最近 N 条」而不是全量：正常情况下车道在 finally 里注销，能留在表里的
+# 都是旁路投递（打断 / 审批 / 命令）或还没跑完的轮次。gateway 真正读的是
+# queued_terminal_reply_expected（链上最后一条事件），所以旧条目过期丢掉不影响判定。
+_ACTIVE_EVENT_TTL_S = 3 * 3600.0  # 兜底清理：旁路投递没有 idle 可等，只能靠时间与条数收敛
+_ACTIVE_EVENT_MAX_PER_CHAT = 6  # 每会话最多留几条；打断/审批连发时也不让记账无限长，留余量给「正在跑的那轮」
+_ACTIVE_EVENTS: Dict[str, List[tuple]] = {}  # chat_id -> [(event, ts), ...]，末尾最新
+_ACTIVE_EVENTS_LOCK = threading.Lock()
+
+
+def _prune_active_events(now: float) -> None:
+    """调用方需持有 _ACTIVE_EVENTS_LOCK；清掉过期与超量的旧轮次。
+
+    TTL 给得足够长：正常车道在 finally 里注销，落到这里的基本是旁路投递。
+    若按短 TTL 清，超过该时长仍在跑的一轮会丢掉登记，工具出站就改判不到，
+    静默警告会在「一次跑很久」的轮次上复现——所以保底靠条数上限收敛。
+    """
+    for cid in list(_ACTIVE_EVENTS):
+        items = [
+            (e, t) for e, t in _ACTIVE_EVENTS.get(cid, []) if now - t <= _ACTIVE_EVENT_TTL_S
+        ]
+        if len(items) > _ACTIVE_EVENT_MAX_PER_CHAT:
+            items = items[-_ACTIVE_EVENT_MAX_PER_CHAT:]
+        if items:
+            _ACTIVE_EVENTS[cid] = items
+        else:
+            _ACTIVE_EVENTS.pop(cid, None)
+
+
+def register_active_event(chat_id: str, event: Any) -> None:
+    """登记该会话当前在途的入站事件，供出站成功后改判静默许可。
+
+    自身绝不抛异常：调用点在投递关键路径上，记账失败只该少一次静默放宽，
+    不能把一条正常消息的投递带崩。
+    """
+    try:
+        cid = str(chat_id or "").strip()
+        if not cid or event is None:
+            return
+        now = time.time()
+        with _ACTIVE_EVENTS_LOCK:
+            _prune_active_events(now)
+            _ACTIVE_EVENTS.setdefault(cid, []).append((event, now))
+    except Exception:
+        logger.debug("[wechat_golem] register active event failed", exc_info=True)
+
+
+def unregister_active_event(chat_id: str, event: Any) -> None:
+    """run 结束（idle 或被放弃）时注销；按对象身份删，避免误删同会话的新一轮。"""
+    try:
+        cid = str(chat_id or "").strip()
+        if not cid or event is None:
+            return
+        with _ACTIVE_EVENTS_LOCK:
+            items = [it for it in (_ACTIVE_EVENTS.get(cid) or []) if it[0] is not event]
+            if items:
+                _ACTIVE_EVENTS[cid] = items
+            else:
+                _ACTIVE_EVENTS.pop(cid, None)
+    except Exception:
+        logger.debug("[wechat_golem] unregister active event failed", exc_info=True)
+
+
+def mark_inbound_replied(chat_id: str, why: str = "") -> bool:
+    """工具已把内容发到微信：允许该会话的轮次以纯静默标记收尾。返回是否有改判。
+
+    逐条标记该会话**所有**未注销的事件，而不是只挑一条。原因在打断/审批链上：
+    网关对链式的最终回复取 `queued_terminal_reply_expected`，也就是最后投递进来
+    那条事件的声明，最早那条不再是判定依据；只标最早一条会让真正被读的那条
+    仍是 None，警告照旧。列表里有几条就说明这几条都已交到 gateway 手上——能走到
+    「工具已出站」这步，就没有哪条还需要靠兜底文案来提醒用户「模型沉默了」。
+
+    同会话单飞（正常路径）时列表里只有一条，等价于「标正在跑的那轮」。
+    返回值只表示「是否真的把某条从 None 改成了 False」，供日志/测试判断。
+    """
+    cid = str(chat_id or "").strip()
+    if not cid:
+        return False
+    now = time.time()
+    with _ACTIVE_EVENTS_LOCK:
+        _prune_active_events(now)
+        events = [e for e, _t in (_ACTIVE_EVENTS.get(cid) or [])]
+    marked = 0
+    for event in events:
+        if getattr(event, "reply_expected", None) is False:
+            continue
+        try:
+            event.reply_expected = False
+        except Exception:
+            logger.debug("[wechat_golem] 改判 reply_expected 失败", exc_info=True)
+            continue
+        marked += 1
+    if marked:
+        logger.info(
+            "[wechat_golem] 本轮已由工具出站，允许以静默收尾 chat=%s why=%s marked=%s",
+            cid,
+            why or "-",
+            marked,
+        )
+    return marked > 0
+
+
+# 只认 tool 出站接口：quote / record / emoji / 音乐卡片 / 语音。
+# 刻意不含 "send"/"send_image"/"send_video"——那是 gateway 最终回复与 MEDIA 的投递，
+# 发生在静默判定之后，标了没有意义；而且这些路径会带 chat_id 重试，在打断场景
+# 容易把刚投进来的新轮次一并放行静默。
+_REPLY_BEARING_PATHS = frozenset({
+    "send_quote",
+    "send_record",
+    "send_emoji",
+    "send_app",
+    "send_voice",
+})
+
+
+def _note_outbound_delivery(path: str, body: Dict[str, Any], result: Any) -> None:
+    """出站成功后把相关轮次标记为「已答复」。
+
+    挂在 _post_json 上而不是逐个 tool handler：发送路径有 8 条，漏一条就会
+    在对应工具上复现同一个警告。
+
+    标两个会话：
+      - body.chat_id —— 真正收到内容的那边；同会话发送时它就是本轮。
+      - 本轮会话 —— 跨会话发送（allow_cross_chat）时对方 chat_id 与本轮不同，
+        但本轮同样已经用工具把话说完了，最终回 NO_REPLY 不该再被补一句兜底
+        文案。取值优先 contextvar；工具 handler 跑在线程池里时拿不到它
+        （run_in_executor 不传 contextvars），退回「只有一个在途会话」，
+        与 resolve_outbound_target 的第三层判据一致。多会话并发且取不到
+        contextvar 时不猜，只标 body.chat_id——宁可少标，不可误标。
+
+    改判的代价上限是「少一句兜底提示」：既不阻止模型正常回复，也不会多发消息。
+    """
+    p = str(path or "").strip().strip("/").split("?", 1)[0]
+    if p not in _REPLY_BEARING_PATHS:
+        return
+    if not isinstance(result, dict) or not result.get("success"):
+        return
+    try:
+        targets: List[str] = []
+        chat_id = str(body.get("chat_id") or "").strip()
+        if chat_id:
+            targets.append(chat_id)
+        origin, _origin_sk = current_outbound_target()
+        if not origin:
+            flying = inflight_targets()
+            if len(flying) == 1:
+                origin = next(iter(flying))
+        if origin and origin not in targets:
+            targets.append(origin)
+        for cid in targets:
+            mark_inbound_replied(cid, why=p)
+    except Exception:
+        # 记账是附加值：任何异常都不该让一次已经成功的发送被当成失败返回。
+        logger.debug("[wechat_golem] note outbound delivery failed", exc_info=True)
+
+
 # 出站目标的来源标记，进日志便于事后判责
 OUTBOUND_SRC_CTX = "ctx"  # contextvar，本 run 绑定（最准）
 OUTBOUND_SRC_MAP = "session_map"  # 登记表精确命中
@@ -2071,7 +2240,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _interrupt_tokens() -> frozenset[str]:
-    """特殊打断整句（小写比较）。默认「打断」；可用 WECHAT_GOLEM_INTERRUPT_TOKENS=a,b 覆盖。"""
+    """特殊打断整句（小写比较，仅主人）。默认「打断」；可用 WECHAT_GOLEM_INTERRUPT_TOKENS=a,b 覆盖。"""
     raw = _env("WECHAT_GOLEM_INTERRUPT_TOKENS", "打断")
     parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
     return frozenset(parts)
@@ -2166,29 +2335,399 @@ def _is_silent_outbound(text: str) -> bool:
     return bool(_SILENCE_PHRASE_RE.match(s))
 
 
-# Hermes gateway 在 pending 审批时识别的纯文本捷径（见 gateway/run.py）。
-# 注意：Golem host 会拦截所有以 / 开头的消息（未知命令：/approve），
-# 因此微信侧不能依赖 /approve、/deny，只能用 yes/no 等无斜杠回复。
+# ---- 引用气泡重复出站去重 ----
+# 模型常见行为：先调 wechat_send_quote 把回复塞进引用气泡，再把同一句当最终回复
+# 交给 send()，群里就是「引用气泡 + 重复一句」。tool 回包已提示别复述，这里再兜一层：
+# quote 成功后记账，同会话 30s 内整条最终回复与之相同就丢弃（不发、算成功）。
+# 只按会话 + 规范化后的整串精确比较，不做子串匹配——加了新词就不算重复。
+_QUOTE_SENT_TTL_S = 30.0
+_QUOTE_SENT_MAX = 8  # 每会话最多记几条（一轮里可能引用多人）
+_QUOTE_SENT: Dict[str, List[tuple]] = {}
+_QUOTE_SENT_LOCK = threading.Lock()
+
+
+def _dup_norm(text: str) -> str:
+    """去空白与标点后比较（模型复述时常补句号/换行）。"""
+    return re.sub(r"[\s\W_]+", "", (text or "").lower())
+
+
+def remember_quote_reply(chat_id: str, reply: str) -> None:
+    cid = str(chat_id or "").strip()
+    norm = _dup_norm(reply)
+    if not cid or not norm:
+        return
+    now = time.time()
+    with _QUOTE_SENT_LOCK:
+        items = [
+            (n, t)
+            for n, t in _QUOTE_SENT.get(cid, [])
+            if now - t <= _QUOTE_SENT_TTL_S
+        ]
+        items.append((norm, now))
+        _QUOTE_SENT[cid] = items[-_QUOTE_SENT_MAX:]
+
+
+def consume_quote_duplicate(chat_id: str, text: str) -> bool:
+    """本次出站是否就是刚发过的引用气泡正文；是则消费掉它并返 True。"""
+    cid = str(chat_id or "").strip()
+    norm = _dup_norm(text)
+    if not cid or not norm:
+        return False
+    now = time.time()
+    with _QUOTE_SENT_LOCK:
+        items = [
+            (n, t)
+            for n, t in _QUOTE_SENT.get(cid, [])
+            if now - t <= _QUOTE_SENT_TTL_S
+        ]
+        for i in range(len(items) - 1, -1, -1):
+            if items[i][0] == norm:
+                items.pop(i)
+                if items:
+                    _QUOTE_SENT[cid] = items
+                else:
+                    _QUOTE_SENT.pop(cid, None)
+                return True
+        if items:
+            _QUOTE_SENT[cid] = items
+        else:
+            _QUOTE_SENT.pop(cid, None)
+    return False
+
+
+# 与 Hermes gateway 的 approval.inputs（locales zh ∪ en）及桥 defaultApprovalTokens 对齐。
+# gateway 在审批挂起时按这组同义词拦截裸词回复；桥不认的词会被群门闩吞掉。
+# Golem host 会拦截所有以 / 开头的消息，微信侧不能依赖 /approve、/deny。
 _APPROVAL_REPLY_TOKENS = frozenset(
     {
-        "yes",
-        "y",
-        "no",
-        "n",
-        "always",
-        "session",
-        "once",
-        "all",
-        "deny",
-        "approve",
-        "是",
-        "否",
-        "同意",
-        "拒绝",
-        "允许",
-        "取消",
+        # 允许一次
+        "yes", "y", "ok", "okay", "confirm", "approve",
+        "是", "好", "确认", "同意", "可以", "批准", "允许",
+        # 拒绝
+        "no", "n", "deny", "reject", "cancel",
+        "否", "不", "取消", "拒绝", "不行",
+        # 本会话允许
+        "session", "会话", "本会话",
+        # 永久允许
+        "always", "始终", "总是",
+        # 双词组合引导词（all/approve/deny + session/always/once/all）
+        "once", "all",
     }
 )
+
+
+# ---- 用量捷径：上下文占用报告（仅主人） ----
+#
+# Hermes 自带 /usage，但 Golem host 会吞掉所有以 / 开头的消息
+# （host/plugin/command.go 的 parseCommand 未命中 commandIndex →「未知命令」并 continue），
+# 消息根本到不了 gateway。故这里做无斜杠整句捷径，绕过 host 的斜杠拦截。
+#
+# 数字来源两层（优先精确、失败降级）：
+#   1. gateway 缓存里有活/驻留 agent → 直调 /usage 的同一套私有件
+#      （_resident_agent_for → _session_context_breakdown），与微信外 /usage 完全一致；
+#   2. 没有 agent（桥路径常态：agent 只在处理消息那一瞬存在，闲时被 idle 清扫）
+#      → 从 state.db 的 _usage_anchor + 消息增量自行估算（见 _usage_report_from_db）。
+#
+# 估算口径对齐 agent/context_breakdown.py 与 agent/usage_anchor.py：
+#   context_used = 锚点.prompt_tokens + 锚点.completion_tokens
+#                  + estimate_messages_tokens_rough(锚点之后新增的消息)
+#   estimate_tokens_rough：CJK/日韩按码点各 1 token，其余 ceil(UTF-8 字节 / 4)。
+
+_USAGE_TOKENS_ENV = "WECHAT_GOLEM_USAGE_TOKENS"
+_USAGE_TOKENS_DEFAULT = "用量,看用量,上下文,看上下文,context,usage"
+
+
+def _usage_tokens() -> frozenset[str]:
+    """用量捷径整句（小写比较）；WECHAT_GOLEM_USAGE_TOKENS=a,b 覆盖。"""
+    raw = _env(_USAGE_TOKENS_ENV, _USAGE_TOKENS_DEFAULT)
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return frozenset(parts)
+
+
+def _is_usage_command(text: str) -> bool:
+    raw = (text or "").strip().lower()
+    return bool(raw) and raw in _usage_tokens()
+
+
+# CJK/日韩字符：与 agent/model_metadata._CJK_DENSE_RE 同口径（各按 1 token 计）
+_CJK_RE = re.compile(
+    r"[⺀-⻿　-〿぀-ヿ㄀-ㄯㆠ-ㆿ"
+    r"㈀-㋿㐀-䶿一-鿿豈-﫿가-힯]"
+)
+_CHARS_PER_TOKEN = 4  # 非 CJK：ceil(UTF-8 字节 / 4)
+
+
+def _estimate_tokens_rough(text: str) -> int:
+    """对齐 agent.model_metadata.estimate_tokens_rough（CJK 每码点 1，其余 UTF-8 字节 / 4 向上取整）。"""
+    if not text:
+        return 0
+    text = str(text)
+    if text.isascii():
+        return (len(text) + 3) // _CHARS_PER_TOKEN
+    stripped = _CJK_RE.sub("", text)
+    dense = len(text) - len(stripped)
+    return dense + ((len(stripped.encode("utf-8", "replace")) + 3) // _CHARS_PER_TOKEN)
+
+
+def _format_usage_report(
+    *,
+    used: int,
+    maximum: int,
+    categories: List[Dict[str, Any]] = (),
+    source: str = "",
+    model: str = "",
+    note: str = "",
+    note_lines: List[str] = (),
+) -> str:
+    """拼一条微信友好的用量报告。categories 为空时只出总量块。"""
+    lines: List[str] = ["📊 上下文用量", ""]
+    if model:
+        lines.append(f"模型：{model}")
+    if maximum > 0:
+        # 锚点可能过期（压缩/重置后 base_count 对不上），单次 prompt 不可能超过窗口
+        used = max(0, min(used, maximum))
+        pct = max(0, min(100, round(used / maximum * 100)))
+        mark = "~" if source and source != "provider_usage" else ""
+        lines.append(f"已用：{mark}{used:,} / {maximum:,} token（{mark}{pct}%）")
+    else:
+        lines.append(f"已用：{used:,} token")
+    if note:
+        lines.append(note)
+    rows = [(str(c.get("label") or c.get("id") or "?"), int(c.get("tokens") or 0)) for c in categories]
+    rows = [(label, tok) for label, tok in rows if tok > 0]
+    if rows:
+        total = sum(tok for _label, tok in rows) or 1
+        width = max(len(label) for label, _tok in rows)
+        lines += ["", "分类估算："]
+        for label, tok in sorted(rows, key=lambda r: -r[1]):
+            pct = round(tok / total * 100)
+            lines.append(f"  {label.ljust(width)}  {tok:>7,}  ~{pct}%")
+    for n in note_lines:
+        if n:
+            lines.append(n)
+    return "\n".join(lines)
+
+
+# 无法从库里单独拆出的类别（技能 / 规则 / MCP / 子 agent）：它们的量已含在
+# 系统提示正文里，只有 agent 在场时 _context_breakdown_lines 才能按块拆开。
+_USAGE_UNDIVIDED_NOTE = (
+    "技能/规则/MCP 未单独统计"
+    "（需 agent 在场才能拆分；其量已含在「系统提示」里）"
+)
+
+
+def _session_db_path() -> str:
+    """gateway state.db 路径。与 SessionDB 的落位保持一致（$HERMES_HOME/state.db）。"""
+    home = _hermes_home()
+    return os.path.join(home, "state.db") if home else ""
+
+
+def _read_session_row(session_key: str) -> Optional[Dict[str, Any]]:
+    """从 state.db 读该 session_key 当前未结束的会话行。只读，失败返回 None。"""
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return None
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return None
+    try:
+        conn.row_factory = sqlite3.Row
+        if session_key:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_key = ? AND ended_at IS NULL "
+                "ORDER BY started_at DESC LIMIT 1",
+                (session_key,),
+            ).fetchone()
+        else:
+            row = None
+        if row is None:
+            return None
+        return {k: row[k] for k in row.keys()}
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _estimate_delta_tokens(session_id: str, base_count: int) -> int:
+    """锚点之后新增消息的粗略 token（对齐 estimate_messages_tokens_rough 的逐条口径）。
+
+    只算会真的进 prompt 的部分：显式 reasoning / reasoning_content 排除
+    （它们在新回合不再回放，charge_stale_thinking=False 语义），api_content 优先。
+    """
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return 0
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return 0
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT role, content, api_content, tool_calls FROM messages "
+            "WHERE session_id = ? AND active = 1 ORDER BY id",
+            (session_id,),
+        ).fetchall()
+    except Exception:
+        return 0
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    if not rows or base_count <= 0 or base_count >= len(rows):
+        return 0
+    delta = rows[int(base_count):]
+    # 锚点那条助手回复已在锚点的 completion_tokens 里，跳过开头的 assistant
+    if delta and str(delta[0]["role"]) == "assistant":
+        delta = delta[1:]
+    total = 0
+    for r in delta:
+        text = str(r["api_content"] or r["content"] or "")
+        total += _estimate_tokens_rough(text)
+        tc = r["tool_calls"]
+        if tc:
+            total += _estimate_tokens_rough(str(tc))
+    return total
+
+
+def _estimate_system_prompt_parts(session_row: Dict[str, Any]) -> Dict[str, Any]:
+    """降级路径的系统提示拆解：从 system_prompts 表的快照拿正文与工具 schema。
+
+    库里存两种形态，且分两个 hash 位：
+      - system_prompt_hash → 系统提示正文（多为纯文本分节）
+      - tool_names         → 工具 schema 快照（JSON，带 tools 数组）
+    旧版本可能把两者塞进同一行（JSON 里既有 tools 又有正文），这里两种都兼容。
+    返回 {'prompt_tokens','tool_tokens','tool_count','has_tools','chars'}。
+    """
+    out: Dict[str, Any] = {
+        "prompt_tokens": 0,
+        "tool_tokens": 0,
+        "tool_count": 0,
+        "has_tools": False,
+        "chars": 0,
+    }
+    db_path = _session_db_path()
+    if not db_path or not os.path.isfile(db_path):
+        return out
+    import sqlite3
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
+    except Exception:
+        return out
+
+    def _load(h: str) -> Optional[str]:
+        if not h:
+            return None
+        try:
+            r = conn.execute("SELECT prompt FROM system_prompts WHERE hash = ?", (h,)).fetchone()
+            return r["prompt"] if r is not None else None
+        except Exception:
+            return None
+
+    def _split_tools(doc: Any) -> Optional[List[Any]]:
+        if isinstance(doc, dict) and isinstance(doc.get("tools"), list):
+            return doc["tools"]
+        return None
+
+    try:
+        conn.row_factory = sqlite3.Row
+        prompt = _load(str(session_row.get("system_prompt_hash") or ""))
+        if not prompt and session_row.get("system_prompt"):
+            prompt = session_row["system_prompt"]
+        tools = None
+        # 旧形态：system_prompt 那一行本身就是带 tools 的 JSON
+        doc = None
+        if isinstance(prompt, str) and prompt.lstrip().startswith("{"):
+            try:
+                doc = json.loads(prompt)
+            except Exception:
+                doc = None
+        tools = _split_tools(doc)
+        if tools is None:
+            # 现行形态：工具 schema 单挂在 tool_names 那个 hash 下
+            tdoc = None
+            raw_tools = _load(str(session_row.get("tool_names") or ""))
+            if raw_tools:
+                try:
+                    tdoc = json.loads(raw_tools)
+                except Exception:
+                    tdoc = None
+            tools = _split_tools(tdoc)
+        if not prompt:
+            return out
+        prompt = str(prompt)
+        out["chars"] = len(prompt)
+        body = prompt
+        if isinstance(doc, dict) and tools is not None:
+            # 旧形态：正文 = JSON 去掉 tools 后的其余部分
+            rest = {k: v for k, v in doc.items() if k != "tools"}
+            body = json.dumps(rest, ensure_ascii=False) if rest else ""
+        if tools is not None:
+            out["tool_count"] = len(tools)
+            out["has_tools"] = True
+            out["tool_tokens"] = _estimate_tokens_rough(
+                json.dumps(tools, ensure_ascii=False)
+            )
+        out["prompt_tokens"] = _estimate_tokens_rough(body)
+    except Exception:
+        return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return out
+
+
+def _base_window_from_row(session_row: Dict[str, Any]) -> int:
+    """只读配置里的窗口（不发网络请求）；取不到返回 0，交给 _probe_window 兜底。"""
+    try:
+        mc = json.loads(session_row.get("model_config") or "{}")
+    except Exception:
+        mc = {}
+    if isinstance(mc, dict):
+        for k in ("context_length", "context_window"):
+            try:
+                v = int(mc.get(k) or 0)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+    return 0
+
+
+def _probe_window(session_row: Dict[str, Any]) -> int:
+    """线程里调用 Hermes 的窗口探测（会发 HTTP，可能几秒）。失败返回 0。"""
+    try:
+        from agent.model_metadata import get_model_context_length  # type: ignore
+
+        mc = {}
+        try:
+            mc = json.loads(session_row.get("model_config") or "{}") or {}
+        except Exception:
+            mc = {}
+        rt = mc.get("gateway_runtime") or {} if isinstance(mc, dict) else {}
+        return int(
+            get_model_context_length(
+                str(session_row.get("model") or ""),
+                base_url=str(rt.get("base_url") or ""),
+                provider=str(rt.get("provider") or ""),
+            )
+            or 0
+        )
+    except Exception:
+        return 0
 
 
 def _is_approval_reply(text: str) -> bool:
@@ -2525,12 +3064,14 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             "interrupt": _interrupt_tokens(),
             "session_reset": _reset_tokens(),
             "archive": _archive_tokens(),
+            "usage": _usage_tokens(),
             "approval": _APPROVAL_REPLY_TOKENS,
         }
         env_hint = {
             "interrupt": "WECHAT_GOLEM_INTERRUPT_TOKENS / 桥 interrupt_tokens",
             "session_reset": "WECHAT_GOLEM_RESET_TOKENS / 桥 session_reset_tokens",
             "archive": "WECHAT_GOLEM_ARCHIVE_TOKENS / 桥 archive_tokens",
+            "usage": "WECHAT_GOLEM_USAGE_TOKENS / 桥 usage_tokens",
             "approval": "桥 approval_tokens（适配器侧无 env）",
         }
         for key, local in mine.items():
@@ -2859,8 +3400,38 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             message_type=MessageType.TEXT,
             source=source,
             message_id=str(kw.get("message_id") or int(time.time() * 1000)),
+            reply_expected=self._reply_expected_for(
+                kw["hermes_chat_type"],
+                str(kw.get("addressing") or ""),
+                str(kw.get("trigger_reason") or ""),
+            ),
             metadata=meta,
         )
+
+    @staticmethod
+    def _reply_expected_for(
+        hermes_chat_type: str, addressing: str, trigger_reason: str = ""
+    ):
+        """群里没人找它的消息（冒泡/点名别人/trigger_names 软命中）声明 reply_expected=False。
+
+        新版 gateway 只允许「内部任务」或 reply_expected is False 的轮次以纯
+        NO_REPLY 静默；否则会把沉默替换成「silence marker rejected」警告发出来。
+
+        trigger_name 是子串匹配（如「火」会命中「火锅」「火了」），不算硬点名；
+        由 agent 判断是否真的在叫它。agent 决定不相关时允许静默，避免网关弹
+        「模型只返回了静默标记」的兜底文案。真 @ / 引用与私聊仍不声明（None）。
+
+        另有运行期改判：工具（引用气泡 / 聊天记录卡片 / 表情 / 音乐卡 / 语音）
+        已经成功把内容发上屏时，mark_inbound_replied() 会把本轮 event 的
+        reply_expected 置 False——这一轮已经答复过了，最终只回 NO_REPLY 属于正常
+        收尾，不该被判成沉默错误再补一句兜底。
+        """
+        if hermes_chat_type == "group" and (
+            addressing not in ("self", "quoted_self")
+            or trigger_reason == "trigger_name"
+        ):
+            return False
+        return None
 
     async def _deliver_immediate(self, event: MessageEvent) -> None:
         """审批等旁路：不经车道，直接 await handle_message（不等 session idle）。
@@ -2870,6 +3441,10 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         同样要在 handle_message 前绑好出站目标（gateway 在里面 create_task，
         新 task 拿的是此刻的 context 快照）。不记 in-flight：这条路径不等
         session idle，无从知道 run 何时结束，记了就会永久占位。
+
+        active event 要登记：审批词本身不会让模型发工具，但**打断**也走这条路，
+        打断后模型在新回合里完全可能先发引用气泡再静默收尾——不登记的话那次
+        出站找不到可改判的事件，静默警告会从打断链上复现。
         """
         chat_id = self._event_chat_id(event)
         try:
@@ -2878,11 +3453,13 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             logger.debug("[wechat_golem] immediate session_key failed", exc_info=True)
             sk = ""
         token = bind_outbound_target(chat_id, sk)
+        register_active_event(chat_id, event)
         try:
             try:
                 await self.handle_message(event)
             except Exception:
                 logger.exception("[wechat_golem] immediate handle_message failed")
+                unregister_active_event(chat_id, event)
                 return
             self._remember_event_session(event, chat_id, sk)
         finally:
@@ -2901,6 +3478,219 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 "thread_sessions_per_user", False
             ),
         )
+
+    # ---- 用量捷径：取数（先试私有路径，失败降级自算） ----
+
+    def _session_key_for_chat(self, chat_id: str, chat_type: str = "group") -> str:
+        """由 chat_id 反推 gateway 的 session key（本适配器的 key 算法）。
+
+        优先复用基类对当前 source 的解析，拿不到时按 build_session_key 的口径手拼。
+        """
+        cid = str(chat_id or "").strip()
+        if not cid:
+            return ""
+        if cid.endswith("@chatroom"):
+            chat_type = "group"
+        try:
+            source = self.build_source(
+                chat_id=cid, chat_name=cid, chat_type=chat_type,
+                user_id="", user_name="",
+            )
+            return self._hermes_session_key(MessageEvent(text="", source=source))
+        except Exception:
+            logger.debug("[wechat_golem] derive session_key failed", exc_info=True)
+        # 手拼兜底：agent:main:<platform>:<chat_type>:<chat_id>
+        try:
+            from gateway.session import _session_key_namespace  # type: ignore
+
+            ns = _session_key_namespace(None)
+        except Exception:
+            ns = "agent:main"
+        return f"{ns}:{_PLATFORM_NAME}:{chat_type}:{cid}"
+
+    def _usage_report_via_agent(self, session_key: str) -> Optional[str]:
+        """有驻留 agent 时走 /usage 的同一套私有件；任何一步失败返回 None 交给降级。"""
+        runner = getattr(self, "gateway_runner", None)
+        if runner is None or not session_key:
+            return None
+        resident = getattr(runner, "_resident_agent_for", None)
+        if not callable(resident):
+            return None
+        try:
+            agent = resident(session_key)
+        except Exception:
+            logger.debug("[wechat_golem] _resident_agent_for failed", exc_info=True)
+            return None
+        if agent is None:
+            return None
+        comp = getattr(agent, "context_compressor", None)
+        if comp is None:
+            return None
+        used = int(getattr(comp, "last_prompt_tokens", 0) or 0)
+        maximum = int(getattr(comp, "context_length", 0) or 0)
+        if used <= 0:
+            return None  # 还没跑过一轮，没有真实占用，交给降级
+        model = str(getattr(agent, "model", "") or "")
+        # 走 /usage 的同一套分类拆解（含工具/技能/MCP 的精确拆分）。
+        # 不用 gateway 的 _session_context_breakdown：它内部走
+        # store.get_or_create_session(source)，传合成 source 会触碰路由表、
+        # 极端情况下还会建出空会话。这里直接调它的底层纯函数，只做计算。
+        payload = None
+        try:
+            from agent.context_breakdown import compute_session_context_breakdown  # type: ignore
+
+            history = []
+            store = getattr(self, "_session_store", None)
+            row_for_history = _read_session_row(session_key)
+            sid = str((row_for_history or {}).get("id") or "")
+            loader = getattr(store, "load_transcript", None)
+            if sid and callable(loader):
+                try:
+                    history = loader(sid) or []
+                except Exception:
+                    history = []
+            payload = compute_session_context_breakdown(agent, history)
+        except Exception:
+            logger.debug("[wechat_golem] context breakdown failed", exc_info=True)
+            payload = None
+        cats: List[Dict[str, Any]] = []
+        if isinstance(payload, dict):
+            for c in payload.get("categories") or []:
+                cats.append({
+                    "label": str(c.get("label") or c.get("id") or "?"),
+                    "tokens": int(c.get("tokens") or 0),
+                })
+            try:
+                used = int(payload.get("context_used") or used)
+                maximum = int(payload.get("context_max") or maximum)
+            except (TypeError, ValueError):
+                pass
+        src = ""
+        if isinstance(payload, dict):
+            src = str(payload.get("context_source") or "")
+        if not src:
+            real = getattr(comp, "last_real_prompt_tokens", None)
+            src = "provider_usage" if real and used == real else "local_estimate"
+        note_lines: List[str] = []
+        if not cats:
+            # 私有件没给出分类（旧版本或异常）：退回自算分类
+            row = _read_session_row(session_key)
+            sp = _estimate_system_prompt_parts(row) if row else {}
+            if sp.get("prompt_tokens"):
+                cats.append({"label": "系统提示", "tokens": sp["prompt_tokens"]})
+            if sp.get("tool_tokens"):
+                cats.append({"label": "工具", "tokens": sp["tool_tokens"]})
+            note_lines = [_USAGE_UNDIVIDED_NOTE]
+        return _format_usage_report(
+            used=used, maximum=maximum, categories=cats,
+            source=src, model=model, note_lines=note_lines,
+        )
+
+    def _usage_report_from_db(
+        self,
+        session_key: str,
+        *,
+        row: Optional[Dict[str, Any]] = None,
+        maximum: int = 0,
+    ) -> str:
+        """降级路径：从 state.db 的锚点 + 系统提示快照算。数字以真实锚点为基准。"""
+        if row is None:
+            row = _read_session_row(session_key)
+        if not row:
+            return "读不到本会话信息（state.db 无记录或不可读）"
+        model = str(row.get("model") or "")
+        if maximum <= 0:
+            maximum = _base_window_from_row(row)
+        try:
+            mc = json.loads(row.get("model_config") or "{}")
+        except Exception:
+            mc = {}
+        anchor = (mc or {}).get("_usage_anchor") if isinstance(mc, dict) else None
+        sp = _estimate_system_prompt_parts(row)
+        delta = 0
+        hist_tokens = 0
+        used = 0
+        source = ""
+        if isinstance(anchor, dict):
+            try:
+                prompt_tokens = int(anchor.get("prompt_tokens") or 0)
+                completion_tokens = int(anchor.get("completion_tokens") or 0)
+                used = prompt_tokens + completion_tokens
+                # 锚点 prompt 已含系统提示、工具和锚点前的历史对话；
+                # 扣掉前两项，余额归入「历史对话」，让分类加总与总量对齐。
+                hist_tokens = max(
+                    0, prompt_tokens - sp["prompt_tokens"] - sp["tool_tokens"]
+                ) + completion_tokens
+                source = "provider_usage_plus_estimate"
+            except (TypeError, ValueError):
+                used = 0
+                hist_tokens = 0
+            try:
+                delta = _estimate_delta_tokens(
+                    str(row.get("id") or ""), int(anchor.get("base_count") or 0)
+                )
+            except (TypeError, ValueError):
+                delta = 0
+            used += delta
+        if used <= 0:
+            # 无锚点（新会话或刚压缩）：只报系统提示 + 消息粗估
+            used = sp["prompt_tokens"] + sp["tool_tokens"]
+            hist_tokens = 0
+            source = "local_estimate"
+        cats: List[Dict[str, Any]] = []
+        if sp["prompt_tokens"]:
+            cats.append({"label": "系统提示", "tokens": sp["prompt_tokens"]})
+        if sp["tool_tokens"]:
+            cats.append({"label": "工具", "tokens": sp["tool_tokens"]})
+        if hist_tokens > 0:
+            cats.append({"label": "历史对话", "tokens": hist_tokens})
+        if delta:
+            cats.append({"label": "对话增量", "tokens": delta})
+        note_lines = [_USAGE_UNDIVIDED_NOTE]
+        if not sp["has_tools"]:
+            note_lines = ["工具 schema 未在快照中（旧形态系统提示）", _USAGE_UNDIVIDED_NOTE]
+        return _format_usage_report(
+            used=used, maximum=maximum, categories=cats,
+            source=source, model=model, note_lines=note_lines,
+        )
+
+    async def _resolve_window(self, row: Dict[str, Any]) -> int:
+        """窗口大小：先读配置，再线程探测（有缓存，超时 5s，失败不阻塞）。"""
+        n = _base_window_from_row(row)
+        if n > 0:
+            return n
+        key = str(row.get("model") or "")
+        cache = getattr(self, "_usage_window_cache", None)
+        if cache is None:
+            cache = {}
+            self._usage_window_cache = cache
+        if key in cache:
+            return cache[key]
+        try:
+            n = await asyncio.wait_for(asyncio.to_thread(_probe_window, row), timeout=5)
+        except Exception:
+            logger.debug("[wechat_golem] window probe failed", exc_info=True)
+            n = 0
+        if n > 0:
+            cache[key] = n
+        return n
+
+    async def _usage_report(self, chat_id: str, chat_type: str = "group") -> str:
+        """用量报告：有 agent 走私有件，否则从 state.db 降级估算。"""
+        session_key = self._session_key_for_chat(chat_id, chat_type)
+        try:
+            via = self._usage_report_via_agent(session_key)
+            if via:
+                return via
+        except Exception:
+            logger.debug("[wechat_golem] usage via agent failed", exc_info=True)
+        try:
+            row = _read_session_row(session_key)
+            maximum = await self._resolve_window(row) if row else 0
+            return self._usage_report_from_db(session_key, row=row, maximum=maximum)
+        except Exception as e:
+            logger.exception("[wechat_golem] usage report failed")
+            return f"用量查询失败：{e}"
 
     @staticmethod
     def _key_matches_chat(key: Any, chat_id: str) -> bool:
@@ -3143,11 +3933,13 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
         token = bind_outbound_target(chat_id, session_key)
         inflight_enter(chat_id, session_key)
+        register_active_event(chat_id, event)
         try:
             try:
                 await self.handle_message(event)
             except Exception:
                 logger.exception("[wechat_golem] handle_message failed")
+                unregister_active_event(chat_id, event)
                 return False
             self._remember_event_session(event, chat_id, session_key)
             try:
@@ -3164,6 +3956,7 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 logger.exception("[wechat_golem] post-handle wait failed")
             return True
         finally:
+            unregister_active_event(chat_id, event)
             inflight_leave(chat_id)
             unbind_outbound_target(token)
 
@@ -3257,6 +4050,30 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 logger.exception("[wechat_golem] 人格命令回执发送失败 chat=%s", chat_id)
             return
 
+        # ---- 用量捷径：仅主人整句触发；直接回执，不进 lane/agent ----
+        # Hermes 的 /usage 到不了这里（host 吞斜杠），故用无斜杠整句替代。
+        if is_owner and _is_usage_command(text):
+            try:
+                reply = await self._usage_report(
+                    chat_id,
+                    "group" if hermes_chat_type == "group" else "dm",
+                )
+            except Exception as e:
+                logger.exception("[wechat_golem] 用量查询失败 chat=%s", chat_id)
+                reply = f"用量查询失败：{e}"
+            metadata = {"session_key": session_key} if session_key else {}
+            try:
+                send_result = await self._send_text_chunks(chat_id, reply, metadata)
+                if not send_result.success:
+                    logger.warning(
+                        "[wechat_golem] 用量回执发送失败 chat=%s err=%s",
+                        chat_id,
+                        send_result.error,
+                    )
+            except Exception:
+                logger.exception("[wechat_golem] 用量回执发送失败 chat=%s", chat_id)
+            return
+
         # 主人整句「归档」等短词：扩成完整 upsert 指令（须在审批/打断判定前，短词不会撞那些词表）
         raw_user_text = text
         archive_cmd = is_owner and _is_member_archive_command(text)
@@ -3270,7 +4087,9 @@ class WeChatGolemAdapter(BasePlatformAdapter):
         # 审批捷径仅主人有效：审批本来只有主人能答，非主人的整句 yes/是/同意
         # 不应享受旁路（设计如此，此前两端都漏了校验，群里闲聊会误唤醒 agent）。
         approval = is_owner and _is_approval_reply(text)
-        interrupt_cmd = (not approval) and _is_interrupt_command(raw_user_text)
+        # 打断捷径仅主人：清 pending / 中断 agent run 属于运行控制权。
+        # 桥已对群友拦截；这里再判一次，防非主人 @ 机器人发「打断」绕过桥的捷径分支后被此处接住。
+        interrupt_cmd = (not approval) and is_owner and _is_interrupt_command(raw_user_text)
 
         base_meta = {
             "is_owner": is_owner,
@@ -3368,6 +4187,39 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
         lane_key = self._lane_key(data)
         lane = self._get_lane(lane_key)
+
+        # ---- Hermes 原生斜杠命令：桥已把主人的 ~~/cmd 改写成 /cmd ----
+        # 不能走 _compose_event_text（否则正文被套上发送者信封，Hermes 不再按命令解析），
+        # 也不进普通聊天车道：直接以裸 /cmd 投给 gateway，由它按原生斜杠命令处理。
+        if (
+            is_owner
+            and str(data.get("trigger_reason") or "") == "gateway_command"
+            and text.startswith("/")
+        ):
+            source = self.build_source(
+                chat_id=chat_id,
+                chat_name=chat_name,
+                chat_type=hermes_chat_type,
+                user_id=user_id,
+                user_name=user_name,
+            )
+            event = MessageEvent(
+                text=text,
+                message_type=MessageType.TEXT,
+                source=source,
+                message_id=message_id,
+                reply_expected=True,
+                allow_gateway_control=True,
+                metadata={**base_meta, "gateway_command": True, "approval_reply": False},
+            )
+            logger.info(
+                "[wechat_golem] gateway command session=%s cmd=%s",
+                lane_key,
+                text[:80],
+            )
+            await self._deliver_immediate(event)
+            return
+
         media_data_b64 = str(data.get("media_data_b64") or "")
         media_ref = str(data.get("media_ref") or "")
         emoji_md5 = str(data.get("emoji_md5") or "")
@@ -3436,6 +4288,11 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 message_type=MessageType.TEXT,
                 source=source,
                 message_id=message_id,
+                reply_expected=self._reply_expected_for(
+                    hermes_chat_type,
+                    str(data.get("addressing") or ""),
+                    str(data.get("trigger_reason") or ""),
+                ),
                 metadata={**base_meta, "approval_reply": False, "interrupt": True},
             )
             logger.info(
@@ -3612,6 +4469,16 @@ class WeChatGolemAdapter(BasePlatformAdapter):
                 "[wechat_golem] 丢弃沉默出站 chat=%s content=%r",
                 chat_id,
                 (content or "")[:40],
+            )
+            return SendResult(success=True, message_id=None)
+
+        # 引用气泡正文已经上屏，模型又把同一句当最终回复交过来时不再发第二遍。
+        # 回 success（视作已送达）——回失败会让 Hermes 重试整条 send，反而发第二次。
+        if consume_quote_duplicate(chat_id, content):
+            logger.info(
+                "[wechat_golem] 丢弃与引用气泡重复的出站 chat=%s content=%r",
+                chat_id,
+                (content or "")[:60],
             )
             return SendResult(success=True, message_id=None)
 
@@ -4052,47 +4919,39 @@ class WeChatGolemAdapter(BasePlatformAdapter):
             default_is_url=False,
         )
 
-    async def send_exec_approval(
-        self,
-        chat_id: str,
-        command: str,
-        session_key: str,
-        description: str = "dangerous command",
-        metadata: Optional[Dict[str, Any]] = None,
-        allow_permanent: bool = True,
-        smart_denied: bool = False,
-    ) -> SendResult:
-        """中文文本审批卡。
+    # 覆盖基类钩子而非 send_exec_approval：新版 gateway 用
+    # supports_exec_approval_buttons()（看本钩子是否被覆盖）决定走适配器卡片
+    # 还是 /approve 纯文本兜底。微信没有按钮，这里把 gateway 拼好的本地化正文
+    # 渲染成文本卡，回复词按 prompt.actions 动态给出（无斜杠，Golem 会拦截 / 命令）。
+    _EA_CMD_PREVIEW_LIMIT = 1500
 
-        Golem host 会拦截所有 / 开头消息（未知命令），因此微信侧
-        只能用无斜杠捷径：yes / no / always / session。
-        """
-        cmd_preview = command if len(command) <= 1500 else command[:1500] + "..."
+    # choice → 微信侧无斜杠回复词（gateway 裸词拦截与桥门闩都认这些词）
+    _EA_REPLY_WORDS = {
+        "once": "yes",
+        "session": "session",
+        "always": "always",
+        "deny": "no",
+    }
+
+    async def _send_exec_approval_prompt(self, prompt) -> SendResult:
+        """文本审批卡：gateway 的本地化正文 + 无斜杠回复说明。"""
+        text = prompt.text or ""
+        cmd = str(prompt.command or "")
+        if len(cmd) > self._EA_CMD_PREVIEW_LIMIT and cmd in text:
+            text = text.replace(
+                cmd, cmd[: self._EA_CMD_PREVIEW_LIMIT] + "...", 1
+            )
         lines = [
-            "⚠️ 危险命令待审批",
-            "",
-            "命令：",
-            "```",
-            cmd_preview,
-            "```",
-            f"原因：{description}",
-            f"会话：{session_key}",
+            text.rstrip(),
             "",
             "请主人直接回复（不要加 /，Golem 会拦截斜杠命令）：",
-            "  yes — 允许一次",
-            "  session — 本会话允许同类",
         ]
-        if allow_permanent and not smart_denied:
-            lines.append("  always — 永久允许（hardline 仍拦截）")
-        lines.extend(
-            [
-                "  no — 拒绝",
-            ]
+        for label, choice, _style in prompt.actions:
+            word = self._EA_REPLY_WORDS.get(choice, choice)
+            lines.append(f"  {word} — {label}")
+        return await self.send(
+            prompt.chat_id, "\n".join(lines), metadata=prompt.metadata
         )
-        if smart_denied:
-            lines.append("")
-            lines.append("（Smart DENY：主人覆盖仅对本操作一次有效）")
-        return await self.send(chat_id, "\n".join(lines), metadata=metadata)
 
     async def send_typing(
         self, chat_id: str, metadata: Optional[Dict[str, Any]] = None
@@ -4312,6 +5171,11 @@ class WeChatGolemAdapter(BasePlatformAdapter):
 
     async def _post_json(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         body = self._outbound_body(path, body)
+        result = await self._post_json_raw(path, body)
+        _note_outbound_delivery(path, body, result)
+        return result
+
+    async def _post_json_raw(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         if not self._session or self._session.closed:
             if aiohttp is None:
                 return {"error": "aiohttp not installed"}
@@ -6312,7 +7176,7 @@ def _register_wechat_query_tools(ctx) -> None:
             }
         if not quote_content:
             return {"success": False, "error": "quote_content 必填（被引用原文）"}
-        return _run_coro(
+        result = _run_coro(
             ad.send_quote(
                 chat_id,
                 reply=reply,
@@ -6326,6 +7190,16 @@ def _register_wechat_query_tools(ctx) -> None:
                 caption=caption,
             )
         )
+        if isinstance(result, dict) and result.get("success"):
+            remember_quote_reply(chat_id, reply)
+            # 回包必须点明「已上屏」：否则模型常把同一句再当最终回复交一次，
+            # 群里就是「引用气泡 + 重复一句」。
+            result.setdefault(
+                "hint",
+                "引用气泡已上屏。这句回复已经发过了：最终回复不要再重复同一句；"
+                "没有别的话要说就只输出 NO_REPLY（此时静默是允许的，不会再补发兜底文案）。",
+            )
+        return result
 
     _tool_send_quote = _make_query_handler("wechat_send_quote", _run_send_quote)
 
@@ -7239,7 +8113,9 @@ def _register_wechat_query_tools(ctx) -> None:
             "【可选】displayname=展示名；chatusr=会话相关 id（默认可省，桥按私聊/群补全）；"
             "createtime=原消息 unix 秒；caption=气泡外另发文本。"
             "chat_id 必填（照抄本轮消息前缀的 chat_id 行）。不要用手写 XML 或 /send_app 发引用。"
-            "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。",
+            "引的是「要回复的那条」本身（svrid=其 msg_id），不是嵌套 refer。quote_content 填该条对用户可见正文；若该条是引用气泡，填对方回复句而非被引用摘要。"
+            "【发完就完】引用气泡本身就是你这轮的回复：最终回复不要再重复同一句（群里会连发两条一模一样的），"
+            "没有别的内容就只输出 NO_REPLY（工具已出站的轮次允许静默，不会再补发兜底文案）。",
             {
                 "type": "object",
                 "properties": {
@@ -7713,7 +8589,7 @@ def register(ctx) -> None:
                 "收到好表情且合适时可主动问主人要不要收藏，或按主人授权的规则自动收藏。"
                 "trigger_reason=emoji_burst 表示群里表情连发（斗图）：没人找你，可自行决定用收藏表情参战、收藏好表情或保持沉默；参战别刷屏，一两个表情足矣。"
                 "发语音：调 wechat_send_voice（audio_url）；支持 mp3/wav/silk/amr 等格式，桥侧自动转码。"
-                "点歌/分享音乐：先自己找资源（搜索接口、拦取页面、本地库），拿到可播放的 http/https mp3 、封面、歌词后，调 wechat_send_music（title/singer/audio_url 必填，cover_url/lyric/appid/caption 可选）发一张微信音乐卡片；这是对QQ音乐的那种。需要引用气泡回复某条消息：必须调 wechat_send_quote（不要用普通文字假装引用）。svrid=要回复的那条 msg_id（群批次看该条信封；对方 quoted_self 时用对方本条 msg_id，禁止用嵌套 quote_svrid）；fromusr=该条发言人 wxid；quote_content=该条对用户可见正文（若该条本身是引用气泡，用「对方回复」正文，不是被引用摘要）；reply=你的回复；displayname 可选。长列表/多段说明/伪对话/嵌图：调 wechat_send_record 发「聊天记录」卡片（items 可混 {name,content} 与 {type:image,url|media_ref}；生成图用 url，入站图用 media_ref；勿 data_b64），对齐 meme list 与 /pm list，避免刷屏。"
+                "点歌/分享音乐：先自己找资源（搜索接口、拦取页面、本地库），拿到可播放的 http/https mp3 、封面、歌词后，调 wechat_send_music（title/singer/audio_url 必填，cover_url/lyric/appid/caption 可选）发一张微信音乐卡片；这是对QQ音乐的那种。需要引用气泡回复某条消息：必须调 wechat_send_quote（不要用普通文字假装引用）。svrid=要回复的那条 msg_id（群批次看该条信封；对方 quoted_self 时用对方本条 msg_id，禁止用嵌套 quote_svrid）；fromusr=该条发言人 wxid；quote_content=该条对用户可见正文（若该条本身是引用气泡，用「对方回复」正文，不是被引用摘要）；reply=你的回复；displayname 可选。引用气泡发成功就**不要**再把同一句当最终回复发一遍（群里会重复），没别的话就只输出 NO_REPLY。长列表/多段说明/伪对话/嵌图：调 wechat_send_record 发「聊天记录」卡片（items 可混 {name,content} 与 {type:image,url|media_ref}；生成图用 url，入站图用 media_ref；勿 data_b64），对齐 meme list 与 /pm list，避免刷屏。"
                 "日常纯文字闲聊不必为了闲聊而调 tool；但应景表情、查询、点歌等该用就用。"
                 "【群成员偏好档案】官方 USER.md/MEMORY.md 是全局主人/环境笔记，装不下每个群友。"
                 "群友稳定的喜好、性格、说话风格、忌讳 → wechat_member_profile_upsert 按人持久化；"

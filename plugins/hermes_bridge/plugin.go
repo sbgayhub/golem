@@ -17,8 +17,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.20.0",
-		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩（可按群覆盖）；主人多人格控制捷径；管理台人格管理（ops 代理）；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；可迁移配置。",
+		Version:     "0.22.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩（可按群覆盖）；主人捷径（用量/人格/归档/新开会话）；Hermes 原生命令转义（~~/cmd）；管理台人格管理（ops 代理）；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；可迁移配置。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,
@@ -206,9 +206,10 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		return false, nil
 	}
 
-	// 打断捷径：整句「打断」立刻透传（不限主人）；
+	// 打断捷径：仅主人整句「打断」立刻透传；
 	// 同时作废该会话当前去抖 pending（停 timer +未推批标 Flushed），避免 ⚡ 后尸体批次再唤醒 agent。
-	if p.isInterruptReplyText(in.Text) {
+	// 仅主人：清 pending / 中断 agent run 都属于运行控制权，不再对群友开放。
+	if in.SpeakerIsOwner && p.isInterruptReplyText(in.Text) {
 		cancelled, dropped := p.cancelGroupPending(in.SessionKey)
 		if cancelled || dropped > 0 {
 			slog.Info("[hermes_bridge] 打断捷径已取消去抖 pending",
@@ -344,6 +345,89 @@ func (p *BridgePlugin) OnEvent(event *plugin.Event) (bool, error) {
 		slog.Info("[hermes_bridge] 归档捷径已立即推送",
 			"session", in.SessionKey, "chat_type", ev.ChatType, "text", singleLine(in.Text))
 		return false, nil
+	}
+
+	// 用量捷径：仅主人整句「用量/上下文/…」立即透传（群门闩否则吞掉无 @ 短词）。
+	// 适配器直接回上下文报告、不进 agent；不改会话，故不作废去抖 pending。
+	if in.SpeakerIsOwner && p.isUsageText(in.Text) {
+		if p.hub.subscriberCount() == 0 {
+			slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃用量捷径", "session", in.SessionKey)
+			ct := "private"
+			if in.IsChatroom {
+				ct = "group"
+			}
+			p.trace(adminTrace{
+				Kind: "dropped", Reason: "no_subscribers_usage",
+				SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+				ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+				Text: singleLine(in.Text), Subscribers: 0,
+			})
+			return false, nil
+		}
+		ev := bridgeEvent{
+			SessionKey:    in.SessionKey,
+			ChatID:        in.Receiver.GetUsername(),
+			ChatName:      chatName,
+			ChatType:      "private",
+			UserID:        in.SpeakerID,
+			UserName:      in.SpeakerName,
+			IsOwner:       true,
+			Text:          strings.TrimSpace(in.Text),
+			MsgID:         in.MsgID,
+			Addressing:    "self",
+			TriggerReason: "usage_shortcut",
+			Timestamp:     timeNowUnix(),
+		}
+		if in.IsChatroom {
+			ev.ChatType = "group"
+		}
+		p.pushImmediate(ev, "", 0)
+		slog.Info("[hermes_bridge] 用量捷径已立即推送",
+			"session", in.SessionKey, "chat_type", ev.ChatType)
+		return false, nil
+	}
+
+	// Hermes 原生命令：主人整句以 "~~" 开头（如 ~~/usage）→ 剥离后把 "/usage" 透传。
+	// host 只拦 ASCII "/" 开头的消息，故用 "~~" 绕过 host 的命令拦截。
+	// 群聊里不 @ 机器人也生效（旁路群门闩）；@ 了机器人则按普通聊天走（与「@新对话」一致）。
+	if in.SpeakerIsOwner && !in.MentionedBot {
+		if cmdText, ok := gatewayCommandFromText(in.Text); ok {
+			if p.hub.subscriberCount() == 0 {
+				slog.Info("[hermes_bridge] 无 SSE 订阅者，丢弃 Hermes 命令", "session", in.SessionKey)
+				ct := "private"
+				if in.IsChatroom {
+					ct = "group"
+				}
+				p.trace(adminTrace{
+					Kind: "dropped", Reason: "no_subscribers_gateway_command",
+					SessionKey: in.SessionKey, ChatID: in.Receiver.GetUsername(), ChatName: chatName,
+					ChatType: ct, UserName: in.SpeakerName, UserID: in.SpeakerID,
+					Text: singleLine(in.Text), Subscribers: 0,
+				})
+				return false, nil
+			}
+			ev := bridgeEvent{
+				SessionKey:    in.SessionKey,
+				ChatID:        in.Receiver.GetUsername(),
+				ChatName:      chatName,
+				ChatType:      "private",
+				UserID:        in.SpeakerID,
+				UserName:      in.SpeakerName,
+				IsOwner:       true,
+				Text:          cmdText,
+				MsgID:         in.MsgID,
+				Addressing:    "self",
+				TriggerReason: "gateway_command",
+				Timestamp:     timeNowUnix(),
+			}
+			if in.IsChatroom {
+				ev.ChatType = "group"
+			}
+			p.pushImmediate(ev, "", 0)
+			slog.Info("[hermes_bridge] Hermes 命令已立即推送",
+				"session", in.SessionKey, "chat_type", ev.ChatType, "cmd", singleLine(cmdText))
+			return false, nil
+		}
 	}
 
 	// 撤回捷径：仅主人整句「撤回/撤回吧/撤回上一条」，桥内闭环撤掉自己最近发的一条。
@@ -704,12 +788,23 @@ func (p *BridgePlugin) statusText(chatID string) string {
 		fmt.Sprintf("斗图门闩: 窗口%ds内第%d条表情触发 / 冷却 %dmin（0=关）",
 			cfg.EmojiBurstWindowSec, cfg.EmojiBurstCount, cfg.EmojiBurstCooldownMin),
 		"点名: " + triggers,
-		"捷径词: 打断=" + strings.Join(p.interruptTokens(), "/") +
-			" | 新开会话=" + strings.Join(p.sessionResetTokens(), "/") +
-			" | 归档=" + strings.Join(p.archiveTokens(), "/"),
-		fmt.Sprintf("撤回捷径(仅主人): %s | 时限 %ds | 本会话可撤 %d 条",
-			strings.Join(p.revokeTokens(), "/"), int(p.revokeWindow().Seconds()),
-			p.outboxCount(chatID)),
+		"捷径词（整句，不要加 /）：",
+		"  · 打断（仅主人）: " + strings.Join(p.interruptTokens(), "/") +
+			"（" + tokenSourceLabel(cfg.InterruptTokens) + "；立即透传并作废未推批）",
+		"  · 新开会话（仅主人）: " + strings.Join(p.sessionResetTokens(), "/") +
+			"（" + tokenSourceLabel(cfg.SessionResetTokens) + "；清上下文，长期记忆保留）",
+		"  · 归档（仅主人）: " + strings.Join(p.archiveTokens(), "/") +
+			"（" + tokenSourceLabel(cfg.ArchiveTokens) + "；写群友档案，不清会话）",
+		fmt.Sprintf("  · 撤回（仅主人）: %s（%s；桥内闭环，%ds 内，本会话可撤 %d 条）",
+			strings.Join(p.revokeTokens(), "/"), tokenSourceLabel(cfg.RevokeTokens),
+			int(p.revokeWindow().Seconds()), p.outboxCount(chatID)),
+		"  · 用量（仅主人）: " + strings.Join(p.usageTokens(), "/") +
+			"（" + tokenSourceLabel(cfg.UsageTokens) + "；适配器回上下文报告）",
+		"  · Hermes 命令（仅主人，群聊未 @）: " + gatewayCommandEscape + "/cmd（如 " +
+			gatewayCommandEscape + "/usage → /usage，交给 gateway 原生处理）",
+		"  · 人格（仅主人）: 人格列表/当前人格/恢复默认人格/切换人格 <id>（固定）",
+		fmt.Sprintf("审批回复（仅主人，挂起时）: %d 词（%s；详情见 /hermes help）",
+			len(p.approvalTokens()), tokenSourceLabel(cfg.ApprovalTokens)),
 		"媒体工具: " + p.mediaToolSummary(),
 		fmt.Sprintf("本地会话 %d | pending 去抖 %d | 未推送缓冲 %d 条", sessN, pendN, bufN),
 		"主人: " + ownerOK,

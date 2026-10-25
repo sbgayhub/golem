@@ -17,8 +17,8 @@ func (p *BridgePlugin) GetMetadata() *plugin.Metadata {
 	return &plugin.Metadata{
 		Name:        "hermes_bridge",
 		Author:      "ovo",
-		Version:     "0.22.0",
-		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩（可按群覆盖）；主人捷径（用量/人格/归档/新开会话）；Hermes 原生命令转义（~~/cmd）；管理台人格管理（ops 代理）；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；可迁移配置。",
+		Version:     "0.24.0",
+		Description: "Hermes 官方平台适配器桥：SSE/出站/群门闩（可按群覆盖）；主人捷径（用量/人格/归档/新开会话）；Hermes 原生命令转义（~~/cmd）；管理台人格管理（ops 代理）；出站撤回（捷径词 + /revoke）；出站会话归属校验（session_key）；可迁移配置；Golem 插件设置台（/ui/golem.html，与 hermes_bridge 平级的插件表单化设置 + 按键精确写盘 + 群/联系人缓存查看）。",
 		Priority:    1<<31 - 2,
 		Next:        false,
 		AlwaysRun:   false,

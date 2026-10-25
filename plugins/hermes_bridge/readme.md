@@ -18,6 +18,7 @@ Golem 侧微信桥，对接 Hermes 官方平台适配器 `wechat_golem`（源码
                    GET  /admin/meta       无鉴权发现入口（供以后 Golem 总控跳转）
                    GET  /admin/overview   总览 JSON（Bearer admin_token）
                    …/targets …/config …/contacts/search …/inbound …/sessions …/diagnose …/hermes/*
+                   …/data/recipients …/data/chatrooms(+/<id>) …/data/member-groups …/plugin-config/*
                     ↕ 同机 loopback 或跨机 LAN（仅业务口）
 Hermes gateway + $HERMES_HOME/plugins/platforms/wechat_golem
 ```
@@ -105,14 +106,6 @@ emoji_burst_cooldown_minutes = 5
 # # group_push_all = true       # 仅本群每条都推
 # # bubble_rate = 0             # 仅本群关冒泡
 
-# 白名单里的群可单独覆盖以上字段（省略 = 沿用全局，不改默认行为）：
-# [[hermes_bridge.config.targets]]
-# id = "xxx@chatroom"
-# name = "老友群"
-# trigger_names = []            # 本群不吃点名词；仍可用 @ / 引用 / 冒泡 / 斗图
-# # group_push_all = true       # 仅本群每条都推
-# # bubble_rate = 0             # 仅本群关冒泡
-
 # 诊断（一般不开）
 # record_xml_dump_dir = ""      # 出站记录卡片 XML 落盘目录（绝对路径）；空=不落盘
 ```
@@ -131,7 +124,21 @@ emoji_burst_cooldown_minutes = 5
   - **入站旁路**（`/admin/inbound/recent` + SSE stream：pushed/dropped/context_only/scheduled/cancelled）
   - **本地 session 态**（`/admin/sessions`：去抖 pending、未推缓冲、冒泡/斗图冷却；非 Hermes gateway session）
   - **诊断试发**（`POST /admin/diagnose`：image/video/voice/emoji；JSON 给 url/md5，或 `multipart/form-data` 上传本地文件，等价 `/hermes image|…`）
+  - **Golem 插件设置台**（`/ui/golem.html`，v0.24+）：**独立页面**（新标签打开、独立版式，挂在同一个管理台上、不新增端口），定位是「Golem 全部插件的统一设置界面」。
+    版式是**左侧插件列表 + 右侧内容**：左侧顶部是搜索框 + **两组独立筛选**（状态：全部 / 启用 / 停用 / 缺 exe；模式：全部 / 黑名单 / 白名单），两组可叠加、取交集，按钮带计数（计数会跟着另一组的结果变）。下面每行插件占两行——第一行「圆点 + 名字 + 版本」，第二行小字状态「黑名单/白名单 · 已停用 · 缺 exe · 只读 · 无 config」。两行是因为单行塞不下：232px 侧栏里加两个标签就会把 `reread` 这类长名字挤到只剩一个字母。列表与右侧内容**各自独立滚动**——换插件只重置右侧，左侧滚动位置不动（重绘时先存后还 `scrollTop`）；窄屏（≤900px）列表变成顶部一条可横滑的单行条目，第二行状态收进 `title`。
+    状态筛选是「启用 / 停用 / 缺 exe」三个**正交**条件：启用就是配置里 `enable = true`，跟有没有 exe 无关（缺 exe 的插件照样可以是启用状态，只是加载不起来），所以「启用 15 + 停用 2 = 17」，而「缺 exe 4」与它们重叠。计数和筛选用同一个判断，按钮数字与点开的条数始终一致。状态点的三态：绿点（启用）、空心灰点 + `已停用`（exe 在、但配置里 `enable = false`）、黄点 + `缺 exe`（`plugins/` 下没有 `golem_plugin_<名>.exe`）。颜色只是辅助，状态一律写字。**白名单 + `limits` 为空会额外标 `仅主人`**：按 host 的 `plugin/permission.go`，白名单模式下不在 limits 里就拒绝，所以这种配置除机器人主人外谁都调不了。
+    状态来自 `/admin/plugin-config` 的 `enable` / `enable_known` / `mode` / `mode_known` / `limits` / `has_exe`：都是**配置文件里写的值**（不是运行态，host 的 `/pm enable` 之类会写回这份文件），段里没写对应键时 `*_known=false`（host 会沿用插件自己 `main()` 里的默认值，本页不猜、也不标停用）。改「启用」或「权限模式」保存后左栏整表重绘（筛选结果与计数都依赖这些字段，只原地改 chip 会让刚启用的人留在「停用」筛选里）。
+    右侧是该插件的**表单**：公共段 `enable` / `mode` / `limits` 与各插件 `[xxx.config]` 的每个键都有中文标签、含义说明、取值范围与合适的控件（开关 / 下拉 / 数字 / 文本 / 标签列表 / 接收者选择器）；`ai.providers` / `ai.prompts` / `ai.session_configs`、`universal.rules`、`cron.jobs` 这类表按条目折叠展示。`limits` 的接收者选择器与白名单页的搜索都用 `data/chatroom.json` + `data/contact.json` 的缓存快照（群全集取两者并集、群名/群主只来自 contact.json），页面标出快照时间。
+    **写盘**（`/admin/plugin-config/keys`）：键级 splice——只替换用户改动过的键的**值字节**，注释、键顺序、表单未显示的键全部逐字节保留；N 个键 = 一次原子写 = 一份备份 = 一个 ETag。校验链：文件 sha256 ETag 乐观锁（409 让前端重载）→ 逐键 `expect_raw` 比对（409 `key_changed`）→ 值类型必须与旧值同类（422 `type_changed`，避免写成 "50" 让 host 整次重载失败）→ 写入前再比一次 ETag → temp+rename → 写后复核，并对除改动键外的全部叶子键做前后深比较（抓「改到邻居」）。
+    **不支持**新增/删除键、增删或重排 `[[元素]]`；这些用每个插件面板里的「原文」页签兜底（与旧版一致的按段整段读写：`/admin/plugin-config/section`）。
+    路径依次探测「host 启动目录的 `plugins/config.toml` → 插件 exe 同目录 → exe 上级目录的 `plugins/`」；全找不到时页面列出已尝试路径并置为只读（本页不创建文件）；写入前备份到 `plugins/config_backups/`（保留 20 份）。
+    **生效**：host 约 300ms 内热重载（仅重新注入 gRPC 配置）；端口/目录/连接等**启动期**字段需 `/pm reload <name>`（页面给可复制的命令）。
+    `[hermes_bridge]` 自身段不出现（管理台有专门的门闩等页）；页面只能看到 exe 在不在，**不知道插件是否在运行**。
+    **已弃用的插件（目前是旧版 `hermes`）整段不展示**——它仍在 `config.toml` 里、host 也会读，但本页不列出来，避免引导别人去启用；清单见 `ui/golem-schema.js` 的 `DEPRECATED_PLUGINS`。
+    注意：`/pm set|enable|disable` 或插件自己保存配置时，host 仍会整文件重写（丢注释、键按字母序），这是 host 既有行为。
   - **Hermes 运维**（需 `hermes_ops_url`：gateway/工具/sessions/日志；**表情库**、**群友档案**轻写、**人格** Markdown 与单条解绑；源码 `hermes_ops/`，运维见其 README）
+    **档案页版式**（v0.24+）：左窄右宽（约 1:3），两栏各自滚动、整页不跟滚。左栏只回答「这是谁、在哪些群」——显示名 + wxid + 所在群标签，可编辑字段一律只在右栏出现，避免两边重复。右栏自上而下：姓名/更新时间的头部 → 「所在群」标签（群名 + 人数，来自 `/admin/data/member-groups` 反查 `data/chatroom.json` 成员表）→ 表单（`personality` / `preferences` / `notes` 用 textarea，高度随内容自动撑开、超过约 46vh 才内部滚动）→ 折叠的「原始 JSON」。保存按钮贴在右栏底部。
+    **点群标签看群成员**：右栏「所在群」的标签是按钮，左栏条目上的群标签也可点（点了会顺带选中这个人）。点开右侧抽屉列出该群全部成员（`/admin/data/chatrooms/<id>`），**当前档案所在行高亮并自动滚到视口中间**，群主/好友有徽标；Esc / 点遮罩 / 关闭按钮退出。
 - 发现钩子：`GET /admin/meta`（无鉴权，无敏感字段）→ `{name,version,ui,admin_listen,auth}`，以后 Golem 总控可外链跳转
 - **UI 开发**：页面由 `embed.go` 编译期嵌入（`//go:embed ui/*`）——改 `ui/` 下源码后**必须重编译**才生效：
   `cd plugins && task build:hermes_bridge` 再重载 host（浏览器里是 exe 内嵌版，不是磁盘源码）。验证用真实 `admin_token`

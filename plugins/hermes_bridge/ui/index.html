@@ -55,6 +55,7 @@
         <div class="nav-label">工具</div>
         <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico" aria-hidden="true">⚡</span>诊断</button>
       </nav>
+      <a class="sidebar-ext" href="golem.html" target="_blank" rel="noopener" title="Golem 全部插件的设置界面 · 与 hermes_bridge 无关 · 新标签打开"><span class="sidebar-ext-ico" aria-hidden="true">❏</span><span class="sidebar-ext-body"><span class="sidebar-ext-t">Golem 插件设置台</span><span class="sidebar-ext-s">全部插件的统一设置</span></span><span class="sidebar-ext-arrow" aria-hidden="true">↗</span></a>
       <div class="sidebar-foot">
         <button type="button" id="btnCommand" class="ghost btn-block" title="命令面板 · Ctrl/⌘ K">命令面板</button>
         <button type="button" id="btnLogout" class="ghost btn-block">退出登录</button>
@@ -85,13 +86,14 @@
         <section id="panel-targets" class="panel" data-title="白名单" data-sub="会话路由">
           <div class="card-block">
             <div class="toolbar">
-              <input id="target-id" placeholder="wxid 或 xxx@chatroom" spellcheck="false" />
+              <input id="target-id" list="target-id-list" placeholder="wxid 或 xxx@chatroom（可下拉选）" spellcheck="false" />
+              <datalist id="target-id-list"></datalist>
               <input id="target-name" placeholder="显示名（可空）" />
               <button type="button" id="btnAddTarget" class="primary">加入</button>
             </div>
             <div class="toolbar">
-              <input id="search-q" placeholder="搜索联系人 / 群" />
-              <button type="button" id="btnSearch" class="ghost">搜索</button>
+              <input id="search-q" placeholder="筛选：群名 / 群 ID / 备注（留空 = 列出全部）" />
+              <button type="button" id="btnSearch" class="ghost">筛选</button>
             </div>
             <div id="search-results" class="list"></div>
           </div>
@@ -213,7 +215,7 @@
           </div>
         </section>
 
-        <section id="panel-stickers" class="panel panel-fill" data-title="表情" data-sub="先选情绪 · 再加载 · 可试发">
+        <section id="panel-stickers" class="panel panel-fill fill-viewport" data-title="表情" data-sub="先选情绪 · 再加载 · 可试发">
           <div class="sticker-layout">
             <aside class="mood-pane">
               <div class="mood-pane-head">
@@ -251,35 +253,54 @@
           </div>
         </section>
 
-        <section id="panel-profiles" class="panel panel-fill" data-title="档案" data-sub="群友偏好 · 短词">
-          <div class="split-layout">
+        <section id="panel-profiles" class="panel panel-fill fill-viewport" data-title="档案" data-sub="群友偏好 · 短词">
+          <div class="split-layout profile-layout">
             <div class="split-list">
               <div class="toolbar">
-                <input id="profile-q" placeholder="搜索…" />
+                <input id="profile-q" placeholder="搜索姓名 / wxid / 偏好…" />
                 <button type="button" id="btnProfiles" class="primary">刷新</button>
               </div>
-              <div id="profile-list" class="list"></div>
+              <div id="profile-list" class="list profile-list"></div>
             </div>
             <div class="split-detail">
-              <div class="section-head"><h3>编辑</h3></div>
-              <form id="profile-form" class="form">
-                <label><span class="field-label">wxid <span class="field-hint">微信唯一标识</span></span><input id="pf-wxid" required spellcheck="false" /></label>
-                <label><span class="field-label">display_name <span class="field-hint">群内显示名</span></span><input id="pf-name" /></label>
-                <label><span class="field-label">personality <span class="field-hint">性格特征</span></span><input id="pf-personality" /></label>
-                <label><span class="field-label">preferences <span class="field-hint">偏好 · 逗号分隔</span></span><input id="pf-prefs" placeholder="如：技术, 游戏, 美食" /></label>
-                <label><span class="field-label">notes <span class="field-hint">备注</span></span><input id="pf-notes" /></label>
-                <label><span class="field-label">aliases <span class="field-hint">别名 · 逗号分隔</span></span><input id="pf-aliases" placeholder="其他称呼" /></label>
-                <div class="form-actions">
-                  <button type="submit" class="primary">保存</button>
-                  <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+              <div id="profile-empty" class="empty">从左侧选一个群友，右边显示完整档案</div>
+              <div id="profile-pane" class="hidden">
+                <div class="pf-head">
+                  <div class="pf-ident">
+                    <h3 id="pf-title">—</h3>
+                    <div id="pf-sub" class="muted">—</div>
+                  </div>
+                  <div id="pf-badges" class="pf-badges"></div>
                 </div>
-              </form>
-              <pre id="profile-result" class="code-block" style="margin-top:12px">—</pre>
+
+                <div class="pf-groups-wrap">
+                  <div class="pf-label">所在群 <span class="field-hint">来自 chatroom.json 成员表</span></div>
+                  <div id="pf-groups" class="pf-groups"></div>
+                </div>
+
+                <form id="profile-form" class="form pf-form">
+                  <label class="pf-full"><span class="field-label">wxid <span class="field-hint">微信唯一标识 · 只读</span></span><input id="pf-wxid" required readonly spellcheck="false" /></label>
+                  <label><span class="field-label">display_name <span class="field-hint">群内显示名</span></span><input id="pf-name" /></label>
+                  <label><span class="field-label">aliases <span class="field-hint">别名 · 逗号分隔</span></span><input id="pf-aliases" placeholder="其他称呼" /></label>
+                  <label class="pf-full"><span class="field-label">personality <span class="field-hint">性格特征 · 可多行</span></span><textarea id="pf-personality" rows="3" placeholder="如：话少、爱较真，习惯用短句"></textarea></label>
+                  <label class="pf-full"><span class="field-label">preferences <span class="field-hint">偏好 · 逗号或换行分隔</span></span><textarea id="pf-prefs" rows="2" placeholder="如：技术, 游戏, 美食"></textarea></label>
+                  <label class="pf-full"><span class="field-label">notes <span class="field-hint">备注 · 可多行</span></span><textarea id="pf-notes" rows="3" placeholder="忌讳、约定、口头禅等"></textarea></label>
+                  <div class="form-actions">
+                    <button type="submit" class="primary">保存</button>
+                    <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+                  </div>
+                </form>
+
+                <details class="pf-raw">
+                  <summary>原始 JSON</summary>
+                  <pre id="profile-result" class="code-block">—</pre>
+                </details>
+              </div>
             </div>
           </div>
         </section>
 
-        <section id="panel-personas" class="panel panel-fill" data-title="人格" data-sub="Markdown 内容 · 会话绑定">
+        <section id="panel-personas" class="panel panel-fill fill-viewport" data-title="人格" data-sub="Markdown 内容 · 会话绑定">
           <div id="persona-capability" class="alerts"></div>
           <div class="persona-layout">
             <div class="persona-library">
@@ -374,6 +395,17 @@
         <button type="button" id="btnDrawerClose" class="close-x" title="关闭详情" aria-label="关闭">关闭</button>
       </div>
       <div id="sticker-detail" class="drawer-body"></div>
+    </div>
+  </aside>
+
+  <!-- 档案页点「所在群」标签打开：群里都有谁，当前这个人高亮 -->
+  <aside id="group-drawer" class="drawer hidden" hidden>
+    <div class="drawer-card">
+      <div class="drawer-head">
+        <h2 id="gd-title">群成员</h2>
+        <button type="button" id="btnGroupClose" class="close-x" title="关闭" aria-label="关闭">关闭</button>
+      </div>
+      <div id="group-detail" class="drawer-body"></div>
     </div>
   </aside>
 

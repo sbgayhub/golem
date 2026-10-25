@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f5f9f6" />
+  <meta name="color-scheme" content="light" />
+  <title>Golem 插件设置台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b8f60'/%3E%3Cpath d='M9 23V9h5l5 7V9h4v14h-5l-5-7v7z' fill='%23e8f6ec'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="golem.css" />
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <div class="login-card">
+      <div class="login-brand">
+        <svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M14 34V14h7l8 11V14h5v20h-7l-8-11v11z" fill="#fff"/></svg>
+        <div>
+          <h1>Golem 插件设置台</h1>
+          <p id="login-listen">Golem 全部插件的统一设置界面</p>
+        </div>
+      </div>
+      <form id="login-form" class="login-form" autocomplete="off">
+        <label>
+          admin_token
+          <input id="login-token" type="password" placeholder="粘贴管理台 token" required spellcheck="false" autofocus />
+        </label>
+        <p class="login-hint">与 hermes_bridge 管理台同一个 admin_token，保存在本机 localStorage。</p>
+        <div id="login-error" class="login-error hidden"></div>
+        <button type="submit" class="btn primary block" id="btn-login">进入设置台</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="app hidden">
+    <header class="top">
+      <div class="brand">
+        <svg class="logo sm" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M14 34V14h7l8 11V14h5v20h-7l-8-11v11z" fill="#fff"/></svg>
+        <div>
+          <div class="t1">Golem 插件设置台</div>
+          <div class="t2">Golem 全部插件的统一设置 · 由 hermes_bridge 提供入口，停用它本页不可用</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span id="cfg-path" class="cfg-path" title="配置文件路径">—</span>
+        <button type="button" class="btn ghost" id="btn-groups">群与联系人</button>
+        <a class="btn ghost" href="/ui/" target="_blank" rel="noopener">hermes_bridge 管理台 ↗</a>
+        <button type="button" class="btn ghost" id="btn-logout" title="清除本机保存的 token">退出</button>
+      </div>
+    </header>
+
+    <div id="banner" class="banner hidden">
+      <span id="banner-text"></span>
+      <button type="button" class="btn sm" id="banner-btn" hidden>重新载入</button>
+      <button type="button" class="banner-x" id="banner-close" aria-label="关闭">×</button>
+    </div>
+
+    <div class="body">
+      <aside class="pside">
+        <div class="pside-head">
+          <input id="plugin-q" class="pside-q" type="search" placeholder="搜索插件…" aria-label="搜索插件" spellcheck="false" />
+          <div id="chips-filter" class="chips-filter">
+            <div class="fg" role="group" aria-label="按启用状态筛选">
+              <button type="button" class="fchip active" data-group="state" data-filter="all">全部</button>
+              <button type="button" class="fchip" data-group="state" data-filter="on">启用</button>
+              <button type="button" class="fchip" data-group="state" data-filter="off">停用</button>
+              <button type="button" class="fchip" data-group="state" data-filter="miss">缺 exe</button>
+            </div>
+            <div class="fg" role="group" aria-label="按权限模式筛选">
+              <button type="button" class="fchip active" data-group="mode" data-filter="all">全部</button>
+              <button type="button" class="fchip" data-group="mode" data-filter="black">黑名单</button>
+              <button type="button" class="fchip" data-group="mode" data-filter="white">白名单</button>
+            </div>
+          </div>
+        </div>
+        <nav id="chips" class="chips" aria-label="插件列表"></nav>
+      </aside>
+
+      <main id="main">
+        <section id="form-view" class="view">
+          <div id="form-head" class="phead"></div>
+          <div id="form-body" class="pbody"></div>
+        </section>
+
+        <section id="raw-view" class="view hidden">
+          <div id="raw-head" class="phead"></div>
+          <div class="raw-wrap">
+            <textarea id="raw-text" spellcheck="false" wrap="off"></textarea>
+            <p class="raw-hint">整段原文：增删键 / 数组元素只能用这里。保存同样走「只替换本段字节」，不影响其它段。</p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+
+    <footer class="savebar" id="savebar">
+      <div class="sb-left">
+        <span id="sb-plugin" class="sb-plugin">—</span>
+        <span id="sb-dirty" class="sb-dirty">无改动</span>
+        <span id="sb-note" class="sb-note"></span>
+      </div>
+      <div class="sb-right">
+        <button type="button" class="btn ghost" id="btn-discard">放弃改动</button>
+        <button type="button" class="btn primary" id="btn-save" disabled>保存</button>
+      </div>
+    </footer>
+
+    <div id="groups" class="gview hidden" role="dialog" aria-modal="true" aria-labelledby="groups-title">
+      <div class="gview-head">
+        <div>
+          <h2 id="groups-title">群与联系人</h2>
+          <p id="groups-meta" class="gview-meta">来自 host 的缓存快照</p>
+        </div>
+        <div class="gview-actions">
+          <input id="gsearch" class="gsearch" type="search" placeholder="搜索群名 / 群 ID / 成员" />
+          <button type="button" class="btn ghost" id="groups-close">关闭</button>
+        </div>
+      </div>
+      <div class="gview-body">
+        <aside id="glist" class="glist"></aside>
+        <div id="gdetail" class="gdetail"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="golem-schema.js"></script>
+  <script src="golem.js"></script>
+</body>
+</html>

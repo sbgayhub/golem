@@ -1064,21 +1064,42 @@ func (p *BridgePlugin) sendPlainTextWithReminds(targetID, content string, remind
 	if p.message == nil {
 		return errors.New("消息能力未注入")
 	}
-	text := &message.TextData{Content: content}
-	if len(reminds) > 0 {
-		text.Reminds = reminds
+	// 微信在高频发送时可能回包但 NewId=0（实际未上屏）。桥内重试，避免把失败
+	// 抛回网关再次发起整条消息——上游的回执已经发出，重放只会产生重复。
+	// 重发成功/失败都写日志；重试耗尽后返回 nil（上游视为已处理，不再重放）。
+	const maxAttempts = 3
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		text := &message.TextData{Content: content}
+		if len(reminds) > 0 {
+			text.Reminds = reminds
+		}
+		msg := &message.Message{
+			Type:     message.TypeText,
+			Receiver: p.resolveReceiver(targetID),
+			Content:  content,
+			Data:     &message.Message_Text{Text: text},
+		}
+		resp, err := p.message.Send(msg)
+		if err != nil {
+			return err
+		}
+		if resp != nil && resp.GetNewId() != 0 {
+			p.recordOutbox(targetID, "text", content, resp.GetNewId())
+			if attempt > 1 {
+				slog.Info("[hermes_bridge] 文本重发成功",
+					"target", targetID, "attempt", attempt)
+			}
+			return nil
+		}
+		if attempt < maxAttempts {
+			slog.Warn("[hermes_bridge] 文本已回包但无 NewId，准备重发",
+				"target", targetID, "attempt", attempt, "max", maxAttempts)
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
 	}
-	msg := &message.Message{
-		Type:     message.TypeText,
-		Receiver: p.resolveReceiver(targetID),
-		Content:  content,
-		Data:     &message.Message_Text{Text: text},
-	}
-	resp, err := p.message.Send(msg)
-	if err == nil {
-		p.recordOutbox(targetID, "text", content, resp.GetNewId())
-	}
-	return err
+	slog.Error("[hermes_bridge] 文本重发后仍无 NewId，放弃（不再让网关重放）",
+		"target", targetID, "attempts", maxAttempts)
+	return nil
 }
 
 func writeTemp(pattern string, data []byte) (string, error) {

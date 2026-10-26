@@ -707,6 +707,48 @@ main {
 .toast.err { background: #7d2f27; }
 .toast.warn { background: #7a5a17; }
 
+/* ---------- 确认弹窗（替代原生 confirm，与管理台同一套语义） ---------- */
+.gconfirm {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(18, 34, 24, 0.34);
+  backdrop-filter: blur(6px);
+  animation: gfadeIn .18s ease;
+}
+@keyframes gfadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.gconfirm-card {
+  width: min(440px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-lg);
+  padding: 20px 22px;
+}
+.gconfirm-card h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  letter-spacing: 0.01em;
+}
+.gconfirm-card p {
+  margin: 0 0 18px;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-line; /* 消息里的 \n 保留换行 */
+}
+.gconfirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* ---------- 窄屏 ---------- */
 @media (max-width: 900px) {
   .top { flex-wrap: wrap; gap: 10px; padding: 12px 16px; }

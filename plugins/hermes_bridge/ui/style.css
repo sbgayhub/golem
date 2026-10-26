@@ -535,6 +535,17 @@ main {
 .toolbar #sticker-page-size { flex: 0 0 auto; min-width: auto; }
 .card-block { padding: 20px; margin-bottom: 20px; }
 
+/* 白名单页：左「当前白名单」右「可添加」对照结构。
+   左栏是已生效清单（主对象），沿用绿条 + 浅绿底的「台账」强调；
+   右栏放搜索 + 手动加入 + 候选列表。窄屏叠单列时白名单在上（DOM 顺序）。 */
+.targets-layout { grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1.05fr); }
+.targets-current {
+  border-top: 3px solid var(--accent);
+  background: linear-gradient(180deg, rgba(59, 143, 96, 0.06), rgba(255, 255, 255, 0.92) 42%);
+}
+/* 分栏容器里的 section-head 不需要全局那个 32px 顶距 */
+.section-head.in-pane { margin: 2px 0 12px; }
+
 .form {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -686,6 +697,18 @@ input[type="file"]::file-selector-button:hover {
 .tag.ok { color: var(--ok); background: var(--ok-soft); border-color: rgba(45, 138, 82, 0.2); }
 
 .mono { font-family: var(--mono); }
+/* 快捷键键帽（命令面板里展示各页面的单键跳转） */
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 3px 7px;
+}
 .empty {
   text-align: center;
   padding: 56px 24px;
@@ -765,6 +788,19 @@ input[type="file"]::file-selector-button:hover {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
+  cursor: pointer;
+  padding: 3px 8px;
+  margin: -3px -8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: background .15s ease, border-color .15s ease;
+}
+.legend-always .legend-grid > div:hover { background: rgba(255, 255, 255, 0.7); border-color: var(--line); }
+/* 图例筛选选中态：点中的类型高亮，trace 只显示被点中的类型 */
+.legend-always .legend-grid > div.on {
+  background: #fff;
+  border-color: var(--line-glow);
+  box-shadow: var(--shadow-sm);
 }
 .legend-always .legend-grid code {
   font-size: 11px;
@@ -1073,7 +1109,7 @@ input[type="file"]::file-selector-button:hover {
   border-color: rgba(59, 143, 96, 0.16);
 }
 .cmdk-item strong { font-weight: 700; }
-.confirm-card p { margin: 0 0 20px; color: var(--dim); line-height: 1.7; font-size: 14px; }
+.confirm-card p { margin: 0 0 20px; color: var(--dim); line-height: 1.7; font-size: 14px; white-space: pre-line; }
 
 /* Sticker layout */
 .sticker-layout {
@@ -1614,23 +1650,49 @@ input[type="file"]::file-selector-button:hover {
   .form-compact { grid-template-columns: 1fr 1fr; }
 }
 
+/* 汉堡按钮：桌面隐藏，窄屏出现在页首标题上方 */
+.nav-toggle {
+  display: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  margin: 0 0 10px;
+  font-size: 17px;
+  line-height: 1;
+  align-items: center;
+  justify-content: center;
+}
+
 @media (max-width: 720px) {
   .app-shell { grid-template-columns: 1fr; }
+  /* 侧栏变成左侧滑出抽屉：平时藏起，汉堡按钮唤出，遮罩点击关闭。
+     内部沿用桌面的纵向导航布局，不再压缩成横排占半屏。 */
   .sidebar {
-    position: relative;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 12px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(78vw, 300px);
+    height: 100vh;
+    z-index: 45;
+    transform: translateX(-105%);
+    transition: transform .25s cubic-bezier(.4,0,.2,1);
+    box-shadow: var(--shadow-float);
+    padding: 16px 14px;
+    overflow-y: auto;
   }
-  .sidebar-brand, .sidebar-foot { width: 100%; }
-  .sidebar-foot { flex-direction: row; gap: 8px; }
-  .nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-  .nav button, .nav a { width: auto; padding: 8px 12px; font-size: 12px; }
-  .nav-label { display: none; }
-  /* 横排侧栏里这块占满一行，副标题仍能读清 */
-  .sidebar-ext { width: 100%; margin-top: 10px; }
-  .sidebar-ext-t { font-size: 12px; }
+  .app-shell.nav-open .sidebar { transform: none; }
+  .nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgba(26, 46, 34, 0.32);
+    backdrop-filter: blur(4px);
+  }
+  .nav-toggle { display: inline-flex; }
+  .topbar { padding: 14px 16px; }
+  .topbar h1 { font-size: 22px; }
+  main { padding: 12px 16px 48px; }
   .sticker-layout, .split-layout, .persona-layout { grid-template-columns: 1fr; }
   .mood-pane { position: relative; top: 0; max-height: 200px; }
   .panel.panel-fill.active { height: auto; }
@@ -1638,9 +1700,6 @@ input[type="file"]::file-selector-button:hover {
   .panel.panel-fill.fill-viewport.active { flex: 0 0 auto; }
   .panel.panel-fill.fill-viewport.active > * { overflow: visible; }
   .form, .form-compact { grid-template-columns: 1fr; }
-  main { padding: 12px 16px 48px; }
-  .topbar { padding: 14px 16px; }
-  .topbar h1 { font-size: 22px; }
   .cards { grid-template-columns: 1fr 1fr; }
 }
 

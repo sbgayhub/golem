@@ -16,7 +16,7 @@
         <svg class="logo" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M14 34V14h7l8 11V14h5v20h-7l-8-11v11z" fill="#fff"/></svg>
         <div>
           <h1>Golem 插件设置台</h1>
-          <p id="login-listen">Golem 全部插件的统一设置界面</p>
+          <p id="login-listen">仓库当前插件的统一设置界面</p>
         </div>
       </div>
       <form id="login-form" class="login-form" autocomplete="off">
@@ -37,7 +37,7 @@
         <svg class="logo sm" viewBox="0 0 48 48" aria-hidden="true"><rect width="48" height="48" rx="14" fill="#3b8f60"/><path d="M14 34V14h7l8 11V14h5v20h-7l-8-11v11z" fill="#fff"/></svg>
         <div>
           <div class="t1">Golem 插件设置台</div>
-          <div class="t2">Golem 全部插件的统一设置 · 由 hermes_bridge 提供入口，停用它本页不可用</div>
+          <div class="t2">仓库当前插件的统一设置 · 由 hermes_bridge 提供入口，停用它本页不可用 · 过渡方案：Golem 总控未立项，先以此页代替</div>
         </div>
       </div>
       <div class="top-actions">
@@ -67,8 +67,8 @@
             </div>
             <div class="fg" role="group" aria-label="按权限模式筛选">
               <button type="button" class="fchip active" data-group="mode" data-filter="all">全部</button>
-              <button type="button" class="fchip" data-group="mode" data-filter="black">黑名单</button>
-              <button type="button" class="fchip" data-group="mode" data-filter="white">白名单</button>
+              <button type="button" class="fchip" data-group="mode" data-filter="black">黑名单模式</button>
+              <button type="button" class="fchip" data-group="mode" data-filter="white">白名单模式</button>
             </div>
           </div>
         </div>
@@ -122,6 +122,18 @@
     </div>
 
     <div id="toast" class="toast hidden"></div>
+
+    <!-- 样式化确认弹窗：与管理台 askConfirm 同一套语义，替代原生 confirm() -->
+    <div id="confirm" class="gconfirm hidden" hidden>
+      <div class="gconfirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+        <h2 id="confirm-title">确认</h2>
+        <p id="confirm-msg"></p>
+        <div class="gconfirm-actions">
+          <button type="button" class="btn ghost" id="confirm-cancel">取消</button>
+          <button type="button" class="btn primary" id="confirm-ok">确认</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="golem-schema.js"></script>

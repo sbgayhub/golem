@@ -55,7 +55,7 @@
         <div class="nav-label">工具</div>
         <button type="button" data-tab="diagnose" title="媒体试发"><span class="nav-ico" aria-hidden="true">⚡</span>诊断</button>
       </nav>
-      <a class="sidebar-ext" href="golem.html" target="_blank" rel="noopener" title="Golem 全部插件的设置界面 · 与 hermes_bridge 无关 · 新标签打开"><span class="sidebar-ext-ico" aria-hidden="true">❏</span><span class="sidebar-ext-body"><span class="sidebar-ext-t">Golem 插件设置台</span><span class="sidebar-ext-s">全部插件的统一设置</span></span><span class="sidebar-ext-arrow" aria-hidden="true">↗</span></a>
+      <a class="sidebar-ext" href="golem.html" target="_blank" rel="noopener" title="仓库当前插件的设置界面（过渡方案） · 新标签打开"><span class="sidebar-ext-ico" aria-hidden="true">❏</span><span class="sidebar-ext-body"><span class="sidebar-ext-t">Golem 插件设置台</span><span class="sidebar-ext-s">仓库插件的统一设置</span></span><span class="sidebar-ext-arrow" aria-hidden="true">↗</span></a>
       <div class="sidebar-foot">
         <button type="button" id="btnCommand" class="ghost btn-block" title="命令面板 · Ctrl/⌘ K">命令面板</button>
         <button type="button" id="btnLogout" class="ghost btn-block">退出登录</button>
@@ -65,7 +65,8 @@
     <div class="workspace">
       <header class="topbar">
         <div>
-          <h1 id="page-title">总览</h1>
+          <button type="button" id="btnNav" class="nav-toggle" title="打开导航" aria-label="打开导航">☰</button>
+          <h1 id="page-title" class="topbar-title">总览</h1>
           <p id="page-sub" class="page-sub">桥运行态</p>
         </div>
         <div class="topbar-actions" id="topbar-actions"></div>
@@ -83,25 +84,32 @@
           <p class="gate-line" id="gate-summary"></p>
         </section>
 
-        <section id="panel-targets" class="panel" data-title="白名单" data-sub="会话路由">
-          <div class="card-block">
-            <div class="toolbar">
-              <input id="target-id" list="target-id-list" placeholder="wxid 或 xxx@chatroom（可下拉选）" spellcheck="false" />
-              <datalist id="target-id-list"></datalist>
-              <input id="target-name" placeholder="显示名（可空）" />
-              <button type="button" id="btnAddTarget" class="primary">加入</button>
+        <section id="panel-targets" class="panel panel-fill fill-viewport" data-title="白名单" data-sub="会话路由">
+          <!-- 左右对照：左=已生效的白名单（主对象，进来先看它），右=可添加（搜索+手动加入）。
+               候选列表默认滤掉已在白名单的条目，不再用灰色「已在白名单」占位 -->
+          <div class="split-layout targets-layout">
+            <div class="split-list targets-current">
+              <div class="section-head in-pane">
+                <h3>当前列表</h3>
+                <span id="target-count" class="muted"></span>
+              </div>
+              <div id="target-list" class="list"></div>
             </div>
-            <div class="toolbar">
-              <input id="search-q" placeholder="筛选：群名 / 群 ID / 备注（留空 = 列出全部）" />
-              <button type="button" id="btnSearch" class="ghost">筛选</button>
+            <div class="split-detail">
+              <div class="toolbar">
+                <input id="target-id" list="target-id-list" placeholder="wxid 或 xxx@chatroom（可下拉选）" spellcheck="false" />
+                <datalist id="target-id-list"></datalist>
+                <input id="target-name" placeholder="显示名（可空）" />
+                <button type="button" id="btnAddTarget" class="primary">加入</button>
+              </div>
+              <div class="toolbar">
+                <input id="search-q" placeholder="搜索群名 / 群 ID / 备注（留空 = 列出可添加的）" />
+                <button type="button" id="btnSearch" class="ghost">搜索</button>
+              </div>
+              <div class="section-head in-pane"><h3>可添加</h3><span class="muted">来自群/联系人缓存，点「加入」进白名单</span></div>
+              <div id="search-results" class="list"></div>
             </div>
-            <div id="search-results" class="list"></div>
           </div>
-          <div class="section-head">
-            <h3>当前列表</h3>
-            <span id="target-count" class="muted"></span>
-          </div>
-          <div id="target-list" class="list"></div>
         </section>
 
         <section id="panel-gate" class="panel" data-title="门闩" data-sub="触发策略 · 热更新">
@@ -121,7 +129,9 @@
             <label><span class="field-label">max_text_len <span class="field-hint">文本上限字数</span></span><input type="number" id="f-text" min="1" /></label>
             <label><span class="field-label">send_rate <span class="field-hint">出站限流（条/分）</span></span><input type="number" id="f-rate" min="1" /></label>
             <div class="form-actions">
+              <span id="gate-dirty" class="pill warn hidden">未保存</span>
               <button type="submit" class="primary" id="btnGateSave">保存全局</button>
+              <span class="muted">数字字段留空 = 保持现值不修改</span>
             </div>
           </form>
 
@@ -165,12 +175,12 @@
           </div>
           <div class="help-box legend-always">
             <div class="legend-grid">
-              <div><code class="k context_only">context_only</code><span>只记不推</span></div>
-              <div><code class="k scheduled">scheduled</code><span>去抖中</span></div>
-              <div><code class="k pushed">pushed</code><span>已推 SSE</span></div>
-              <div><code class="k dropped">dropped</code><span>丢弃</span></div>
-              <div><code class="k cancelled">cancelled</code><span>打断作废</span></div>
-              <div><code class="k revoked">revoked</code><span>撤回捷径</span></div>
+              <div data-kind="context_only" title="点击只看这一类，再点取消"><code class="k context_only">context_only</code><span>只记不推</span></div>
+              <div data-kind="scheduled" title="点击只看这一类，再点取消"><code class="k scheduled">scheduled</code><span>去抖中</span></div>
+              <div data-kind="pushed" title="点击只看这一类，再点取消"><code class="k pushed">pushed</code><span>已推 SSE</span></div>
+              <div data-kind="dropped" title="点击只看这一类，再点取消"><code class="k dropped">dropped</code><span>丢弃</span></div>
+              <div data-kind="cancelled" title="点击只看这一类，再点取消"><code class="k cancelled">cancelled</code><span>打断作废</span></div>
+              <div data-kind="revoked" title="点击只看这一类，再点取消"><code class="k revoked">revoked</code><span>撤回捷径</span></div>
             </div>
           </div>
           <div id="trace-list" class="trace-list"></div>
@@ -208,6 +218,7 @@
                 <input id="hermes-log-grep" placeholder="过滤子串 / 正则" />
                 <button type="button" id="btnHermesLog" class="primary">拉取</button>
                 <label class="log-auto-scroll"><input type="checkbox" id="hermes-log-auto" checked /> 自动滚底</label>
+                <label class="log-auto-scroll"><input type="checkbox" id="hermes-log-tail" /> 15s 自动拉取</label>
                 <span id="hermes-log-info" class="log-info"></span>
               </div>
               <pre id="hermes-log" class="code-block">—</pre>
@@ -222,7 +233,7 @@
                 <span>情绪</span>
                 <span id="sticker-lib-stats" class="muted"></span>
               </div>
-              <button type="button" class="mood-item active" data-mood="" id="mood-all">全部需搜索</button>
+              <button type="button" class="mood-item active" data-mood="" id="mood-all">全部（需关键词搜索）</button>
               <div id="mood-list" class="mood-list"></div>
               <div class="mood-pane-head" style="margin-top:12px">常用题材</div>
               <div id="tag-list" class="tag-cloud"></div>
@@ -285,10 +296,11 @@
                   <label class="pf-full"><span class="field-label">personality <span class="field-hint">性格特征 · 可多行</span></span><textarea id="pf-personality" rows="3" placeholder="如：话少、爱较真，习惯用短句"></textarea></label>
                   <label class="pf-full"><span class="field-label">preferences <span class="field-hint">偏好 · 逗号或换行分隔</span></span><textarea id="pf-prefs" rows="2" placeholder="如：技术, 游戏, 美食"></textarea></label>
                   <label class="pf-full"><span class="field-label">notes <span class="field-hint">备注 · 可多行</span></span><textarea id="pf-notes" rows="3" placeholder="忌讳、约定、口头禅等"></textarea></label>
-                  <div class="form-actions">
-                    <button type="submit" class="primary">保存</button>
-                    <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
-                  </div>
+                <div class="form-actions">
+                  <span id="profile-dirty" class="pill warn hidden">未保存</span>
+                  <button type="submit" class="primary">保存</button>
+                  <button type="button" id="btnProfileDel" class="ghost danger">删除</button>
+                </div>
                 </form>
 
                 <details class="pf-raw">
@@ -364,6 +376,9 @@
         </section>
       </main>
     </div>
+
+    <!-- 窄屏抽屉导航的遮罩：点击关闭侧栏 -->
+    <div id="nav-scrim" class="nav-scrim hidden" hidden></div>
   </div>
 
   <div id="cmdk" class="cmdk hidden" hidden>

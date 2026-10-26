@@ -109,6 +109,32 @@
     toastTimer = setTimeout(() => el.classList.add("hidden"), kind === "err" ? 5200 : 2600);
   }
 
+  // 样式化确认弹窗（替代原生 confirm，与管理台同一套语义）
+  function askConfirm(msg, title) {
+    return new Promise((resolve) => {
+      const root = $("confirm");
+      const ok = $("confirm-ok");
+      const cancel = $("confirm-cancel");
+      if (!root || !ok || !cancel) {
+        resolve(window.confirm(msg));
+        return;
+      }
+      $("confirm-title").textContent = title || "确认";
+      $("confirm-msg").textContent = msg;
+      root.hidden = false;
+      root.classList.remove("hidden");
+      const done = (v) => {
+        root.classList.add("hidden");
+        root.hidden = true;
+        ok.onclick = null;
+        cancel.onclick = null;
+        resolve(v);
+      };
+      ok.onclick = () => done(true);
+      cancel.onclick = () => done(false);
+    });
+  }
+
   function fmtClock(iso) {
     if (!iso) return "未知";
     const d = new Date(iso);
@@ -681,7 +707,7 @@
   async function switchTab(tab, line) {
     if (tab === "raw") {
       if (formDirty() && !S.rawLoaded) {
-        if (!confirm("表单里有未保存改动，切到原文会丢掉它们。继续吗？")) return;
+        if (!(await askConfirm("表单里有未保存改动，切到原文会丢掉它们。继续吗？", "放弃未保存改动"))) return;
         resetWork();
       }
       S.tab = "raw";
@@ -801,7 +827,10 @@
     // 列表里只展示 run===1 的段（同根多段不连续时是只读的），默认选中也要对齐
     const ordered = orderSections(S.sections);
     const keep = S.sections.find((s) => s.root === S.root && s.run === S.run);
-    const first = keep || ordered.find((s) => s.run === 1) || ordered[0];
+    // hash 指定插件：F5 / 带链接进来时恢复选中
+    const h = decodeURIComponent(location.hash.slice(1) || "");
+    const fromHash = h ? ordered.find((s) => s.root === h && s.run === 1) : null;
+    const first = keep || fromHash || ordered.find((s) => s.run === 1) || ordered[0];
     await selectPlugin(first.root, first.run);
   }
 
@@ -952,7 +981,7 @@
     if (s.mode_known) {
       const wl = s.mode === "whitelist";
       bits.push(
-        `<span class="st mode${wl ? " wl" : ""}">${wl ? "白名单" : "黑名单"}</span>`,
+        `<span class="st mode${wl ? " wl" : ""}">${wl ? "白名单模式" : "黑名单模式"}</span>`,
       );
       // whitelist + limits 为空 = 除主人外谁都用不了，这是最容易踩的配置
       if (wl && !s.limits) {
@@ -1017,7 +1046,7 @@
 
   async function selectPlugin(root, run) {
     if ((root !== S.root || run !== S.run) && (formDirty() || rawDirty())) {
-      if (!confirm("当前插件有未保存改动，切换会丢掉它们。继续吗？")) return;
+      if (!(await askConfirm("当前插件有未保存改动，切换会丢掉它们。继续吗？", "放弃未保存改动"))) return;
     }
     S.root = root;
     S.run = run;
@@ -1042,6 +1071,9 @@
     }
     renderForm();
     $("main").scrollTop = 0;
+    // 记进 hash：F5 / 分享链接后停在同一插件（replaceState 不产生历史记录）
+    const want = "#" + encodeURIComponent(root);
+    if (location.hash !== want) history.replaceState(null, "", want);
   }
 
   async function loadKeys() {
@@ -1093,7 +1125,7 @@
       await putKeys(edits);
     } catch (e) {
       if (e.data && e.data.code === "comment_loss") {
-        if (confirm(`${e.message}\n\n确认继续会丢掉该值里的注释，仍然保存吗？`)) {
+        if (await askConfirm(`${e.message}\n\n确认继续会丢掉该值里的注释，仍然保存吗？`, "保存将丢注释")) {
           const retry = edits.map((x) => (x.id === e.data.id ? Object.assign({}, x, { allow_comment_loss: true }) : x));
           try {
             await putKeys(retry);
@@ -1311,6 +1343,41 @@
     });
   }
 
+  // 当前群成员缓存：搜索框变化时本地重滤，不再每个按键都重新拉 /chatrooms
+  let currentMembers = null;
+  let currentMembersFor = "";
+
+  function renderGroupMembers() {
+    const box = $("gdetail");
+    if (!box || !currentMembers || currentMembersFor !== S.groupID) return;
+    const listEl = box.querySelector(".member-list");
+    if (!listEl) return;
+    const q = ($("gsearch").value || "").trim().toLowerCase();
+    const rows = currentMembers.filter(
+      (m) =>
+        !q ||
+        ((m.remark || "") + " " + (m.display_name || "") + " " + (m.nickname || "") + " " + m.username)
+          .toLowerCase()
+          .indexOf(q) >= 0,
+    );
+    if (!rows.length) {
+      listEl.innerHTML = `<div class="gd-empty">没有匹配的成员</div>`;
+      return;
+    }
+    listEl.innerHTML = rows
+      .map(
+        (m) => `<div class="member">
+          <span class="mname">${esc(m.remark || m.display_name || m.nickname || m.username)}</span>
+          ${m.is_owner ? `<span class="mbadge owner">群主</span>` : ""}
+          ${m.in_contact_cache ? `<span class="mbadge">好友</span>` : ""}
+          <span class="mright">${esc(m.alias ? "@" + m.alias : "")}${
+          m.city || m.province ? " " + esc([m.province, m.city].filter(Boolean).join(" ")) : ""
+        }</span>
+        <span class="mmeta">${esc(m.username)}</span></div>`,
+      )
+      .join("");
+  }
+
   async function openGroup(id) {
     S.groupID = id;
     $("glist").querySelectorAll(".grow").forEach((r) => r.classList.toggle("active", r.dataset.gid === id));
@@ -1319,6 +1386,7 @@
     const c = (S.recipients.contacts || []).find((x) => x.username === id);
 
     if (!g && c) {
+      currentMembers = null;
       box.innerHTML = `<div class="gd-head"><h3>${esc(c.remark || c.nickname || c.alias || id)}</h3>
         <div class="gid">${esc(id)}</div></div>
         <div class="gd-stats"><span class="gd-stat">类型 <b>好友</b></span>
@@ -1339,31 +1407,14 @@
       const d = await api("GET", "/admin/data/chatrooms/" + encodeURIComponent(id));
       if (!d.ok) throw new Error(d.error || "读取失败");
       const members = d.members || [];
+      currentMembers = members;
+      currentMembersFor = id;
       const listEl = box.querySelector(".member-list");
       if (!members.length) {
         listEl.innerHTML = `<div class="gd-empty">没有成员明细（该群不在 chatroom.json 里）。</div>`;
         return;
       }
-      const q = ($("gsearch").value || "").trim().toLowerCase();
-      const rows = members.filter(
-        (m) =>
-          !q ||
-          ((m.remark || "") + " " + (m.display_name || "") + " " + (m.nickname || "") + " " + m.username)
-            .toLowerCase()
-            .indexOf(q) >= 0,
-      );
-      listEl.innerHTML = rows
-        .map(
-          (m) => `<div class="member">
-            <span class="mname">${esc(m.remark || m.display_name || m.nickname || m.username)}</span>
-            ${m.is_owner ? `<span class="mbadge owner">群主</span>` : ""}
-            ${m.in_contact_cache ? `<span class="mbadge">好友</span>` : ""}
-            <span class="mright">${esc(m.alias ? "@" + m.alias : "")}${
-            m.city || m.province ? " " + esc([m.province, m.city].filter(Boolean).join(" ")) : ""
-          }</span>
-          <span class="mmeta">${esc(m.username)}</span></div>`,
-        )
-        .join("");
+      renderGroupMembers();
     } catch (e) {
       const listEl = box.querySelector(".member-list");
       if (listEl) listEl.innerHTML = `<div class="gd-empty">${esc(e.message)}</div>`;
@@ -1493,18 +1544,31 @@
   $("btn-groups").addEventListener("click", openGroups);
   $("groups-close").addEventListener("click", () => $("groups").classList.add("hidden"));
   $("gsearch").addEventListener("input", () => {
+    // 纯本地过滤：群列表 + 当前群成员明细都从缓存重绘，不再每个按键发请求
     renderGroupList();
-    if (S.groupID) openGroup(S.groupID);
+    renderGroupMembers();
   });
 
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && !$("groups").classList.contains("hidden")) {
-      $("groups").classList.add("hidden");
+    if (ev.key === "Escape") {
+      // 确认弹窗优先：Esc = 取消
+      if (!$("confirm").classList.contains("hidden")) {
+        if ($("confirm-cancel")) $("confirm-cancel").click();
+        return;
+      }
+      if (!$("groups").classList.contains("hidden")) {
+        $("groups").classList.add("hidden");
+      }
     }
     if ((ev.ctrlKey || ev.metaKey) && ev.key === "s") {
       ev.preventDefault();
       if (!$("btn-save").disabled) save();
     }
+  });
+
+  // 点遮罩 = 取消（与管理台确认弹窗一致）
+  $("confirm").addEventListener("click", (ev) => {
+    if (ev.target === $("confirm") && $("confirm-cancel")) $("confirm-cancel").click();
   });
 
   window.addEventListener("beforeunload", (ev) => {

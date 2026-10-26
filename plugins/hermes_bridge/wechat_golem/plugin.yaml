@@ -21,6 +21,10 @@ requires_env:
     prompt: "Bridge base URL"
     password: false
 optional_env:
+  - name: WECHAT_GOLEM_BOT_NAME
+    description: "机器人自称的名字，用于人格固定边界；留空则按 SOUL.md 中定义的名字"
+    prompt: "Bot name (blank = SOUL.md)"
+    password: false
   - name: WECHAT_GOLEM_HOME_CHANNEL
     description: "cron 默认投递会话 wxid（群或私聊）"
     prompt: "Home channel wxid"

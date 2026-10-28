@@ -4,6 +4,7 @@
   const toastEl = $("toast");
   let stickerPage = 1;
   let stickerPageSize = 20;
+  let profileSelectedWXID = "";
   const PERSONA_MAX_BYTES = 64 * 1024;
   let personaSelectedID = "";
   let personaETag = "";
@@ -92,6 +93,18 @@
     el.innerHTML = `<div class="alerts"><ul><li>${esc(msg)}</li></ul></div>`;
   }
 
+  // 列表加载失败的统一出口：401 回登录页，其余把错误写进列表容器。
+  // 不能只 toast——骨架屏/加载占位会永远留在原地，看起来像在无限加载。
+  function handleLoadError(el, e) {
+    if (e && e.status === 401) {
+      setToken("");
+      showLogin("登录已失效");
+      return;
+    }
+    showError(el, (e && e.message) || "加载失败");
+    toastErr((e && e.message) || "加载失败");
+  }
+
   function getToken() {
     return (localStorage.getItem(TOKEN_KEY) || "").trim();
   }
@@ -136,7 +149,12 @@
 
   function fmtDate(ts) {
     if (!ts) return "";
-    return new Date(ts * 1000).toLocaleDateString();
+    // 档案的 updated_at 有两种形态：adapter 写 Unix 秒，ops 写 ISO 字符串
+    if (typeof ts === "string" && !/^\d+$/.test(ts)) {
+      const d = new Date(ts);
+      return isNaN(d.getTime()) ? ts : d.toLocaleDateString();
+    }
+    return new Date(Number(ts) * 1000).toLocaleDateString();
   }
 
   function truncate(s, n) {
@@ -246,6 +264,7 @@
       showApp();
       toastOk("已登录");
       loadOverview();
+      enterHashPage();
     } catch (e) {
       setToken("");
       showLogin(e.status === 401 ? "admin_token 不正确" : e.message);
@@ -266,15 +285,64 @@
     b.className = "primary";
     b.textContent = "刷新";
     b.title = "重新拉取本页数据";
-    b.onclick = fn;
+    b.onclick = async () => {
+      // pending 态防连点：请求在途时按钮禁用
+      b.disabled = true;
+      b.textContent = "刷新中…";
+      try {
+        await fn();
+      } finally {
+        b.disabled = false;
+        b.textContent = "刷新";
+      }
+    };
+    return b;
+  }
+
+  // 监控类页面（总览/会话）的 30s 自动刷新：开关状态记在 localStorage，
+  // 换页时 setPage 先停旧 interval，进页时按存储值恢复。
+  const AUTO_REFRESH_KEY = "hermes_admin_auto_refresh";
+  let autoTimer = 0;
+
+  function stopAutoRefresh() {
+    if (autoTimer) {
+      clearInterval(autoTimer);
+      autoTimer = 0;
+    }
+  }
+
+  function autoRefreshBtn(fn) {
+    const b = document.createElement("button");
+    b.type = "button";
+    const paint = () => {
+      b.className = autoTimer ? "primary" : "ghost";
+      b.textContent = autoTimer ? "自动刷新中" : "自动刷新 30s";
+    };
+    b.title = "每 30 秒自动刷新本页数据（静默拉取，不闪骨架屏）";
+    b.onclick = () => {
+      if (autoTimer) stopAutoRefresh();
+      else autoTimer = setInterval(fn, 30000);
+      localStorage.setItem(AUTO_REFRESH_KEY, autoTimer ? "1" : "");
+      paint();
+    };
+    if (localStorage.getItem(AUTO_REFRESH_KEY) === "1") {
+      autoTimer = setInterval(fn, 30000);
+    }
+    paint();
     return b;
   }
 
   const pageActions = {
-    overview: () => [refreshBtn(loadOverview)],
-    targets: () => [refreshBtn(loadTargets)],
+    overview: () => [
+      refreshBtn(() => loadOverview()),
+      autoRefreshBtn(() => loadOverview(true)),
+    ],
+    targets: () => [refreshBtn(refreshTargetsBoth)],
     gate: () => [refreshBtn(loadGate)],
-    sessions: () => [refreshBtn(loadSessions)],
+    sessions: () => [
+      refreshBtn(() => loadSessions()),
+      autoRefreshBtn(() => loadSessions(true)),
+    ],
     hermes: () => [refreshBtn(loadHermes)],
     profiles: () => [refreshBtn(loadProfiles)],
     personas: () => [refreshBtn(loadPersonas)],
@@ -286,6 +354,16 @@
       if (!(await askConfirm("当前人格草稿尚未保存，仍要离开吗？", "放弃未保存内容")))
         return;
       personaSetBaseline($("persona-content").value, personaSelectedID);
+    }
+    if (tab !== "gate" && gateIsDirty()) {
+      if (!(await askConfirm("门闩设置有未保存改动，仍要离开吗？", "放弃未保存内容")))
+        return;
+      gateDropDraft();
+    }
+    if (tab !== "profiles" && profileIsDirty()) {
+      if (!(await askConfirm("档案有未保存改动，仍要离开吗？", "放弃未保存内容")))
+        return;
+      profileDropDraft();
     }
     document.querySelectorAll("#nav button").forEach((b) => {
       const on = b.dataset.tab === tab;
@@ -301,14 +379,23 @@
     panel.classList.add("active");
     $("page-title").textContent = panel.dataset.title || tab;
     $("page-sub").textContent = panel.dataset.sub || "";
+    // 写进 hash：F5 / 分享链接后停在同一页（replaceState 不产生历史记录）
+    if (location.hash.slice(1) !== tab)
+      history.replaceState(null, "", "#" + tab);
     const box = $("topbar-actions");
     box.innerHTML = "";
+    stopAutoRefresh(); // 换页先停旧的自动刷新，新页的按钮按开关状态重建
     const makers = pageActions[tab];
     if (makers) makers().forEach((el) => box.appendChild(el));
+    setNavOpen(false);
 
     if (tab !== "inbound") stopTraceLive();
+    if (tab !== "hermes") stopLogTail();
     if (tab === "overview") loadOverview();
-    if (tab === "targets") loadTargets();
+    if (tab === "targets") {
+      loadTargets();
+      renderRecipients($("search-q").value);
+    }
     if (tab === "gate") {
       loadGate();
       loadGateTargets();
@@ -365,8 +452,8 @@
           o.hermes_ops_configured ? "已配置" : "未配置",
           o.hermes_ops_configured ? "ok" : "",
         ),
-        card("业务端口", o.listen || "—"),
-        card("管理端口", o.admin_listen || "—"),
+        card("业务端口", esc(o.listen) || "—"),
+        card("管理端口", esc(o.admin_listen) || "—"),
       ].join(""),
     );
     fill(
@@ -394,10 +481,10 @@
       [
         card(
           "主人身份",
-          o.owner_ok ? o.owner_name || "已识别" : "未识别",
+          o.owner_ok ? esc(o.owner_name) || "已识别" : "未识别",
           o.owner_ok ? "ok" : "bad",
         ),
-        card("机器人昵称", o.self_name || o.self_id || "—"),
+        card("机器人昵称", esc(o.self_name || o.self_id) || "—"),
         card(
           "Token 掩码",
           `<span class="mono">${esc(o.token_masked || "—")}</span>`,
@@ -413,11 +500,14 @@
       : "<ul><li>链路安静，没有红灯</li></ul>";
   }
 
-  async function loadOverview() {
+  // silent：自动刷新走静默拉取，保留旧卡片，不闪骨架屏
+  async function loadOverview(silent) {
     try {
-      showSkeleton("overview-link", 4, "card");
-      showSkeleton("overview-capacity", 6, "card");
-      showSkeleton("overview-identity", 3, "card");
+      if (!silent) {
+        showSkeleton("overview-link", 4, "card");
+        showSkeleton("overview-capacity", 6, "card");
+        showSkeleton("overview-identity", 3, "card");
+      }
       applyOverview(await api("/admin/overview"));
     } catch (e) {
       if (e.status === 401) {
@@ -432,18 +522,84 @@
   }
 
   // ---- targets ----
-  async function loadTargets() {
+  // 群 / 联系人的缓存快照（data/chatroom.json + data/contact.json）。
+  // 白名单页、门闩按群覆盖、诊断试发、表情试发都用它补显示名：
+  // Target.Name 可能是空串或很久以前的群名，缓存里的更新。
+  let recipientsCache = null;
+  let recipientsPromise = null;
+
+  function loadRecipients(force) {
+    if (recipientsCache && !force) return Promise.resolve(recipientsCache);
+    if (recipientsPromise) return recipientsPromise;
+    recipientsPromise = api("/admin/data/recipients")
+      .then((d) => {
+        const groups = new Map();
+        const people = new Map();
+        if (d && d.ok) {
+          for (const g of d.groups || []) groups.set(g.id, g);
+          for (const c of d.contacts || []) people.set(c.username, c);
+        }
+        recipientsCache = { groups, people, files: (d && d.files) || {} };
+        return recipientsCache;
+      })
+      .catch(() => {
+        recipientsCache = { groups: new Map(), people: new Map(), files: {} };
+        return recipientsCache;
+      })
+      .finally(() => {
+        recipientsPromise = null;
+      });
+    return recipientsPromise;
+  }
+
+  function personDisplayName(c) {
+    return c.remark || c.nickname || c.alias || c.username;
+  }
+
+  // recipientName 用缓存给会话补名字；缓存里没有就回退到白名单自带的 name。
+  function recipientName(id, fallback) {
+    if (!recipientsCache) return fallback || id;
+    const g = recipientsCache.groups.get(id);
+    if (g && g.name) return g.name;
+    const p = recipientsCache.people.get(id);
+    if (p) return personDisplayName(p);
+    return fallback || id;
+  }
+
+  // <select> 的 option 只显示 label、不显示 value，所以 id 必须写进文本里。
+  function selectLabel(t) {
+    const id = t.id || "";
+    const name = recipientName(id, t.name);
+    if (!name || name === id) return id;
+    return name + "（" + id + "）";
+  }
+
+  // <datalist> 的 option 会分两行显示：value（id）在上、label 在下。
+  // 所以 label 只放名字，不要把 id 再重复一遍。
+  function datalistLabel(t) {
+    const id = t.id || "";
+    const name = recipientName(id, t.name);
+    return name && name !== id ? name : "";
+  }
+
+  // silent：联动刷新（移除/加入/顶栏刷新）不闪骨架屏，旧内容保留到新数据到达。
+  // 左栏是独立滚动区，重绘会把 scrollTop 清零——先存后还，移除中间某条不跳顶。
+  async function loadTargets(silent) {
+    const pane = $("target-list").parentElement;
+    const keepScroll = pane ? pane.scrollTop : 0;
     try {
-      showSkeleton("target-list", 4);
-      const data = await api("/admin/targets");
-      const list = data.targets || [];
+      if (!silent) showSkeleton("target-list", 4);
+      const [data] = await Promise.all([api("/admin/targets"), loadRecipients()]);
+      const list = (data.targets || []).map((t) =>
+        Object.assign({}, t, { showName: recipientName(t.id, t.name) }),
+      );
       $("target-count").textContent = list.length + " 个";
       $("target-list").innerHTML = list.length
         ? list
             .map(
               (t) => `<div class="item" data-id="${esc(t.id)}">
             <span class="tag ${t.kind}">${t.kind === "group" ? "群" : "私聊"}</span>
-            <div class="grow"><strong>${esc(t.name || t.id)}</strong><div class="muted">${esc(t.id)}</div></div>
+            <div class="grow"><strong>${esc(t.showName)}</strong><div class="muted">${esc(t.id)}</div></div>
             <button type="button" class="ghost danger btn-del">移除</button>
           </div>`,
             )
@@ -461,21 +617,25 @@
                 method: "DELETE",
               });
               toastOk("已移除");
-              loadTargets();
+              refreshTargetsBoth();
             } catch (e) {
               toastErr(e.message);
             }
           });
         });
+      if (pane) pane.scrollTop = keepScroll;
     } catch (e) {
-      toastErr(e.message);
+      handleLoadError("target-list", e);
     }
   }
 
   $("btnAddTarget").addEventListener("click", async () => {
     const id = $("target-id").value.trim();
     const name = $("target-name").value.trim();
-    if (!id) toastErr("请填写 id");
+    if (!id) {
+      toastErr("请填写 id");
+      return;
+    }
     try {
       await api("/admin/targets", {
         method: "POST",
@@ -484,58 +644,164 @@
       toastOk("已加入");
       $("target-id").value = "";
       $("target-name").value = "";
-      loadTargets();
+      refreshTargetsBoth();
     } catch (e) {
       toastErr(e.message);
     }
   });
 
-  $("btnSearch").addEventListener("click", doSearch);
+  // 白名单页两栏联动刷新：左栏重绘已生效清单，右栏候选随之增减。
+  // 移除成功 / 加入成功 / 顶栏「刷新」都走这里；silent 不闪骨架屏。
+  function refreshTargetsBoth() {
+    loadTargets(true);
+    return renderRecipients($("search-q").value);
+  }
+
+  $("btnSearch").addEventListener("click", () => renderRecipients($("search-q").value));
+  // 边打边过滤；去抖一下，避免每个字符都重绘整份列表并重复拉 /admin/targets。
+  let recipientFilterTimer = 0;
+  $("search-q").addEventListener("input", () => {
+    clearTimeout(recipientFilterTimer);
+    recipientFilterTimer = setTimeout(() => renderRecipients($("search-q").value), 180);
+  });
   $("search-q").addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") doSearch();
+    if (ev.key === "Enter") {
+      clearTimeout(recipientFilterTimer);
+      renderRecipients($("search-q").value);
+    }
   });
 
-  async function doSearch() {
-    const q = $("search-q").value.trim();
-    if (!q) return toastErr("输入关键词");
-    showLoading("search-results", "搜索中…");
+  // 手填 id 的联想：把缓存里的群/好友全量挂到 datalist，不输入也能点开看全部。
+  function fillTargetIDList() {
+    const dl = $("target-id-list");
+    if (!dl || !recipientsCache) return;
+    const groups = Array.from(recipientsCache.groups.values());
+    const people = Array.from(recipientsCache.people.values());
+    dl.innerHTML =
+      groups
+        .map(
+          (g) =>
+            `<option value="${esc(g.id)}">群 · ${esc(g.name || g.id)}${g.in_chatroom_cache ? " · " + g.member_count + " 人" : ""}</option>`,
+        )
+        .join("") +
+      people
+        .map(
+          (c) =>
+            `<option value="${esc(c.username)}">好友 · ${esc(personDisplayName(c))}${c.alias ? " · " + esc(c.alias) : ""}</option>`,
+        )
+        .join("");
+  }
+
+  // 选中联想里的 id 后，顺手把显示名填上（用户自己填过就不覆盖）。
+  $("target-id").addEventListener("change", () => {
+    const id = $("target-id").value.trim();
+    const nameEl = $("target-name");
+    if (!id || !recipientsCache || nameEl.value.trim()) return;
+    const nm = recipientName(id, "");
+    if (nm && nm !== id) nameEl.value = nm;
+  });
+
+  // renderRecipients 是白名单页的「辅助列表」：留空列全部，
+  // 关键词只做过滤，不要求用户记得关键词才能看到有什么可选。
+  async function renderRecipients(rawQ) {
+    const q = (rawQ || "").trim().toLowerCase();
+    const box = $("search-results");
+    // 只在首次载入时占位；边打边过滤时保留旧列表，避免闪烁。
+    if (!recipientsCache) showLoading("search-results", "载入联系人…");
+    // 右栏也是独立滚动区：加入一条重建后把 scrollTop 还回去，连续添加不跳顶
+    const pane = box.parentElement;
+    const keepScroll = pane ? pane.scrollTop : 0;
     try {
-      const data = await api(
-        "/admin/contacts/search?q=" + encodeURIComponent(q),
-      );
-      const results = data.results || [];
-      $("search-results").innerHTML = results.length
-        ? results
+      // 全量缓存（群 ∪ 好友），而不是 contact.List()——后者只含已注入缓存的那部分。
+      const [rc, data] = await Promise.all([
+        loadRecipients(),
+        api("/admin/targets"),
+      ]);
+      fillTargetIDList();
+      const have = new Set((data.targets || []).map((t) => t.id));
+      // 候选列表只列「还没加的」：已在白名单的直接滤掉，不再用灰色
+      // 「已在白名单」按钮占位（白名单越长噪音越多）。被滤掉的数量在空态里说明。
+      const hits = [];
+      let already = 0;
+      for (const g of rc.groups.values()) {
+        if (have.has(g.id)) {
+          already++;
+          continue;
+        }
+        if (
+          !q ||
+          g.id.toLowerCase().includes(q) ||
+          (g.name || "").toLowerCase().includes(q) ||
+          (g.owner_name || "").toLowerCase().includes(q)
+        ) {
+          hits.push({
+            id: g.id,
+            name: g.name || g.id,
+            kind: "group",
+            sub: g.in_chatroom_cache
+              ? g.member_count + " 人"
+              : "不在群成员缓存",
+          });
+        }
+      }
+      for (const c of rc.people.values()) {
+        if (have.has(c.username)) {
+          already++;
+          continue;
+        }
+        const name = personDisplayName(c);
+        if (
+          !q ||
+          c.username.toLowerCase().includes(q) ||
+          name.toLowerCase().includes(q) ||
+          (c.alias || "").toLowerCase().includes(q)
+        ) {
+          hits.push({ id: c.username, name, kind: "private", sub: c.alias || "" });
+        }
+      }
+      hits.sort((a, b) => (a.kind === b.kind ? 0 : a.kind === "group" ? -1 : 1));
+      const shown = hits.slice(0, 80);
+      const more = hits.length - shown.length;
+      box.innerHTML = shown.length
+        ? shown
             .map(
               (h) => `<div class="item">
             <span class="tag ${h.kind}">${h.kind === "group" ? "群" : "私聊"}</span>
-            <div class="grow"><strong>${esc(h.name)}</strong><div class="muted">${esc(h.id)}</div></div>
+            <div class="grow"><strong>${esc(h.name)}</strong><div class="muted">${esc(h.id)}${h.sub ? " · " + esc(h.sub) : ""}</div></div>
             <button type="button" class="primary btn-add-hit" data-id="${esc(h.id)}" data-name="${esc(h.name)}">加入</button>
           </div>`,
             )
-            .join("")
-        : `<div class="empty">无匹配</div>`;
-      $("search-results")
-        .querySelectorAll(".btn-add-hit")
-        .forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            try {
-              await api("/admin/targets", {
-                method: "POST",
-                body: JSON.stringify({
-                  id: btn.dataset.id,
-                  name: btn.dataset.name,
-                }),
-              });
-              toastOk("已加入");
-              loadTargets();
-            } catch (e) {
-              toastErr(e.message);
-            }
-          });
+            .join("") +
+          (more > 0
+            ? `<div class="empty">还有 ${more} 个，输入关键词缩小范围</div>`
+            : "")
+        : `<div class="empty">${
+            q
+              ? "无匹配"
+              : already
+                ? `没有可添加的（${already} 个已在白名单，未列出）`
+                : "缓存里没有群/联系人"
+          }</div>`;
+      box.querySelectorAll(".btn-add-hit").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          try {
+            await api("/admin/targets", {
+              method: "POST",
+              body: JSON.stringify({
+                id: btn.dataset.id,
+                name: btn.dataset.name,
+              }),
+            });
+            toastOk("已加入");
+            refreshTargetsBoth();
+          } catch (e) {
+            toastErr(e.message);
+          }
         });
+      });
+      if (pane) pane.scrollTop = keepScroll;
     } catch (e) {
-      toastErr(e.message);
+      handleLoadError("search-results", e);
     }
   }
 
@@ -543,6 +809,38 @@
   let selectedTargetID = "";
   let selectedTarget = null;
   let gateTargetList = [];
+
+  // 门闩全局表单的未保存保护：与人格页同一套思路——
+  // baseline 记录载入时的表单值，有差异就亮「未保存」并在离开前确认。
+  const GATE_FIELDS = ["f-triggers", "f-pushall", "f-debounce", "f-bubble", "f-bubble-cd", "f-ctx", "f-burst", "f-burst-win", "f-burst-cd", "f-text", "f-rate"];
+  let gateBaseline = null; // null = 尚未加载过，不参与脏检查
+
+  function gateFormValues() {
+    return GATE_FIELDS.map((id) => {
+      const el = $(id);
+      return el && el.type === "checkbox" ? el.checked : el ? el.value : "";
+    }).join("|");
+  }
+
+  function gateIsDirty() {
+    return gateBaseline !== null && gateFormValues() !== gateBaseline;
+  }
+
+  function gateSyncBaseline() {
+    gateBaseline = gateFormValues();
+    updateGateDirtyPill();
+  }
+
+  // 放弃草稿：把 baseline 对齐到当前表单。之后 loadGate 会重新拉值覆盖。
+  function gateDropDraft() {
+    gateBaseline = gateFormValues();
+    updateGateDirtyPill();
+  }
+
+  function updateGateDirtyPill() {
+    const el = $("gate-dirty");
+    if (el) el.classList.toggle("hidden", !gateIsDirty());
+  }
 
   function optNum(el) {
     const raw = (el.value || "").trim();
@@ -595,7 +893,8 @@
     const sel = $("tg-chat");
     if (!sel) return;
     try {
-      const data = await api("/admin/targets");
+      // 只列白名单里的群（门闩本来就是对白名单群做覆盖），名字优先用缓存。
+      const [data] = await Promise.all([api("/admin/targets"), loadRecipients()]);
       gateTargetList = (data.targets || []).filter((t) => t.kind === "group");
       const keep = selectedTargetID;
       sel.innerHTML =
@@ -603,7 +902,7 @@
         gateTargetList
           .map((t) => {
             const mark = t.has_override ? " · 已覆盖" : "";
-            return `<option value="${esc(t.id)}">${esc(t.name || t.id)}${mark}</option>`;
+            return `<option value="${esc(t.id)}">${esc(selectLabel(t))}${mark}</option>`;
           })
           .join("");
       if (keep && gateTargetList.some((t) => t.id === keep)) {
@@ -712,6 +1011,7 @@
       $("f-burst-cd").value = c.emoji_burst_cooldown_minutes;
       $("f-text").value = c.max_text_len;
       $("f-rate").value = c.send_rate_per_min;
+      gateSyncBaseline();
     } catch (e) {
       $("gate-preview").textContent = "加载失败: " + e.message;
       toastErr(e.message);
@@ -722,37 +1022,80 @@
 
   $("gate-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
+    // 数字字段留空 = 不修改（后端 PATCH 用 map 区分「未传」与零值，
+    // 跳过就不会把清空的字段误存成 0）。trigger_names 例外：总是提交，空 = 清空点名词。
     const body = {
       trigger_names: $("f-triggers")
         .value.split(/[,，]/)
         .map((s) => s.trim())
         .filter(Boolean),
       group_push_all: $("f-pushall").checked,
-      debounce_seconds: num($("f-debounce").value),
-      bubble_rate: num($("f-bubble").value),
-      bubble_cooldown_minutes: num($("f-bubble-cd").value),
-      max_context_messages: num($("f-ctx").value),
-      emoji_burst_count: num($("f-burst").value),
-      emoji_burst_window_seconds: num($("f-burst-win").value),
-      emoji_burst_cooldown_minutes: num($("f-burst-cd").value),
-      max_text_len: num($("f-text").value),
-      send_rate_per_min: num($("f-rate").value),
     };
+    const optFields = [
+      ["debounce_seconds", "f-debounce"],
+      ["bubble_rate", "f-bubble"],
+      ["bubble_cooldown_minutes", "f-bubble-cd"],
+      ["max_context_messages", "f-ctx"],
+      ["emoji_burst_count", "f-burst"],
+      ["emoji_burst_window_seconds", "f-burst-win"],
+      ["emoji_burst_cooldown_minutes", "f-burst-cd"],
+      ["max_text_len", "f-text"],
+      ["send_rate_per_min", "f-rate"],
+    ];
+    for (const [key, id] of optFields) {
+      const v = optNum($(id));
+      if (v != null) body[key] = v;
+    }
     try {
       const c = await api("/admin/config", {
         method: "PATCH",
         body: JSON.stringify(body),
       });
       $("gate-preview").textContent = c.gate_summary || "";
+      gateSyncBaseline();
       toastOk("已保存");
     } catch (e) {
       toastErr(e.message);
     }
   });
+  // 表单任意改动 → 刷新「未保存」标记（checkbox 走 change，其余走 input）
+  $("gate-form").addEventListener("input", updateGateDirtyPill);
+  $("gate-form").addEventListener("change", updateGateDirtyPill);
 
   // ---- inbound ----
   let es = null;
   const seenTrace = new Set();
+
+  // 实时流可能挂一整晚：DOM 与去重集合都封顶 300 条 FIFO 淘汰，避免越滚越卡
+  const TRACE_MAX = 300;
+
+  // 图例变筛选器：选中若干类 = 只看这几类；全不选 = 全部显示
+  const traceKindFilter = new Set();
+
+  function kindOfItem(el) {
+    // className 形如 "trace-item pushed"，第一段是基类
+    return (el.className || "").split(/\s+/).find((c) => c && c !== "trace-item") || "";
+  }
+
+  function applyTraceFilterTo(el) {
+    el.style.display =
+      !traceKindFilter.size || traceKindFilter.has(kindOfItem(el)) ? "" : "none";
+  }
+
+  function applyTraceFilter() {
+    const listEl = $("trace-list");
+    if (!listEl) return;
+    listEl.querySelectorAll(".trace-item").forEach(applyTraceFilterTo);
+  }
+
+  function trimTrace(listEl, prepend) {
+    while (listEl.children.length > TRACE_MAX) {
+      const victim = prepend ? listEl.lastElementChild : listEl.firstElementChild;
+      if (!victim) break;
+      if (victim.dataset && victim.dataset.tid) seenTrace.delete(victim.dataset.tid);
+      victim.remove();
+    }
+  }
 
   function fmtTs(ts) {
     if (!ts) return "";
@@ -764,8 +1107,9 @@
   }
 
   function renderTrace(ev, prepend) {
-    if (!ev || ev.id == null || seenTrace.has(ev.id)) return;
-    seenTrace.add(ev.id);
+    // 统一存字符串：裁剪时从 dataset.tid 取回的是字符串，类型一致才能删得中
+    if (!ev || ev.id == null || seenTrace.has(String(ev.id))) return;
+    seenTrace.add(String(ev.id));
     // 首个事件进来时清掉空态占位
     const listEl = $("trace-list");
     const empty = listEl.querySelector(".empty");
@@ -796,8 +1140,11 @@
       <div><span class="muted">${esc(fmtTs(ev.ts))} #${ev.id}</span>
       ${ev.msg_count ? " ×" + ev.msg_count : ""}
       <div title="${esc(ev.text || "")}">${esc(bits)}</div></div>`;
+    el.dataset.tid = String(ev.id);
     if (prepend) listEl.prepend(el);
     else listEl.appendChild(el);
+    applyTraceFilterTo(el);
+    trimTrace(listEl, prepend);
   }
 
   async function loadTraceRecent() {
@@ -838,8 +1185,15 @@
       el.className = "pill live";
     };
     es.onerror = () => {
-      el.textContent = "断开";
-      el.className = "pill err";
+      // EventSource 断线后会自动重连：readyState CLOSED 才是真断，
+      // 其余显示「重连中」，别让用户误以为要手动再点「实时」
+      if (!es || es.readyState === 2) {
+        el.textContent = "已断开";
+        el.className = "pill err";
+      } else {
+        el.textContent = "重连中";
+        el.className = "pill warn";
+      }
     };
   }
 
@@ -864,11 +1218,24 @@
     $("trace-list").innerHTML = "";
     seenTrace.clear();
   });
+  // 图例 chip 点击 = 筛选出该类型（可叠加多选），再点一次取消
+  document
+    .querySelectorAll(".legend-always .legend-grid > div[data-kind]")
+    .forEach((div) => {
+      div.addEventListener("click", () => {
+        const k = div.dataset.kind;
+        if (traceKindFilter.has(k)) traceKindFilter.delete(k);
+        else traceKindFilter.add(k);
+        div.classList.toggle("on", traceKindFilter.has(k));
+        applyTraceFilter();
+      });
+    });
 
   // ---- sessions ----
-  async function loadSessions() {
+  // silent：自动刷新走静默拉取，保留旧列表，不闪骨架屏
+  async function loadSessions(silent) {
     try {
-      showSkeleton("session-list", 5);
+      if (!silent) showSkeleton("session-list", 5);
       const data = await api("/admin/sessions");
       const list = data.sessions || [];
       $("session-list").innerHTML = list.length
@@ -897,7 +1264,7 @@
             .join("")
         : `<div class="empty">暂无本地会话</div>`;
     } catch (e) {
-      toastErr(e.message);
+      handleLoadError("session-list", e);
     }
   }
 
@@ -1020,9 +1387,9 @@
         : "";
       const st = ov.systemd || {};
       $("hermes-cards").innerHTML = [
-        card("网关状态", st.is_active || "?", st.ok ? "ok" : "bad"),
+        card("网关状态", esc(st.is_active) || "?", st.ok ? "ok" : "bad"),
         card("工具注册", ov.tools_ok ? "正常" : "异常", ov.tools_ok ? "ok" : "bad"),
-        card("运行目录", ov.hermes_home || "—"),
+        card("运行目录", esc(ov.hermes_home) || "—"),
       ].join("");
       renderHermesTools(await api("/admin/hermes/tools/check"));
       renderHermesSessions(await api("/admin/hermes/sessions?n=30"));
@@ -1040,6 +1407,27 @@
       toastErr(e.message);
     }
   }
+
+  // 15s 自动拉取当前日志文件（简易 tail）。离开运维页时由 setPage 关掉。
+  let logTailTimer = 0;
+
+  function stopLogTail() {
+    if (logTailTimer) {
+      clearInterval(logTailTimer);
+      logTailTimer = 0;
+      const cb = $("hermes-log-tail");
+      if (cb) cb.checked = false;
+    }
+  }
+
+  $("hermes-log-tail").addEventListener("change", (ev) => {
+    if (ev.target.checked) {
+      logTailTimer = setInterval(() => $("btnHermesLog").click(), 15000);
+    } else {
+      clearInterval(logTailTimer);
+      logTailTimer = 0;
+    }
+  });
 
   $("btnHermesLog").addEventListener("click", async () => {
     const file = $("hermes-log-file").value;
@@ -1073,16 +1461,25 @@
         const raw = lines[i];
         const ln = i + 1;
         let content = esc(raw);
-        // 高亮匹配词（大小写不敏感）
+        // 高亮匹配词（大小写不敏感，行内全部命中处）
         if (grepLower && content) {
-          const idx = content.toLowerCase().indexOf(grepLower);
-          if (idx >= 0) {
-            const before = content.slice(0, idx);
-            const match = content.slice(idx, idx + grep.length);
-            const after = content.slice(idx + grep.length);
-            content =
-              before + '<span class="log-hl">' + match + "</span>" + after;
+          const low = content.toLowerCase();
+          let out = "";
+          let pos = 0;
+          for (;;) {
+            const idx = low.indexOf(grepLower, pos);
+            if (idx < 0) {
+              out += content.slice(pos);
+              break;
+            }
+            out +=
+              content.slice(pos, idx) +
+              '<span class="log-hl">' +
+              content.slice(idx, idx + grep.length) +
+              "</span>";
+            pos = idx + grep.length;
           }
+          content = out;
         }
         frag.push(
           '<span class="log-line"><span class="log-ln">' +
@@ -1120,11 +1517,10 @@
 
   async function fillStickerChats() {
     try {
-      const data = await api("/admin/targets");
+      // 出站有硬校验（guardOutbound），这里仍只列白名单，名字用缓存补。
+      const [data] = await Promise.all([api("/admin/targets"), loadRecipients()]);
       $("sticker-chats").innerHTML = (data.targets || [])
-        .map(
-          (t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`,
-        )
+        .map((t) => `<option value="${esc(t.id)}">${esc(datalistLabel(t))}</option>`)
         .join("");
     } catch (_) {}
   }
@@ -1357,7 +1753,7 @@
                   <span class="use-count">使用 ${use} 次${sizeHint ? " · " + sizeHint : ""}</span>
                 </div>
                 <div class="card-actions">
-                  <button type="button" class="ghost btn-copy" data-md5="${esc(s.md5)}" title="复制 md5">md5</button>
+                  <button type="button" class="ghost btn-copy" data-md5="${esc(s.md5)}" title="复制该表情的 md5 指纹">复制 md5</button>
                   <button type="button" class="primary btn-send" data-md5="${esc(s.md5)}" title="试发到 chat_id 输入框中的目标">试发</button>
                 </div>
               </div>`;
@@ -1549,28 +1945,221 @@
   });
 
   // ---- profiles ----
+  // wxid → [{id, name, member_count}]，来自 /admin/data/member-groups（chatroom.json 成员表反查）。
+  // 只做展示辅助：查不到（缓存里没有该群的成员表）就显示「群信息未知」，不影响档案本身。
+  let profileGroupsCache = new Map();
+
+  // 档案表单未保存保护：人格页有完整的一套，档案页此前是裸奔——
+  // 改了字段直接点另一个人，改动静默丢失。baseline 记录 fillProfile 载入的值。
+  const PROFILE_FIELDS = ["pf-name", "pf-aliases", "pf-personality", "pf-prefs", "pf-notes"];
+  let profileBaseline = null; // null = 右栏还没载入过档案
+
+  function profileFormValues() {
+    return PROFILE_FIELDS.map((id) => ($(id) ? $(id).value : "")).join("|");
+  }
+
+  function profileIsDirty() {
+    return profileBaseline !== null && profileFormValues() !== profileBaseline;
+  }
+
+  function profileSyncBaseline() {
+    profileBaseline = profileFormValues();
+    updateProfileDirtyPill();
+  }
+
+  function profileDropDraft() {
+    profileBaseline = profileFormValues();
+    updateProfileDirtyPill();
+  }
+
+  function updateProfileDirtyPill() {
+    const el = $("profile-dirty");
+    if (el) el.classList.toggle("hidden", !profileIsDirty());
+  }
+
+  // 切换档案对象前的确认：右栏有未保存改动且目标是另一个人时才拦。
+  async function confirmProfileSwitch(wxid) {
+    if (!profileIsDirty() || $("pf-wxid").value.trim() === wxid) return true;
+    return askConfirm("档案有未保存改动，切换后将丢弃。继续吗？", "放弃未保存内容");
+  }
+
+  async function loadProfileGroups(wxids) {
+    if (!wxids.length) return;
+    try {
+      const d = await api(
+        "/admin/data/member-groups?wxids=" +
+          encodeURIComponent(wxids.slice(0, 200).join(",")),
+      );
+      if (!d.ok) return;
+      profileGroupsCache = new Map(Object.entries(d.groups || {}));
+      for (const [wxid, list] of profileGroupsCache) {
+        const el = $("profile-list").querySelector(
+          `.btn-profile[data-wxid="${CSS.escape(wxid)}"]`,
+        );
+        if (!el) continue;
+        const box = el.querySelector(".pf-meta");
+        if (box) box.innerHTML = profileMetaHTML(wxid);
+      }
+      if (profileSelectedWXID) renderProfileGroups(profileSelectedWXID);
+      bindGroupTags($("profile-list"));
+    } catch {
+      // 群信息是锦上添花，失败不打断档案主流程
+    }
+  }
+
+  // 左栏群标签也可点：同一份抽屉，点了先选中该人再打开群成员。
+  function bindGroupTags(root) {
+    if (!root) return;
+    root.querySelectorAll(".pf-tag.grp[data-gid]").forEach((el) => {
+      el.addEventListener("click", async (ev) => {
+        ev.stopPropagation(); // 别让它顺带触发「选中这个人」
+        const item = el.closest(".btn-profile");
+        const wxid = item && item.dataset.wxid ? item.dataset.wxid : "";
+        if (item && wxid && wxid !== profileSelectedWXID) {
+          if (!(await confirmProfileSwitch(wxid))) return;
+          root.querySelectorAll(".btn-profile").forEach((n) => {
+            n.classList.remove("selected");
+            n.removeAttribute("aria-current");
+          });
+          item.classList.add("selected");
+          item.setAttribute("aria-current", "true");
+          profileSelectedWXID = wxid;
+          fillProfile(wxid);
+        }
+        openGroupDrawer(el.dataset.gid, wxid);
+      });
+    });
+  }
+
+  function profileMetaHTML(wxid) {
+    const list = profileGroupsCache.get(wxid);
+    if (!list) return "";
+    if (!list.length) return "";
+    const tags = list
+      .slice(0, 2)
+      .map(
+        (g) =>
+          `<span class="pf-tag grp" data-gid="${esc(g.id)}" title="${esc(g.id)} · 点开看群成员">${esc(g.name || g.id)}</span>`,
+      )
+      .join("");
+    const more =
+      list.length > 2 ? `<span class="pf-tag">+${list.length - 2}</span>` : "";
+    return tags + more;
+  }
+
+  function renderProfileGroups(wxid) {
+    const box = $("pf-groups");
+    if (!box) return;
+    const list = profileGroupsCache.get(wxid);
+    if (!list) {
+      box.innerHTML = `<span class="pf-group none">群信息未加载</span>`;
+      return;
+    }
+    if (!list.length) {
+      box.innerHTML = `<span class="pf-group none">缓存里没有含此人的群成员表</span>`;
+      return;
+    }
+    box.innerHTML = list
+      .map(
+        (g) =>
+          `<button type="button" class="pf-group" data-gid="${esc(g.id)}" title="${esc(g.id)} · 点开看群成员">${esc(g.name || g.id)}<span class="gmeta">${g.member_count} 人</span></button>`,
+      )
+      .join("");
+    box.querySelectorAll(".pf-group[data-gid]").forEach((el) => {
+      el.addEventListener("click", () => openGroupDrawer(el.dataset.gid, wxid));
+    });
+  }
+
+  // 群成员抽屉：从档案页的「所在群」点进来，标出当前这个人在群里。
+  // 群名/人数优先用 member-groups 已有的缓存，详情靠 /admin/data/chatrooms/<id> 补。
+  async function openGroupDrawer(gid, wxid) {
+    const drawer = $("group-drawer");
+    const body = $("group-detail");
+    if (!drawer || !body) return;
+    const known = (profileGroupsCache.get(wxid) || []).find((g) => g.id === gid);
+    $("gd-title").textContent = known ? known.name || gid : gid;
+    body.innerHTML = `<div class="gd-empty">载入成员…</div>`;
+    drawer.hidden = false;
+    drawer.classList.remove("hidden");
+    try {
+      const d = await api("/admin/data/chatrooms/" + encodeURIComponent(gid));
+      if (!d.ok) throw new Error(d.error || "读取失败");
+      const members = d.members || [];
+      $("gd-title").textContent = d.name || (known && known.name) || gid;
+      const head = `<div class="gd-id">${esc(gid)}</div>
+        <div class="gd-stats">
+          <span class="gd-stat">成员 <b>${members.length}</b></span>
+          ${d.owner ? `<span class="gd-stat">群主 <b>${esc(memberName(d.owner, members))}</b></span>` : ""}
+          <span class="gd-stat">缓存 <b>${d.in_chatroom_cache ? "有成员表" : "无成员表"}</b></span>
+        </div>`;
+      if (!members.length) {
+        body.innerHTML = head + `<div class="gd-empty">该群不在 chatroom.json 的成员表里，只有联系人缓存。</div>`;
+        return;
+      }
+      const list = members
+        .map((m) => {
+          const name = m.remark || m.display_name || m.nickname || m.username;
+          const me = m.username === wxid;
+          return `<div class="gd-member${me ? " me" : ""}"${me ? ' id="gd-me"' : ""}>
+            <span class="mname">${esc(name)}</span>
+            ${me ? `<span class="mbadge self">当前档案</span>` : ""}
+            ${m.is_owner ? `<span class="mbadge owner">群主</span>` : ""}
+            ${m.in_contact_cache ? `<span class="mbadge">好友</span>` : ""}
+            <span class="mmeta">${esc(m.username)}</span>
+          </div>`;
+        })
+        .join("");
+      body.innerHTML = `${head}<div class="gd-member-list">${list}</div>`;
+      const me = body.querySelector("#gd-me");
+      if (me) me.scrollIntoView({ block: "center" });
+    } catch (e) {
+      body.innerHTML = `<div class="gd-empty">${esc(e.message)}</div>`;
+    }
+  }
+
+  function closeGroupDrawer() {
+    const drawer = $("group-drawer");
+    if (!drawer) return;
+    drawer.classList.add("hidden");
+    drawer.hidden = true;
+  }
+
+  function memberName(wxid, members) {
+    const m = (members || []).find((x) => x.username === wxid);
+    if (!m) return wxid;
+    return m.remark || m.display_name || m.nickname || wxid;
+  }
+
   async function loadProfiles() {
     const q = $("profile-q").value.trim();
     let path = "/admin/hermes/member_profiles";
     if (q) path += "?q=" + encodeURIComponent(q);
+    // 先记滚动位置再 showLoading：showLoading 会重写列表，scrollTop 立刻归零。
+    const keepScroll = $("profile-list").parentElement
+      ? $("profile-list").parentElement.scrollTop
+      : 0;
     showLoading("profile-list", "加载档案…");
     try {
       const data = await api(path);
       const list = data.profiles || [];
+      // 刷新列表时保住选中态与左栏滚动位置：左栏是独立滚动区，
+      // 重绘会把 scrollTop 清零，用户会「跳回顶部」。
+      // 左栏只回答「这是谁、在哪些群」：名字 + 唯一标识 + 群标签。
+      // 性格/偏好/备注这些可编辑字段一律只放右栏，避免两边重复让人对不上。
       $("profile-list").innerHTML = list.length
         ? list
             .map((p) => {
-              const prefs = (p.preferences || []).slice(0, 3).join(" / ");
-              const up = fmtDate(p.updated_at);
-              const metaBits = [];
-              if (p.personality) metaBits.push(truncate(p.personality, 64));
-              if (prefs) metaBits.push("偏好 " + prefs);
-              if (up) metaBits.push("更新 " + up);
-              return `<div class="item btn-profile" data-wxid="${esc(p.wxid)}">
+              const sel = p.wxid && p.wxid === profileSelectedWXID ? " selected" : "";
+              const name = p.display_name || p.wxid || "";
+              const ident = name !== p.wxid && p.wxid ? p.wxid : "";
+              const tags = profileMetaHTML(p.wxid);
+              return `<div class="item btn-profile${sel}" data-wxid="${esc(p.wxid)}"${
+                sel ? ' aria-current="true"' : ""
+              }>
             <div class="grow">
-              <strong>${esc(p.display_name || p.wxid || "")}</strong>
-              <div class="muted">${esc(p.wxid || "")}</div>
-              ${metaBits.map((m) => `<div class="muted">${esc(m)}</div>`).join("")}
+              <strong>${esc(name)}</strong>
+              ${ident ? `<div class="pf-line">${esc(ident)}</div>` : ""}
+              <div class="pf-meta">${tags}</div>
             </div></div>`;
             })
             .join("")
@@ -1578,17 +2167,45 @@
       $("profile-list")
         .querySelectorAll(".btn-profile")
         .forEach((el) => {
-          el.addEventListener("click", () => {
+          el.addEventListener("click", async () => {
+            const wxid = el.dataset.wxid || "";
+            if (wxid !== profileSelectedWXID && !(await confirmProfileSwitch(wxid))) return;
             $("profile-list")
               .querySelectorAll(".btn-profile")
-              .forEach((n) => n.classList.remove("selected"));
+              .forEach((n) => {
+                n.classList.remove("selected");
+                n.removeAttribute("aria-current");
+              });
             el.classList.add("selected");
-            fillProfile(el.dataset.wxid);
+            el.setAttribute("aria-current", "true");
+            profileSelectedWXID = wxid;
+            fillProfile(wxid);
           });
         });
+      if (keepScroll && $("profile-list").parentElement) {
+        $("profile-list").parentElement.scrollTop = keepScroll;
+      }
+      bindGroupTags($("profile-list"));
+      // 重进页面 / 刷新后右栏要跟选中项对上，否则右侧一片空白
+      const sel = $("profile-list").querySelector(".btn-profile.selected");
+      if (sel && sel.dataset.wxid) fillProfile(sel.dataset.wxid);
+      loadProfileGroups(list.map((p) => p.wxid).filter(Boolean));
     } catch (e) {
-      toastErr(e.message);
+      handleLoadError("profile-list", e);
     }
+  }
+
+  // 多行字段随内容长高：性格/备注这类可能写很长，固定 3 行会让内容缩在
+  // 小框里靠内部滚动看，不如把框撑开——整段和「所在群」一起在同一栏里滚。
+  function autoGrow(el) {
+    if (!el || el.tagName !== "TEXTAREA") return;
+    el.style.height = "auto";
+    // 留 2px 余量，避免正好卡在 scrollHeight 时出现内滚动条
+    el.style.height = el.scrollHeight + 2 + "px";
+  }
+
+  function autosizeProfileFields() {
+    for (const id of ["pf-personality", "pf-prefs", "pf-notes"]) autoGrow($(id));
   }
 
   async function fillProfile(wxid) {
@@ -1596,19 +2213,39 @@
       const p = await api(
         "/admin/hermes/member_profiles/" + encodeURIComponent(wxid),
       );
+      // 换人后右栏从头显示；左栏位置不受影响。
+      const pane = document.querySelector(".split-detail");
+      if (pane) pane.scrollTop = 0;
+      $("profile-empty").classList.add("hidden");
+      $("profile-pane").classList.remove("hidden");
       $("pf-wxid").value = p.wxid || wxid;
       $("pf-name").value = p.display_name || "";
       $("pf-personality").value = p.personality || "";
       $("pf-prefs").value = (p.preferences || []).join(", ");
       $("pf-notes").value = p.notes || "";
       $("pf-aliases").value = (p.aliases || []).join(", ");
+      // 头部：显示名 + wxid；标签区显示更新时间与「群数」
+      $("pf-title").textContent = p.display_name || wxid;
+      $("pf-sub").textContent = p.wxid || wxid;
+      const badges = [];
+      if (p.updated_at) badges.push(`<span class="pf-tag">更新 ${esc(fmtDate(p.updated_at))}</span>`);
+      const groups = profileGroupsCache.get(p.wxid || wxid) || [];
+      if (groups.length) badges.push(`<span class="pf-tag grp">在 ${groups.length} 个群</span>`);
+      $("pf-badges").innerHTML = badges.join("");
+      renderProfileGroups(p.wxid || wxid);
       $("profile-result").textContent = JSON.stringify(p, null, 2);
+      autosizeProfileFields();
+      profileSyncBaseline();
     } catch (e) {
       toastErr(e.message);
     }
   }
 
   $("btnProfiles").addEventListener("click", loadProfiles);
+  for (const id of ["pf-personality", "pf-prefs", "pf-notes"]) {
+    const el = $(id);
+    if (el) el.addEventListener("input", () => autoGrow(el));
+  }
   $("profile-q").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") loadProfiles();
   });
@@ -1620,7 +2257,7 @@
       display_name: $("pf-name").value.trim(),
       personality: $("pf-personality").value.trim(),
       preferences: $("pf-prefs")
-        .value.split(/[,，]/)
+        .value.split(/[,，\n]/)
         .map((s) => s.trim())
         .filter(Boolean),
       notes: $("pf-notes").value.trim(),
@@ -1638,12 +2275,15 @@
         },
       );
       $("profile-result").textContent = JSON.stringify(res, null, 2);
+      profileSyncBaseline();
       toastOk("已保存");
       loadProfiles();
     } catch (e) {
       toastErr(e.message);
     }
   });
+  // 任意字段改动 → 刷新「未保存」标记
+  $("profile-form").addEventListener("input", updateProfileDirtyPill);
   $("btnProfileDel").addEventListener("click", async () => {
     const wxid = $("pf-wxid").value.trim();
     if (!wxid || !(await askConfirm("删除 " + wxid + "？", "删除档案"))) return;
@@ -1655,6 +2295,11 @@
         null,
         2,
       );
+      // 已删除：右栏回到空态，不再参与脏检查
+      profileBaseline = null;
+      updateProfileDirtyPill();
+      $("profile-empty").classList.remove("hidden");
+      $("profile-pane").classList.add("hidden");
       toastOk("已删除");
       loadProfiles();
     } catch (e) {
@@ -1742,6 +2387,9 @@
     const list = personaListCache.filter((item) =>
       String(item.persona_id || item.id || "").toLowerCase().includes(q),
     );
+    // 左栏是独立滚动区，重绘时要自己把滚动位置放回去，否则每次点选都跳回顶部
+    const libPane = document.querySelector(".persona-library");
+    const keepScroll = libPane ? libPane.scrollTop : 0;
     $("persona-list").innerHTML = list.length
       ? list.map((item) => {
           const id = item.persona_id || item.id || "";
@@ -1761,6 +2409,7 @@
     $("persona-list").querySelectorAll(".persona-item").forEach((item) => {
       item.addEventListener("click", () => selectPersona(item.dataset.personaId));
     });
+    if (libPane) libPane.scrollTop = keepScroll;
   }
 
   async function selectPersona(id, force) {
@@ -1789,6 +2438,9 @@
         !personaCapabilities.write;
       personaSetBaseline($("persona-content").value, personaSelectedID);
       updatePersonaBytes();
+      // 右栏换人后从头显示（左栏滚动位置由 renderPersonaList 保住）
+      const detailPane = document.querySelector(".persona-detail");
+      if (detailPane) detailPane.scrollTop = 0;
       renderPersonaList();
       renderPersonaBindings(personaSelectedID);
     } catch (e) {
@@ -1998,19 +2650,19 @@
   });
 
   window.addEventListener("beforeunload", (ev) => {
-    if (!personaIsDirty()) return;
+    if (!personaIsDirty() && !gateIsDirty() && !profileIsDirty()) return;
     ev.preventDefault();
     ev.returnValue = "";
   });
 
   // ---- diagnose ----
   async function loadDiagChats() {
+    // 每次进诊断页都同步一次字段显隐：md5 只在 emoji 类型下显示
+    syncDiagFileUI();
     try {
-      const data = await api("/admin/targets");
+      const [data] = await Promise.all([api("/admin/targets"), loadRecipients()]);
       $("diag-chats").innerHTML = (data.targets || [])
-        .map(
-          (t) => `<option value="${esc(t.id)}">${esc(t.name || t.id)}</option>`,
-        )
+        .map((t) => `<option value="${esc(t.id)}">${esc(datalistLabel(t))}</option>`)
         .join("");
     } catch (_) {}
   }
@@ -2039,6 +2691,9 @@
     const input = $("diag-file");
     const nameEl = $("diag-file-name");
     if (input) input.accept = DIAG_ACCEPT[kind] || "*/*";
+    // md5 只有试发表情时才有意义，其余类型收起，少一排无关系的名字
+    const md5Label = $("diag-md5") && $("diag-md5").closest("label");
+    if (md5Label) md5Label.style.display = kind === "emoji" ? "" : "none";
     const file = input && input.files && input.files[0];
     if (!nameEl) return;
     if (!file) {
@@ -2100,17 +2755,19 @@
   });
 
   // ---- command palette ----
+  // key 是单键跳转快捷键（焦点不在输入框时生效），在面板里可见可查
   const PAGES = [
-    { tab: "overview", title: "总览", hint: "桥运行态与红灯" },
-    { tab: "targets", title: "白名单", hint: "会话路由" },
-    { tab: "gate", title: "门闩", hint: "触发策略" },
-    { tab: "inbound", title: "入站", hint: "旁路 trace" },
-    { tab: "sessions", title: "会话", hint: "桥本地 session" },
-    { tab: "hermes", title: "运维", hint: "Hermes ops" },
-    { tab: "stickers", title: "表情", hint: "情绪库" },
-    { tab: "profiles", title: "档案", hint: "群友偏好" },
-    { tab: "personas", title: "人格", hint: "Markdown 与绑定状态" },
-    { tab: "diagnose", title: "诊断", hint: "媒体试发" },
+    { tab: "overview", title: "总览", hint: "桥运行态与红灯", key: "g" },
+    { tab: "targets", title: "白名单", hint: "会话路由", key: "b" },
+    { tab: "gate", title: "门闩", hint: "触发策略", key: "m" },
+    { tab: "inbound", title: "入站", hint: "旁路 trace", key: "i" },
+    { tab: "sessions", title: "会话", hint: "桥本地 session", key: "s" },
+    { tab: "hermes", title: "运维", hint: "Hermes ops", key: "h" },
+    { tab: "stickers", title: "表情", hint: "情绪库", key: "e" },
+    { tab: "profiles", title: "档案", hint: "群友偏好", key: "p" },
+    { tab: "personas", title: "人格", hint: "Markdown 与绑定状态", key: "r" },
+    { tab: "golem", title: "Golem 插件设置台", hint: "全部插件 · 新标签打开", key: "c" },
+    { tab: "diagnose", title: "诊断", hint: "媒体试发", key: "d" },
   ];
   let cmdkIndex = 0;
 
@@ -2139,15 +2796,26 @@
     list.innerHTML = items
       .map(
         (p, i) =>
-          `<button type="button" class="cmdk-item${i === cmdkIndex ? " active" : ""}" data-tab="${esc(p.tab)}"><strong>${esc(p.title)}</strong><span class="muted">${esc(p.hint)}</span></button>`,
+          `<button type="button" class="cmdk-item${i === cmdkIndex ? " active" : ""}" data-tab="${esc(p.tab)}"><strong>${esc(p.title)}</strong><span class="muted">${esc(p.hint)}</span>${p.key ? `<kbd>${esc(p.key)}</kbd>` : ""}</button>`,
       )
       .join("");
     list.querySelectorAll(".cmdk-item").forEach((btn) => {
       btn.addEventListener("click", () => {
         closeCmdk();
-        setPage(btn.dataset.tab);
+        if (btn.dataset.tab === "golem") openGolem();
+        else setPage(btn.dataset.tab);
       });
     });
+  }
+
+  // 插件设置台是独立页面（同服务、独立版式），新标签打开。
+  // 用命名窗口复用：连按 c 不再开一排标签，而是聚焦已打开的那个。
+  function openGolem() {
+    if (openGolem._w && !openGolem._w.closed) {
+      openGolem._w.focus();
+      return;
+    }
+    openGolem._w = window.open("golem.html", "golem_settings");
   }
 
   function openCmdk() {
@@ -2202,6 +2870,19 @@
         closeCmdk();
         return;
       }
+      if ($("app-shell").classList.contains("nav-open")) {
+        ev.preventDefault();
+        setNavOpen(false);
+        return;
+      }
+      if (
+        $("group-drawer") &&
+        !$("group-drawer").classList.contains("hidden")
+      ) {
+        ev.preventDefault();
+        closeGroupDrawer();
+        return;
+      }
       if (
         $("sticker-drawer") &&
         !$("sticker-drawer").classList.contains("hidden")
@@ -2236,26 +2917,23 @@
         const pick = items[cmdkIndex];
         if (pick) {
           closeCmdk();
-          setPage(pick.tab);
+          if (pick.tab === "golem") openGolem();
+          else setPage(pick.tab);
         }
       }
       return;
     }
     if (inField || ev.ctrlKey || ev.metaKey || ev.altKey) return;
-    const map = {
-      g: "overview",
-      b: "targets",
-      m: "gate",
-      i: "inbound",
-      s: "sessions",
-      h: "hermes",
-      e: "stickers",
-      p: "profiles",
-      r: "personas",
-      d: "diagnose",
-    };
-    if (map[ev.key] && !$("app-shell").classList.contains("hidden"))
-      setPage(map[ev.key]);
+    // 单键跳转快捷键：与命令面板里展示的 key 一致，统一从 PAGES 生成
+    const keyMap = Object.fromEntries(
+      PAGES.filter((p) => p.key && p.tab !== "golem").map((p) => [p.key, p.tab]),
+    );
+    if (ev.key === "c" && !$("app-shell").classList.contains("hidden")) {
+      openGolem();
+      return;
+    }
+    if (keyMap[ev.key] && !$("app-shell").classList.contains("hidden"))
+      setPage(keyMap[ev.key]);
   });
 
   if ($("btnDrawerClose"))
@@ -2265,7 +2943,38 @@
       if (ev.target === $("sticker-drawer")) clearStickerDetail();
     });
   }
+  if ($("btnGroupClose"))
+    $("btnGroupClose").addEventListener("click", closeGroupDrawer);
+  if ($("group-drawer")) {
+    $("group-drawer").addEventListener("click", (ev) => {
+      if (ev.target === $("group-drawer")) closeGroupDrawer();
+    });
+  }
+
+  // ---- 窄屏抽屉导航 ----
+  function setNavOpen(open) {
+    $("app-shell").classList.toggle("nav-open", open);
+    const scrim = $("nav-scrim");
+    if (scrim) {
+      scrim.classList.toggle("hidden", !open);
+      scrim.hidden = !open;
+    }
+  }
+
+  if ($("btnNav")) $("btnNav").addEventListener("click", () => setNavOpen(true));
+  if ($("nav-scrim"))
+    $("nav-scrim").addEventListener("click", () => setNavOpen(false));
+
+  // hash 恢复：F5 / 从历史进来时落在 # 指定的页。登录成功后也会调一次。
+  function enterHashPage() {
+    if ($("app-shell").classList.contains("hidden")) return;
+    const h = location.hash.slice(1);
+    if (h && PAGES.some((p) => p.tab === h)) setPage(h);
+  }
 
   // boot
-  tryEnter();
+  (async () => {
+    await tryEnter();
+    enterHashPage();
+  })();
 })();

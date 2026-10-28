@@ -284,7 +284,8 @@ code {
   color: var(--faint);
   font-weight: 800;
 }
-.nav button {
+.nav button,
+.nav a {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -297,10 +298,52 @@ code {
   border-radius: var(--rs);
   font-size: 13px;
   font-weight: 500;
+  text-decoration: none;
 }
-.nav button:hover {
+.nav button:hover,
+.nav a:hover {
   color: var(--text);
   background: rgba(59, 143, 96, 0.06);
+}
+/* 侧栏底部的「另一套程序」入口：虚线框 + 副标题，与导航项区分开。
+   语义是「Golem 所有插件的设置」，不属于 hermes_bridge 的导航。 */
+.sidebar-ext {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line2);
+  border-radius: var(--rs);
+  background: var(--accent-soft2);
+  color: var(--dim);
+  text-decoration: none;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.sidebar-ext:hover {
+  border-color: var(--line-glow);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+.sidebar-ext-ico { font-size: 15px; line-height: 1; opacity: 0.9; }
+.sidebar-ext-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
+.sidebar-ext-t {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.sidebar-ext-s { font-size: 10px; color: var(--faint); }
+.sidebar-ext-arrow {
+  margin-left: auto;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--faint);
+  transition: color 0.15s, transform 0.15s;
+}
+.sidebar-ext:hover .sidebar-ext-arrow {
+  color: var(--accent-dark);
+  transform: translate(1px, -1px);
 }
 .nav button.active {
   color: var(--accent-dark);
@@ -362,15 +405,29 @@ main {
   overflow-y: auto;
   overflow-x: hidden;
   scroll-behavior: smooth;
+  /* 作为纵向 flex 容器：分栏页可以「占满剩余高度」，见 .fill-viewport */
+  display: flex;
+  flex-direction: column;
 }
-.panel { display: none; }
-.panel.active { display: block; animation: panelIn .38s cubic-bezier(.22,1,.36,1); }
+.panel { display: none; flex: 0 0 auto; }
+.panel.active { display: block; flex: 0 0 auto; animation: panelIn .38s cubic-bezier(.22,1,.36,1); }
 .panel.panel-fill.active {
   display: flex;
   flex-direction: column;
   /* 不强制 height:100%，让内容自然撑开、跟随 main 滚动 */
   min-height: 0;
 }
+
+/* 左右分栏页（档案 / 人格 / 表情）：整页占满一屏，两栏各自在内部滚。
+   关键是不能用 height:100%——.panel 的高度是 auto，百分比高度会解析成 auto，
+   两栏就被内容撑到几千 px，overflow-y:auto 永不触发，结果整页跟着 main 一起滚。
+   改成让 main 是 flex 容器、面板 flex:1 吃掉剩余高度，高度就是确定的。 */
+.panel.panel-fill.fill-viewport.active {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+}
+.panel.panel-fill.fill-viewport.active > * { min-height: 0; }
 @keyframes panelIn {
   from { opacity: 0; transform: translateY(12px) scale(.995); }
   to { opacity: 1; transform: none; }
@@ -477,6 +534,17 @@ main {
 .toolbar input, .toolbar select { flex: 1; min-width: 160px; }
 .toolbar #sticker-page-size { flex: 0 0 auto; min-width: auto; }
 .card-block { padding: 20px; margin-bottom: 20px; }
+
+/* 白名单页：左「当前白名单」右「可添加」对照结构。
+   左栏是已生效清单（主对象），沿用绿条 + 浅绿底的「台账」强调；
+   右栏放搜索 + 手动加入 + 候选列表。窄屏叠单列时白名单在上（DOM 顺序）。 */
+.targets-layout { grid-template-columns: minmax(280px, 0.95fr) minmax(320px, 1.05fr); }
+.targets-current {
+  border-top: 3px solid var(--accent);
+  background: linear-gradient(180deg, rgba(59, 143, 96, 0.06), rgba(255, 255, 255, 0.92) 42%);
+}
+/* 分栏容器里的 section-head 不需要全局那个 32px 顶距 */
+.section-head.in-pane { margin: 2px 0 12px; }
 
 .form {
   display: grid;
@@ -629,6 +697,18 @@ input[type="file"]::file-selector-button:hover {
 .tag.ok { color: var(--ok); background: var(--ok-soft); border-color: rgba(45, 138, 82, 0.2); }
 
 .mono { font-family: var(--mono); }
+/* 快捷键键帽（命令面板里展示各页面的单键跳转） */
+kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--dim);
+  background: var(--bg2);
+  border: 1px solid var(--line2);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 3px 7px;
+}
 .empty {
   text-align: center;
   padding: 56px 24px;
@@ -708,6 +788,19 @@ input[type="file"]::file-selector-button:hover {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
+  cursor: pointer;
+  padding: 3px 8px;
+  margin: -3px -8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: background .15s ease, border-color .15s ease;
+}
+.legend-always .legend-grid > div:hover { background: rgba(255, 255, 255, 0.7); border-color: var(--line); }
+/* 图例筛选选中态：点中的类型高亮，trace 只显示被点中的类型 */
+.legend-always .legend-grid > div.on {
+  background: #fff;
+  border-color: var(--line-glow);
+  box-shadow: var(--shadow-sm);
 }
 .legend-always .legend-grid code {
   font-size: 11px;
@@ -1016,7 +1109,7 @@ input[type="file"]::file-selector-button:hover {
   border-color: rgba(59, 143, 96, 0.16);
 }
 .cmdk-item strong { font-weight: 700; }
-.confirm-card p { margin: 0 0 20px; color: var(--dim); line-height: 1.7; font-size: 14px; }
+.confirm-card p { margin: 0 0 20px; color: var(--dim); line-height: 1.7; font-size: 14px; white-space: pre-line; }
 
 /* Sticker layout */
 .sticker-layout {
@@ -1219,6 +1312,181 @@ input[type="file"]::file-selector-button:hover {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* ---- 档案页 ----
+   左列表窄、右详情宽：左边只是「找个人」，右边要看完整画像。
+   左列表只留「名字 + wxid + 所在群」，可编辑字段只在右边出现，两边不重复。 */
+.profile-layout { grid-template-columns: minmax(190px, 0.5fr) minmax(0, 1.5fr); }
+.profile-list { gap: 6px; }
+.profile-list .item.btn-profile {
+  padding: 10px 12px;
+  border-radius: var(--rs);
+  gap: 10px;
+  align-items: flex-start;
+}
+.profile-list .item.btn-profile .grow strong {
+  margin-bottom: 2px;
+  font-size: 13.5px;
+}
+.profile-list .pf-line {
+  font-size: 11.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-list .pf-meta {
+  margin-top: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.profile-list .pf-tag {
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg2);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.profile-list .pf-tag.grp { background: var(--accent-soft); color: var(--accent2); border-color: transparent; cursor: pointer; }
+.profile-list .pf-tag.grp:hover { border-color: var(--accent); }
+.profile-list .btn-profile.selected .pf-tag.grp { background: rgba(255, 255, 255, 0.85); }
+
+/* 右详情：头部 / 所在群 / 表单 / 原始 JSON */
+.pf-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pf-ident { flex: 1; min-width: 0; }
+.pf-ident h3 { font-size: 18px; letter-spacing: -0.01em; }
+.pf-ident .muted { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+.pf-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.pf-groups-wrap { margin-bottom: 16px; }
+.pf-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+.pf-groups { display: flex; flex-wrap: wrap; gap: 6px; }
+.pf-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent2);
+  font-size: 12px;
+  font-weight: 600;
+  max-width: 100%;
+  border: 1px solid transparent;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.pf-group:hover { border-color: var(--accent); }
+.pf-group:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pf-group .gmeta { font-size: 10px; font-weight: 500; opacity: 0.7; white-space: nowrap; }
+.pf-group.none { background: var(--bg2); color: var(--faint); font-weight: 500; cursor: default; }
+.pf-group.none:hover { border-color: transparent; }
+
+/* 群成员抽屉（档案页 → 所在群） */
+.gd-id { font-family: var(--mono); font-size: 11.5px; color: var(--faint); word-break: break-all; }
+.gd-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 16px; }
+.gd-stat {
+  font-size: 11.5px;
+  color: var(--dim);
+  background: var(--bg2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+.gd-stat b { color: var(--text); font-family: var(--mono); }
+.gd-member-list { display: flex; flex-direction: column; gap: 4px; }
+.gd-member {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--rs);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.6);
+}
+.gd-member.me {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+.gd-member .mname { font-size: 13px; font-weight: 600; }
+.gd-member .mmeta { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.mbadge {
+  font-size: 10px;
+  line-height: 1.6;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg2);
+  color: var(--dim);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.mbadge.owner { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.mbadge.self { background: var(--accent); color: #fff; border-color: transparent; font-weight: 700; }
+.gd-empty { font-size: 12.5px; color: var(--faint); padding: 8px 2px; }
+
+
+/* 表单：单列铺满，长文本用 textarea（原来是 input，性格一长就被截在一行）。
+   高度由 JS 按内容撑开（autoGrow），所以关掉手动 resize、隐藏内滚动条；
+   极端长文本才在 46vh 处收住，避免把整栏撑成一条。 */
+.pf-form { grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.pf-form .pf-full { grid-column: 1 / -1; }
+.pf-form label { gap: 6px; }
+.pf-form textarea {
+  resize: none;
+  overflow-y: auto;
+  line-height: 1.6;
+  font-size: 13px;
+  min-height: 44px;
+  max-height: 46vh;
+}
+.pf-form input { font-size: 13px; }
+.pf-form input[readonly] {
+  background: var(--bg2);
+  color: var(--faint);
+  cursor: default;
+}
+/* 保存/删除跟着详情滚到底部时贴住，长表单不用再滚回顶 */
+.pf-form .form-actions {
+  position: sticky;
+  bottom: -16px;
+  margin: 0 -16px -16px;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.96) 40%);
+  border-top: 1px solid var(--line);
+}
+
+.pf-raw { margin-top: 16px; }
+.pf-raw summary {
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--faint);
+  letter-spacing: 0.03em;
+  padding: 6px 0;
+}
+.pf-raw summary:hover { color: var(--dim); }
+.pf-raw .code-block { margin-top: 8px; max-height: 420px; overflow: auto; }
+
 .fold {
   background: var(--card);
   border: 1px solid var(--line);
@@ -1253,6 +1521,10 @@ input[type="file"]::file-selector-button:hover {
   backdrop-filter: blur(10px);
   display: grid;
   justify-content: end;
+  /* 隐式行高是 auto，卡片 height:100% 会解析成「内容高度」——
+     内容一长（170 人成员表）卡片就撑到几千 px，body 的 overflow 永不触发。
+     钉成一行满高，body 才能在卡片内部滚。 */
+  grid-template-rows: minmax(0, 1fr);
   animation: overlayIn .2s ease;
 }
 .drawer-card {
@@ -1378,27 +1650,56 @@ input[type="file"]::file-selector-button:hover {
   .form-compact { grid-template-columns: 1fr 1fr; }
 }
 
+/* 汉堡按钮：桌面隐藏，窄屏出现在页首标题上方 */
+.nav-toggle {
+  display: none;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  margin: 0 0 10px;
+  font-size: 17px;
+  line-height: 1;
+  align-items: center;
+  justify-content: center;
+}
+
 @media (max-width: 720px) {
   .app-shell { grid-template-columns: 1fr; }
+  /* 侧栏变成左侧滑出抽屉：平时藏起，汉堡按钮唤出，遮罩点击关闭。
+     内部沿用桌面的纵向导航布局，不再压缩成横排占半屏。 */
   .sidebar {
-    position: relative;
-    height: auto;
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 12px;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(78vw, 300px);
+    height: 100vh;
+    z-index: 45;
+    transform: translateX(-105%);
+    transition: transform .25s cubic-bezier(.4,0,.2,1);
+    box-shadow: var(--shadow-float);
+    padding: 16px 14px;
+    overflow-y: auto;
   }
-  .sidebar-brand, .sidebar-foot { width: 100%; }
-  .sidebar-foot { flex-direction: row; gap: 8px; }
-  .nav { flex-direction: row; flex-wrap: wrap; gap: 4px; }
-  .nav button { width: auto; padding: 8px 12px; font-size: 12px; }
-  .nav-label { display: none; }
+  .app-shell.nav-open .sidebar { transform: none; }
+  .nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: rgba(26, 46, 34, 0.32);
+    backdrop-filter: blur(4px);
+  }
+  .nav-toggle { display: inline-flex; }
+  .topbar { padding: 14px 16px; }
+  .topbar h1 { font-size: 22px; }
+  main { padding: 12px 16px 48px; }
   .sticker-layout, .split-layout, .persona-layout { grid-template-columns: 1fr; }
   .mood-pane { position: relative; top: 0; max-height: 200px; }
   .panel.panel-fill.active { height: auto; }
+  /* 窄屏两栏叠成一列，不再分栏滚动：面板按内容自然撑开，交给 main 整页滚 */
+  .panel.panel-fill.fill-viewport.active { flex: 0 0 auto; }
+  .panel.panel-fill.fill-viewport.active > * { overflow: visible; }
   .form, .form-compact { grid-template-columns: 1fr; }
-  main { padding: 12px 16px 48px; }
-  .topbar { padding: 14px 16px; }
-  .topbar h1 { font-size: 22px; }
   .cards { grid-template-columns: 1fr 1fr; }
 }
 

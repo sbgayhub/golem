@@ -3,6 +3,7 @@ module golem_plugin_hermes_bridge
 go 1.26
 
 require (
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/sbgayhub/golem/sdk v0.1.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -16,7 +17,6 @@ require (
 	github.com/mattn/go-colorable v0.1.15 // indirect
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/oklog/run v1.2.0 // indirect
-	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/phsym/console-slog v0.3.1 // indirect
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/sys v0.46.0 // indirect
